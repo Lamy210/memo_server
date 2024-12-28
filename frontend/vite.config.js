@@ -7,43 +7,20 @@ export default defineConfig({
   
   resolve: {
     alias: {
-      '@': path.resolve('./src'),
-      '@components': path.resolve('./src/components'),
-      '@features': path.resolve('./src/components/features'),
-      '@ui': path.resolve('./src/components/ui'),
-      '@lib': path.resolve('./src/lib'),
-      '@api': path.resolve('./src/lib/api'),
-      '@stores': path.resolve('./src/lib/stores'),
-      '@utils': path.resolve('./src/lib/utils'),
-      '@styles': path.resolve('./src/styles'),
-      '@types': path.resolve('./src/types')
+      '@': path.resolve(__dirname, './src'),
+      '@lib': path.resolve(__dirname, './src/lib'),
+      '@utils': path.resolve(__dirname, './src/lib/utils'),
+      '@components': path.resolve(__dirname, './src/components')
     }
   },
-  
+
   server: {
-    port: 3000,
-    strictPort: false,
-    host: true,
     fs: {
-      strict: false,
       allow: ['..']
-    },
-    watch: {
-      usePolling: false,
-      interval: 100
     }
   },
-  
-  build: {
-    target: 'esnext',
-    sourcemap: true,
-    outDir: 'build',
-    assetsDir: 'assets',
-    emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks: undefined
-      }
-    }
+
+  optimizeDeps: {
+    include: ['marked', 'dompurify', 'prismjs']
   }
 });

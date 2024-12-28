@@ -1,29 +1,23 @@
 {
-	"extends": "./.svelte-kit/tsconfig.json",
 	"compilerOptions": {
-	  "allowJs": true,
-	  "checkJs": true,
-	  "esModuleInterop": true,
-	  "forceConsistentCasingInFileNames": true,
-	  "resolveJsonModule": true,
-	  "skipLibCheck": true,
-	  "sourceMap": true,
-	  "strict": true,
-	  "moduleResolution": "bundler",
 	  "baseUrl": ".",
 	  "paths": {
 		"@/*": ["./src/*"],
-		"@components/*": ["./src/components/*"],
-		"@features/*": ["./src/components/features/*"],
-		"@ui/*": ["./src/components/ui/*"],
 		"@lib/*": ["./src/lib/*"],
-		"@api/*": ["./src/lib/api/*"],
-		"@stores/*": ["./src/lib/stores/*"],
 		"@utils/*": ["./src/lib/utils/*"],
-		"@styles/*": ["./src/styles/*"],
-		"@types/*": ["./src/types/*"]
-	  }
+		"@components/*": ["./src/components/*"]
+	  },
+	  "target": "esnext",
+	  "module": "esnext",
+	  "moduleResolution": "bundler",
+	  "allowJs": true,
+	  "checkJs": true,
+	  "esModuleInterop": true,
+	  "preserveValueImports": true,
+	  "resolveJsonModule": true,
+	  "skipLibCheck": true,
+	  "sourceMap": true,
+	  "strict": true
 	},
-	"include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.svelte"],
-	"exclude": ["node_modules/*", ".svelte-kit/*"]
+	"include": ["src/**/*.d.ts", "src/**/*.js", "src/**/*.svelte"]
   }

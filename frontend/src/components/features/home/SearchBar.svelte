@@ -1,6 +1,6 @@
 <!-- src/components/features/home/SearchBar.svelte -->
 <script lang="ts">
-    import { Input } from '';
+    import {Input } from '@/components/ui';
     let searchQuery = '';
   
     function handleSubmit(event: Event) {
