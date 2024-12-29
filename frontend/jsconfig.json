@@ -13,7 +13,6 @@
 	  "allowJs": true,
 	  "checkJs": true,
 	  "esModuleInterop": true,
-	  "preserveValueImports": true,
 	  "resolveJsonModule": true,
 	  "skipLibCheck": true,
 	  "sourceMap": true,
