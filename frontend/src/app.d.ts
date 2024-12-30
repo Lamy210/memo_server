@@ -1,13 +1,25 @@
-// See https://svelte.dev/docs/kit/types#app.d.ts
-// for information about these interfaces
+//src/app.d.ts
+/// <reference types="@sveltejs/kit" />
+/// <reference types="svelte" />
+
 declare global {
 	namespace App {
-		// interface Error {}
-		// interface Locals {}
-		// interface PageData {}
-		// interface PageState {}
-		// interface Platform {}
+	  interface Locals {
+		userid: string;
+	  }
+	  interface PageData {
+		user?: {
+		  id: string;
+		  name: string;
+		  email: string;
+		};
+	  }
+	  interface Error {
+		message: string;
+		code?: string;
+	  }
+	  interface Platform {}
 	}
-}
-
-export {};
+  }
+  
+  export {};

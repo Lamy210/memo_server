@@ -1,6 +1,16 @@
-<!-- src/components/ui/Input.svelte -->
+<!-- /app/src/components/ui/Input.svelte -->
 <script lang="ts">
-  const props = $props<{
+  let {
+    type = 'text',
+    placeholder = '',
+    label = '',
+    error = '',
+    required = false,
+    class: classNameProp = '',
+    rest = {},
+    // bind:value する変数は let かつ $bindable()
+    value = $bindable('')
+  } = $props<{
     type?: 'text' | 'email' | 'password' | 'number';
     value?: string;
     placeholder?: string;
@@ -11,25 +21,23 @@
     rest?: Record<string, any>;
   }>();
 
-  const baseStyles = 'w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 outline-none transition-colors';
+  const baseStyles =
+    'w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 outline-none transition-colors';
   const errorStyles = 'border-red-500 focus:border-red-500 focus:ring-red-500';
 
   const className = $derived(`
     ${baseStyles}
-    ${props.error ? errorStyles : ''}
-    ${props.class ?? ''}
+    ${error ? errorStyles : ''}
+    ${classNameProp}
   `);
 
   let inputId = $state(`input-${crypto.randomUUID()}`);
 </script>
 
-{#if props.label}
-  <label
-    for={inputId}
-    class="block text-sm font-medium text-gray-700 mb-1"
-  >
-    {props.label}
-    {#if props.required}
+{#if label}
+  <label for={inputId} class="block text-sm font-medium text-gray-700 mb-1">
+    {label}
+    {#if required}
       <span class="text-red-500">*</span>
     {/if}
   </label>
@@ -37,14 +45,14 @@
 
 <input
   id={inputId}
-  type={props.type ?? 'text'}
-  value={props.value ?? ''}
-  placeholder={props.placeholder ?? ''}
-  required={props.required}
+  type={type}
+  bind:value={value}
+  placeholder={placeholder}
+  required={required}
   class={className}
-  {...props.rest}
+  {...rest}
 />
 
-{#if props.error}
-  <p class="mt-1 text-sm text-red-600">{props.error}</p>
+{#if error}
+  <p class="mt-1 text-sm text-red-600">{error}</p>
 {/if}

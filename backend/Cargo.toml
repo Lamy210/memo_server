@@ -1,0 +1,26 @@
+[package]
+name = "memo_app_backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.36.0", features = ["full"] }
+actix-web = "4.5.1"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+chrono = { version = "0.4.35", features = ["serde"] }
+uuid = { version = "1.7.0", features = ["v4", "serde"] }
+scylla = { version = "0.12.0", features = ["serde", "macros"] }
+redis = { version = "0.24.0", features = ["tokio-comp"] }
+elasticsearch = "8.5.0-alpha.1"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+anyhow = "1.0.80"
+thiserror = "1.0.57"
+async-trait = "0.1.77"
+futures = "0.3.30"
+env_logger = "0.11.2"
+log = "0.4.21"
+
+[dev-dependencies]
+tokio-test = "0.4.3"

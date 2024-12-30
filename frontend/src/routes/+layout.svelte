@@ -1,4 +1,5 @@
-<script>
+<!-- src/routes/+layout.svelte -->
+<script lang="ts">
   import '../app.css';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
@@ -6,6 +7,8 @@
   let { children } = $props();
   let isSidebarOpen = $state(false);
   let isMobile = $state(false);
+  let isUserMenuOpen = $state(false);
+  let isNotificationOpen = $state(false);
 
   // レスポンシブ対応のためのリサイズ監視
   onMount(() => {
@@ -21,7 +24,32 @@
       window.removeEventListener('resize', checkMobile);
     };
   });
+
+  // クリックアウトサイドの処理
+  function handleClickOutside(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    if (!target.closest('.user-menu')) {
+      isUserMenuOpen = false;
+    }
+    if (!target.closest('.notification-menu')) {
+      isNotificationOpen = false;
+    }
+  }
+
+  // 通知メニューの切り替え
+  function toggleNotifications() {
+    isNotificationOpen = !isNotificationOpen;
+    isUserMenuOpen = false;
+  }
+
+  // ユーザーメニューの切り替え
+  function toggleUserMenu() {
+    isUserMenuOpen = !isUserMenuOpen;
+    isNotificationOpen = false;
+  }
 </script>
+
+<svelte:window onclick={handleClickOutside} />
 
 <div class="min-h-screen bg-gray-50">
   <!-- ヘッダー -->
@@ -32,7 +60,8 @@
         {#if isMobile}
           <button
             class="p-2 rounded-lg hover:bg-gray-100"
-            on:click={() => isSidebarOpen = !isSidebarOpen}
+            onclick={() => isSidebarOpen = !isSidebarOpen}
+            aria-label="メニューを切り替え"
           >
             <svg
               class="w-6 h-6"
@@ -62,39 +91,87 @@
       </div>
       
       <div class="flex items-center space-x-4">
-        <button class="p-2 rounded-lg hover:bg-gray-100">
-          <span class="sr-only">通知</span>
-          <svg
-            class="w-6 h-6"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        <!-- 通知ボタン -->
+        <div class="relative notification-menu">
+          <button 
+            class="p-2 rounded-lg hover:bg-gray-100"
+            onclick={toggleNotifications}
+            aria-label="通知"
           >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-            />
-          </svg>
-        </button>
+            <svg
+              class="w-6 h-6"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
+              />
+            </svg>
+          </button>
+
+          {#if isNotificationOpen}
+            <div class="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-lg py-1 z-50">
+              <div class="px-4 py-2 border-b border-gray-200">
+                <h3 class="text-sm font-medium text-gray-900">通知</h3>
+              </div>
+              <div class="max-h-96 overflow-y-auto">
+                <p class="px-4 py-3 text-sm text-gray-500 text-center">
+                  新しい通知はありません
+                </p>
+              </div>
+            </div>
+          {/if}
+        </div>
         
-        <button class="p-2 rounded-lg hover:bg-gray-100">
-          <span class="sr-only">ユーザーメニュー</span>
-          <svg
-            class="w-6 h-6"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        <!-- ユーザーメニュー -->
+        <div class="relative user-menu">
+          <button
+            class="p-2 rounded-lg hover:bg-gray-100"
+            onclick={toggleUserMenu}
+            aria-label="ユーザーメニュー"
           >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-            />
-          </svg>
-        </button>
+            <svg
+              class="w-6 h-6"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+              />
+            </svg>
+          </button>
+
+          {#if isUserMenuOpen}
+            <div class="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg py-1 z-50">
+              <a
+                href="/profile"
+                class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                プロフィール
+              </a>
+              <a
+                href="/settings"
+                class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+              >
+                設定
+              </a>
+              <button
+                class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
+                onclick={() => {/* ログアウト処理 */}}
+              >
+                ログアウト
+              </button>
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
   </header>

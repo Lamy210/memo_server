@@ -1,6 +1,6 @@
 // src/lib/api/memo.ts
 import type { Memo } from './types';
-
+import type { SearchParams, SearchResult } from './types/search';
 const API_BASE = '/api/v1';
 
 export async function fetchMemos(): Promise<Memo[]> {
@@ -43,6 +43,19 @@ export async function updateMemo(id: string, data: Partial<Memo>): Promise<Memo>
   });
   if (!response.ok) {
     throw new Error('Failed to update memo');
+  }
+  return response.json();
+}
+export async function searchMemos(params: SearchParams): Promise<SearchResult<Memo>> {
+  const searchParams = new URLSearchParams();
+  if (params.query) searchParams.append('q', params.query);
+  if (params.tag) searchParams.append('tag', params.tag);
+  if (params.page) searchParams.append('page', params.page.toString());
+  if (params.limit) searchParams.append('limit', params.limit.toString());
+
+  const response = await fetch(`${API_BASE}/memos/search?${searchParams.toString()}`);
+  if (!response.ok) {
+    throw new Error('Failed to search memos');
   }
   return response.json();
 }

@@ -1,14 +1,15 @@
-<!-- src/components/features/home/RecentMemos.svelte -->
+<!-- /app/src/components/features/home/RecentMemos.svelte -->
 <script lang="ts">
+  // ★ポイント1：Memo型のインポート先を、実際のプロジェクト構造に合わせて修正してください
+  import type { Memo } from '@/lib/api/types';
   import { onMount } from 'svelte';
-  import { memoStore } from '@/lib/stores';  // パスを修正
+  import { memoStore } from '@/lib/stores';
   import MemoCard from '../memo/MemoCard.svelte';
   import { Button } from '@/components/ui';
-  
 
-  let isLoading = $state(true);
-  let error = $state<string | null>(null);
-  
+  let isLoading = true;
+  let error: string | null = null;
+
   onMount(async () => {
     try {
       await memoStore.fetchAll();
@@ -19,10 +20,16 @@
     }
   });
 
-  // メモの並び替えとフィルタリング
-  const recentMemos = $derived(() => {
-    const state = $memoStore;
-    return [...state.items]
+  /**
+   * Svelte 3/4 互換の derived ストアを使う方法
+   * -------------------------------------------------
+   * memoStore の items から派生して recentMemos を生成します。
+   * テンプレート内では $recentMemos としてアクセスできます。
+   */
+  import { derived } from 'svelte/store';
+  export const recentMemos = derived(memoStore, ($memoStore) => {
+    if (!$memoStore.items) return [];
+    return [...$memoStore.items]
       .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
       .slice(0, 10);
   });
@@ -44,13 +51,13 @@
     <div class="bg-red-50 text-red-600 p-4 rounded-lg">
       {$memoStore.error}
     </div>
-  {:else if recentMemos.length === 0}
+  {:else if $recentMemos.length === 0}
     <div class="text-center py-8 text-gray-500">
       メモがありません
     </div>
   {:else}
     <div class="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-      {#each recentMemos as memo (memo.id)}
+      {#each $recentMemos as memo (memo.id)}
         <a href="/memos/{memo.id}">
           <MemoCard {memo} />
         </a>
