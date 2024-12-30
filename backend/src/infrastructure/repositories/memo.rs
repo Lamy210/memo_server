@@ -1,56 +1,44 @@
 // src/infrastructure/repositories/memo.rs
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use uuid::Uuid;
 use scylla::{
-    Row,
-    FromRow,
-    error::FromRowError,
-    frame::value::{Value, CqlTimestamp},
-    SerializeRow,
-    IntoTypedRows,
+    frame::response::result::Row,
+    serialize::row::SerializeRow,
+    deserialize::{DeserializeRow, TypeCheck, ColumnSpec, TypeCheckError, DeserializationError, ColumnIterator},
 };
+use tracing::{debug, instrument};
+
 use crate::{
     domain::memo::{entity::Memo, repository::MemoRepository},
     error::{AppError, AppResult},
     infrastructure::persistence::{
-        scylla::{ScyllaDB, ScyllaDBPreparedStatements},
+        scylla::ScyllaDB,
         redis::RedisCache,
         elasticsearch::ElasticsearchClient,
     },
 };
 
 /// メモリポジトリの実装
-/// 
-/// DDDのリポジトリパターンに基づく、複合永続化戦略を実装
 pub struct MemoRepositoryImpl {
     scylla: Arc<ScyllaDB>,
-    prepared_statements: Arc<ScyllaDBPreparedStatements>,
     redis: Arc<RedisCache>,
     elasticsearch: Arc<ElasticsearchClient>,
 }
 
 impl MemoRepositoryImpl {
     /// 新しいリポジトリインスタンスを生成
-    pub async fn new(
+    pub fn new(
         scylla: Arc<ScyllaDB>,
         redis: Arc<RedisCache>,
         elasticsearch: Arc<ElasticsearchClient>,
-    ) -> AppResult<Self> {
-        let prepared_statements = Arc::new(
-            ScyllaDBPreparedStatements::prepare(scylla.get_session())
-                .await
-                .map_err(|e| AppError::DatabaseError(e.to_string()))?,
-        );
-
-        Ok(Self {
+    ) -> Self {
+        Self {
             scylla,
-            prepared_statements,
             redis,
             elasticsearch,
-        })
+        }
     }
 
     /// キャッシュからメモを取得
@@ -59,12 +47,10 @@ impl MemoRepositoryImpl {
         self.redis.get(&cache_key).await
     }
 
-    /// メモをキャッシュに保存（1時間の有効期限）
+    /// メモをキャッシュに保存
     async fn set_cache(&self, memo: &Memo) -> AppResult<()> {
         let cache_key = format!("memo:{}", memo.id);
-        self.redis
-            .set(&cache_key, memo, Some(Duration::from_secs(3600)))
-            .await
+        self.redis.set(&cache_key, memo, None).await
     }
 
     /// キャッシュを無効化
@@ -74,194 +60,156 @@ impl MemoRepositoryImpl {
     }
 }
 
-/// Implement `FromRow` for `Memo` to allow scylla to convert rows directly into `Memo` instances.
-impl FromRow for Memo {
-    fn from_row(row: &Row) -> Result<Self, FromRowError> {
-        Ok(Memo {
-            id: row
-                .get("id")
-                .ok_or_else(|| FromRowError::MissingColumn("id".to_string()))?,
-            title: row
-                .get("title")
-                .ok_or_else(|| FromRowError::MissingColumn("title".to_string()))?,
-            content: row
-                .get("content")
-                .ok_or_else(|| FromRowError::MissingColumn("content".to_string()))?,
-            tags: row
-                .get("tags")
-                .ok_or_else(|| FromRowError::MissingColumn("tags".to_string()))?
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-            user_id: row
-                .get("user_id")
-                .ok_or_else(|| FromRowError::MissingColumn("user_id".to_string()))?,
-            created_at: DateTime::<Utc>::from(
-                row.get::<CqlTimestamp>("created_at")
-                    .ok_or_else(|| FromRowError::MissingColumn("created_at".to_string()))?
-                    .to_chrono(),
-            ),
-            updated_at: DateTime::<Utc>::from(
-                row.get::<CqlTimestamp>("updated_at")
-                    .ok_or_else(|| FromRowError::MissingColumn("updated_at".to_string()))?
-                    .to_chrono(),
-            ),
-            version: row
-                .get("version")
-                .ok_or_else(|| FromRowError::MissingColumn("version".to_string()))?,
+/// ScyllaDBのデシリアライズ実装
+impl<'a, 'b> DeserializeRow<'a, 'b> for Memo {
+    fn type_check(specs: &[ColumnSpec]) -> Result<(), TypeCheckError> {
+        if specs.len() != 8 {
+            return Err(TypeCheckError::BadCount{
+                expected: 8,
+                actual: specs.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn deserialize(mut iter: ColumnIterator<'a, 'b>) -> Result<Self, DeserializationError> {
+        Ok(Self {
+            id: iter.deserialize_next()?,
+            title: iter.deserialize_next()?,
+            content: iter.deserialize_next()?,
+            tags: iter.deserialize_next()?,
+            user_id: iter.deserialize_next()?,
+            created_at: iter.deserialize_next()?,
+            updated_at: iter.deserialize_next()?,
+            version: iter.deserialize_next()?,
         })
     }
 }
 
 #[async_trait]
 impl MemoRepository for MemoRepositoryImpl {
+    #[instrument(skip(self))]
     async fn find_by_id(&self, id: Uuid) -> AppResult<Option<Memo>> {
-        // まずキャッシュを確認
+        // キャッシュチェック
         if let Some(memo) = self.get_from_cache(id).await? {
+            debug!("Cache hit for memo: {}", id);
             return Ok(Some(memo));
         }
 
-        // ScyllaDBから取得
-        let values: &[&dyn Value] = &[&id as &dyn Value];
-        let result = self
-            .scylla
-            .get_session()
-            .execute(&self.prepared_statements.select_memo_by_id, values)
-            .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        debug!("Cache miss for memo: {}, querying database", id);
+        let statements = self.scylla.get_prepared_statements().await?;
+        
+        let result = self.scylla
+            .execute_one::<Memo, _>(&statements.select_memo_by_id, (id,))
+            .await?;
 
-        let memo = match result.first_row()? {
-            Some(row) => {
-                let memo: Memo = row.into()?;
-                // キャッシュを更新
-                self.set_cache(&memo).await?;
-                Some(memo)
-            }
-            None => None,
-        };
-
-        Ok(memo)
-    }
-
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        let values: &[&dyn Value] = &[&user_id as &dyn Value];
-        let result = self
-            .scylla
-            .get_session()
-            .execute(&self.prepared_statements.select_memos_by_user_id, values)
-            .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-
-        let mut memos = Vec::new();
-        if let Some(rows) = result.rows {
-            for row in rows {
-                let memo: Memo = row.into()?;
-                memos.push(memo);
-            }
+        // キャッシュの更新
+        if let Some(memo) = result.as_ref() {
+            debug!("Updating cache for memo: {}", id);
+            self.set_cache(memo).await?;
         }
 
-        Ok(memos)
+        Ok(result)
     }
 
+    #[instrument(skip(self))]
+    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
+        let statements = self.scylla.get_prepared_statements().await?;
+        
+        self.scylla
+            .execute::<Memo, _>(&statements.select_memos_by_user_id, (user_id,))
+            .await
+    }
+
+    #[instrument(skip(self, memo))]
     async fn save(&self, memo: &Memo) -> AppResult<()> {
+        let statements = self.scylla.get_prepared_statements().await?;
+
         if memo.version == 1 {
             // 新規作成
-            let values: &[&dyn Value] = &[
-                &memo.id as &dyn Value,
-                &memo.title as &dyn Value,
-                &memo.content as &dyn Value,
-                &memo.tags as &dyn Value,
-                &memo.user_id as &dyn Value,
-                &CqlTimestamp::from(memo.created_at) as &dyn Value,
-                &CqlTimestamp::from(memo.updated_at) as &dyn Value,
-                &memo.version as &dyn Value,
-            ];
-
             self.scylla
-                .get_session()
-                .execute(&self.prepared_statements.insert_memo, values)
-                .await
-                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+                .execute_one::<Memo, _>(
+                    &statements.insert_memo,
+                    (
+                        memo.id,
+                        &memo.title,
+                        &memo.content,
+                        &memo.tags,
+                        memo.user_id,
+                        memo.created_at,
+                        memo.updated_at,
+                        memo.version,
+                    ),
+                )
+                .await?;
         } else {
             // 更新（楽観的ロック使用）
-            let values: &[&dyn Value] = &[
-                &memo.title as &dyn Value,
-                &memo.content as &dyn Value,
-                &memo.tags as &dyn Value,
-                &CqlTimestamp::from(memo.updated_at) as &dyn Value,
-                &memo.version as &dyn Value,
-                &memo.id as &dyn Value,
-                &(memo.version - 1) as &dyn Value,
-            ];
+            let result = self.scylla
+                .execute_one::<Memo, _>(
+                    &statements.update_memo,
+                    (
+                        &memo.title,
+                        &memo.content,
+                        &memo.tags,
+                        memo.updated_at,
+                        memo.version,
+                        memo.id,
+                        memo.version - 1,
+                    ),
+                )
+                .await?;
 
-            let result = self
-                .scylla
-                .get_session()
-                .execute(&self.prepared_statements.update_memo, values)
-                .await
-                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-
-            if let Some(rows) = result.rows {
-                // Check if the IF condition was met
-                if rows.is_empty() {
-                    return Err(AppError::Conflict("Memo has been modified".into()));
-                }
-            } else {
+            if result.is_none() {
                 return Err(AppError::Conflict("Memo has been modified".into()));
             }
         }
 
-        // キャッシュを無効化
+        // キャッシュの無効化
         self.invalidate_cache(memo.id).await?;
 
-        // Elasticsearchにインデックス
-        self.elasticsearch.index_memo(memo.id, memo).await?;
+        // Elasticsearchのインデックス更新
+        self.elasticsearch.index_memo(memo).await?;
 
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn delete(&self, id: Uuid) -> AppResult<()> {
-        let values: &[&dyn Value] = &[&id as &dyn Value];
-
-        // ScyllaDBから削除
+        let statements = self.scylla.get_prepared_statements().await?;
+        
         self.scylla
-            .get_session()
-            .execute(&self.prepared_statements.delete_memo, values)
-            .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            .execute_one::<Memo, _>(&statements.delete_memo, (id,))
+            .await?;
 
-        // キャッシュを無効化
+        // キャッシュの無効化
         self.invalidate_cache(id).await?;
 
-        // Elasticsearchから削除
+        // Elasticsearchからの削除
         self.elasticsearch.delete_memo(id).await?;
 
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn search(&self, query: &str, tag: Option<String>, user_id: Uuid) -> AppResult<Vec<Memo>> {
         self.elasticsearch
             .search_memos(query, tag, user_id)
             .await
     }
 
+    #[instrument(skip(self))]
     async fn exists(&self, id: Uuid) -> AppResult<bool> {
-        // まずキャッシュをチェック
-        let cache_key = format!("memo:{}", id);
-        if self.redis.exists(&cache_key).await? {
+        // キャッシュチェック
+        if let Some(_) = self.get_from_cache(id).await? {
             return Ok(true);
         }
 
-        // ScyllaDBをチェック
-        let values: &[&dyn Value] = &[&id as &dyn Value];
-        let result = self
-            .scylla
-            .get_session()
-            .execute(&self.prepared_statements.select_memo_by_id, values)
-            .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        let statements = self.scylla.get_prepared_statements().await?;
+        let result = self.scylla
+            .execute_one::<i32, _>(&statements.select_memo_exists, (id,))
+            .await?;
 
-        Ok(result.rows.map_or(false, |rows| !rows.is_empty()))
+        Ok(result.is_some())
     }
 }
 
@@ -270,9 +218,52 @@ mod tests {
     use super::*;
     use tokio;
 
+    async fn setup_test_repository() -> MemoRepositoryImpl {
+        let scylla = Arc::new(
+            ScyllaDB::new("scylla://localhost:9042")
+                .await
+                .expect("Failed to connect to ScyllaDB")
+        );
+        
+        let redis = Arc::new(
+            RedisCache::new("redis://localhost:6379")
+                .expect("Failed to connect to Redis")
+        );
+        
+        let elasticsearch = Arc::new(
+            ElasticsearchClient::new("http://localhost:9200")
+                .await
+                .expect("Failed to connect to Elasticsearch")
+        );
+
+        MemoRepositoryImpl::new(scylla, redis, elasticsearch)
+    }
+
     #[tokio::test]
-    async fn test_memo_crud_operations() {
-        // TODO: テストケースの実装
-        // モックを使用したCRUD操作のテスト
+    async fn test_crud_operations() {
+        let repo = setup_test_repository().await;
+        
+        // テストメモの作成
+        let memo = Memo::new(
+            "Test Title".to_string(),
+            "Test Content".to_string(),
+            vec!["test".to_string()],
+            Uuid::new_v4(),
+        );
+
+        // 保存テスト
+        repo.save(&memo).await.expect("Failed to save memo");
+
+        // 検索テスト
+        let found = repo.find_by_id(memo.id).await.expect("Failed to find memo");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().title, memo.title);
+
+        // 削除テスト
+        repo.delete(memo.id).await.expect("Failed to delete memo");
+        
+        // 削除確認
+        let not_found = repo.find_by_id(memo.id).await.expect("Failed to check memo");
+        assert!(not_found.is_none());
     }
 }

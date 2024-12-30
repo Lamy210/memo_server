@@ -1,32 +1,36 @@
-//src/infrastructure/persistence/scylla.rs
+// src/infrastructure/persistence/scylla.rs
+
 use std::sync::Arc;
 use scylla::{
     Session, SessionBuilder,
     prepared_statement::PreparedStatement,
-    transport::errors::QueryError,
-    frame::value::ValueList,
-    QueryResult,
+    statement::{Consistency, SerialConsistency},
+    batch::{Batch, BatchType},
+    frame::value::SerializeRow,
+    deserialize::row::{RowIterator, IntoTypedRows},
+    query::Query,
 };
-use tracing::error;
-use chrono::{DateTime, Utc};
+use tokio::sync::RwLock;
+use tracing::{debug, error, info};
 use crate::error::{AppError, AppResult};
 
-/// ScyllaDBクライアントの実装
-/// 
-/// この実装は以下の特徴を持ちます：
-/// - 非同期処理による高性能なクエリ実行
-/// - プリペアドステートメントによるクエリ最適化
-/// - コネクションプーリングによるリソース効率化
-/// - 包括的なエラーハンドリング
+#[derive(Clone)]
 pub struct ScyllaDB {
     session: Arc<Session>,
+    prepared_statements: Arc<RwLock<Option<PreparedStatements>>>,
+}
+
+#[derive(Clone)]
+pub struct PreparedStatements {
+    pub insert_memo: PreparedStatement,
+    pub select_memo_by_id: PreparedStatement,
+    pub select_memos_by_user_id: PreparedStatement,
+    pub update_memo: PreparedStatement,
+    pub delete_memo: PreparedStatement,
+    pub select_memo_exists: PreparedStatement,
 }
 
 impl ScyllaDB {
-    /// 新しいScyllaDBセッションを初期化
-    ///
-    /// # Arguments
-    /// * `uri` - ScyllaDBクラスターのURI（例: "scylla://localhost:9042"）
     pub async fn new(uri: &str) -> AppResult<Self> {
         let session = SessionBuilder::new()
             .known_node(uri)
@@ -34,36 +38,31 @@ impl ScyllaDB {
             .await
             .map_err(|e| {
                 error!("Failed to connect to ScyllaDB: {}", e);
-                AppError::DatabaseError(format!("Failed to connect to database: {}", e))
+                AppError::DatabaseError(format!("Database connection failed: {}", e))
             })?;
 
-        // スキーマの初期化
-        Self::initialize_schema(&session).await?;
+        info!("Successfully connected to ScyllaDB");
 
-        Ok(Self {
+        let db = Self {
             session: Arc::new(session),
-        })
+            prepared_statements: Arc::new(RwLock::new(None)),
+        };
+
+        db.initialize_schema().await?;
+        db.prepare_statements().await?;
+
+        Ok(db)
     }
 
-    /// データベーススキーマの初期化
-    /// キースペース、テーブル、インデックスを作成
-    async fn initialize_schema(session: &Session) -> AppResult<()> {
-        // キースペースの作成
-        let create_keyspace = r#"
-            CREATE KEYSPACE IF NOT EXISTS memo_app
-            WITH replication = {
-                'class': 'SimpleStrategy',
-                'replication_factor': 1
-            };
-        "#;
+    async fn initialize_schema(&self) -> AppResult<()> {
+        debug!("Initializing database schema");
 
-        session
-            .query(create_keyspace, &[])
-            .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        let create_keyspace = Query::new(
+            "CREATE KEYSPACE IF NOT EXISTS memo_app WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1} AND durable_writes = true"
+        );
 
-        // メモテーブルの作成
-        let create_memo_table = r#"
+        let create_memo_table = Query::new(
+            r#"
             CREATE TABLE IF NOT EXISTS memo_app.memos (
                 id uuid,
                 title text,
@@ -74,101 +73,132 @@ impl ScyllaDB {
                 updated_at timestamp,
                 version int,
                 PRIMARY KEY (id)
-            );
-        "#;
+            )
+            "#
+        );
 
-        session
+        self.session
+            .query(create_keyspace, &[])
+            .await
+            .map_err(|e| AppError::DatabaseError(format!("Failed to create keyspace: {}", e)))?;
+
+        self.session
             .query(create_memo_table, &[])
             .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to create memos table: {}", e)))?;
 
-        // ユーザーIDによるインデックスの作成
-        let create_user_id_index = r#"
-            CREATE INDEX IF NOT EXISTS memos_user_id_idx 
-            ON memo_app.memos (user_id);
-        "#;
+        let indices = [
+            "CREATE INDEX IF NOT EXISTS memos_user_id_idx ON memo_app.memos (user_id)",
+            "CREATE INDEX IF NOT EXISTS memos_tags_idx ON memo_app.memos (tags)",
+        ];
 
-        session
-            .query(create_user_id_index, &[])
-            .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        for create_index in indices.iter() {
+            let query = Query::new(create_index);
+            self.session
+                .query(query, &[])
+                .await
+                .map_err(|e| AppError::DatabaseError(format!("Failed to create index: {}", e)))?;
+        }
 
+        debug!("Schema initialization completed");
         Ok(())
     }
 
-    pub fn get_session(&self) -> Arc<Session> {
-        self.session.clone()
+    async fn prepare_statements(&self) -> AppResult<()> {
+        let statements = PreparedStatements {
+            insert_memo: self.session
+                .prepare("INSERT INTO memo_app.memos (id, title, content, tags, user_id, created_at, updated_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                .await
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?,
+
+            select_memo_by_id: self.session
+                .prepare("SELECT * FROM memo_app.memos WHERE id = ?")
+                .await
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?,
+
+            select_memos_by_user_id: self.session
+                .prepare("SELECT * FROM memo_app.memos WHERE user_id = ?")
+                .await
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?,
+
+            update_memo: self.session
+                .prepare("UPDATE memo_app.memos SET title = ?, content = ?, tags = ?, updated_at = ?, version = ? WHERE id = ? IF version = ?")
+                .await
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?,
+
+            delete_memo: self.session
+                .prepare("DELETE FROM memo_app.memos WHERE id = ?")
+                .await
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?,
+
+            select_memo_exists: self.session
+                .prepare("SELECT 1 FROM memo_app.memos WHERE id = ? LIMIT 1")
+                .await
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?,
+        };
+
+        let mut prepared_statements = self.prepared_statements.write().await;
+        *prepared_statements = Some(statements);
+
+        debug!("Statement preparation completed");
+        Ok(())
     }
-}
 
-/// プリペアドステートメントの管理構造体
-#[derive(Clone)]
-pub struct ScyllaDBPreparedStatements {
-    pub insert_memo: Arc<PreparedStatement>,
-    pub select_memo_by_id: Arc<PreparedStatement>,
-    pub select_memos_by_user_id: Arc<PreparedStatement>,
-    pub update_memo: Arc<PreparedStatement>,
-    pub delete_memo: Arc<PreparedStatement>,
-}
-
-impl ScyllaDBPreparedStatements {
-    /// プリペアドステートメントの準備
-    /// 
-    /// 全てのクエリをプリペアドステートメントとして事前に準備し、
-    /// 実行時のパフォーマンスを最適化します。
-    pub async fn prepare(session: Arc<Session>) -> Result<Self, QueryError> {
-        let insert_memo = session.prepare(
-            "INSERT INTO memo_app.memos (id, title, content, tags, user_id, created_at, updated_at, version) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-        ).await?;
-
-        let select_memo_by_id = session.prepare(
-            "SELECT * FROM memo_app.memos WHERE id = ?"
-        ).await?;
-
-        let select_memos_by_user_id = session.prepare(
-            "SELECT * FROM memo_app.memos WHERE user_id = ?"
-        ).await?;
-
-        let update_memo = session.prepare(
-            "UPDATE memo_app.memos 
-             SET title = ?, content = ?, tags = ?, updated_at = ?, version = ? 
-             WHERE id = ? IF version = ?"
-        ).await?;
-
-        let delete_memo = session.prepare(
-            "DELETE FROM memo_app.memos WHERE id = ?"
-        ).await?;
-
-        Ok(Self {
-            insert_memo: Arc::new(insert_memo),
-            select_memo_by_id: Arc::new(select_memo_by_id),
-            select_memos_by_user_id: Arc::new(select_memos_by_user_id),
-            update_memo: Arc::new(update_memo),
-            delete_memo: Arc::new(delete_memo),
-        })
+    pub async fn get_prepared_statements(&self) -> AppResult<PreparedStatements> {
+        let statements = self.prepared_statements.read().await;
+        match &*statements {
+            Some(statements) => Ok(statements.clone()),
+            None => {
+                drop(statements);
+                self.prepare_statements().await?;
+                Ok(self.prepared_statements.read().await.as_ref().unwrap().clone())
+            }
+        }
     }
-}
 
-/// DateTime<Utc>型をScyllaDBのタイムスタンプ形式に変換するトレイト
-pub trait ToScyllaTimestamp {
-    fn to_scylla_timestamp(&self) -> i64;
-}
+    pub async fn execute<V>(&self, query: &str, values: V) -> AppResult<scylla::QueryResult>
+    where
+        V: SerializeRow + Send,
+    {
+        let query = Query::new(query);
+        self.session
+            .query(query, values)
+            .await
+            .map_err(|e| AppError::DatabaseError(e.to_string()))
+    }
 
-impl ToScyllaTimestamp for DateTime<Utc> {
-    fn to_scylla_timestamp(&self) -> i64 {
-        self.timestamp_millis()
+    pub async fn execute_prepared<V>(&self, statement: &PreparedStatement, values: V) -> AppResult<scylla::QueryResult>
+    where
+        V: SerializeRow + Send,
+    {
+        self.session
+            .execute(statement, values)
+            .await
+            .map_err(|e| AppError::DatabaseError(e.to_string()))
+    }
+
+    pub async fn batch(&self) -> Batch {
+        let mut batch = Batch::default();
+        batch.set_consistency(Consistency::LocalQuorum);
+        batch
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio;
+    use uuid::Uuid;
 
     #[tokio::test]
-    async fn test_scylla_connection() {
-        let scylla = ScyllaDB::new("scylla://localhost:9042").await;
-        assert!(scylla.is_ok(), "Should connect to ScyllaDB successfully");
+    async fn test_database_connection() {
+        let db = ScyllaDB::new("scylla://localhost:9042").await;
+        assert!(db.is_ok(), "Should connect to database successfully");
+    }
+
+    #[tokio::test]
+    async fn test_prepared_statements() {
+        let db = ScyllaDB::new("scylla://localhost:9042").await.unwrap();
+        let statements = db.get_prepared_statements().await;
+        assert!(statements.is_ok(), "Should prepare statements successfully");
     }
 }

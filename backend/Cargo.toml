@@ -10,7 +10,7 @@ serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
 chrono = { version = "0.4.35", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["v4", "serde"] }
-scylla = { version = "0.12.0", features = ["serde", "macros"] }
+scylla =  "0.15.1"
 redis = { version = "0.24.0", features = ["tokio-comp"] }
 elasticsearch = "8.5.0-alpha.1"
 tracing = "0.1.40"
