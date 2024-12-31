@@ -1,3 +1,4 @@
+//src/startup.rs
 use std::sync::Arc;
 use actix_web::{web::Data, App, HttpServer, middleware};
 use crate::{
@@ -12,6 +13,7 @@ use crate::{
     },
     interfaces::routes::configure_routes,
 };
+use std::io;
 
 pub struct Application {
     port: u16,
@@ -24,27 +26,38 @@ impl Application {
         redis_uri: String,
         elasticsearch_uri: String,
         port: u16,
-    ) -> std::io::Result<Self> {
-        // データベース接続の初期化
-        let scylla = Arc::new(ScyllaDB::new(&scylla_uri).await.unwrap());
-        let redis = Arc::new(RedisCache::new(&redis_uri).unwrap());
-        let elasticsearch = Arc::new(ElasticsearchClient::new(&elasticsearch_uri).await.unwrap());
+    ) -> io::Result<Self> {
+        // Scylla 接続
+        let scylla = Arc::new(
+            ScyllaDB::new(&scylla_uri)
+                .await
+                .expect("Failed to connect to ScyllaDB")
+        );
+        // Redis 接続
+        let redis = Arc::new(
+            RedisCache::new(&redis_uri)
+                .expect("Failed to connect to Redis")
+        );
+        // Elasticsearch 接続
+        let elasticsearch = Arc::new(
+            ElasticsearchClient::new(&elasticsearch_uri)
+                .await
+                .expect("Failed to connect to Elasticsearch")
+        );
 
-        // リポジトリの初期化
+        // リポジトリ
         let memo_repository = Arc::new(
             MemoRepositoryImpl::new(
                 scylla.clone(),
                 redis.clone(),
                 elasticsearch.clone(),
             )
-            .await
-            .unwrap(),
         );
 
-        // サービスの初期化
+        // サービス
         let memo_service = Data::new(MemoService::new(memo_repository));
 
-        // HTTPサーバーの設定
+        // Actix Webサーバー起動
         let server = HttpServer::new(move || {
             App::new()
                 .wrap(middleware::Logger::default())
@@ -62,7 +75,7 @@ impl Application {
         self.port
     }
 
-    pub async fn run_until_stopped(self) -> std::io::Result<()> {
+    pub async fn run_until_stopped(self) -> io::Result<()> {
         self.server.await
     }
 }

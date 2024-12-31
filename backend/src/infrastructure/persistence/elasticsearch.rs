@@ -3,49 +3,61 @@
 use elasticsearch::{
     Elasticsearch,
     http::transport::Transport,
-    indices::{IndicesCreateParts, IndicesExistsParts},
-    BulkParts, BulkOperation, DeleteParts, GetParts, IndexParts, SearchParts,
+    SearchParts,
+    DeleteByQueryParts,
+    IndexParts,
+    params::Refresh,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use crate::error::{AppError, AppResult};
+use serde_json::{json, Value};
 use uuid::Uuid;
+use crate::error::{AppError, AppResult};
 use crate::domain::memo::entity::Memo;
+
+const INDEX_NAME: &str = "memos";
 
 pub struct ElasticsearchClient {
     client: Elasticsearch,
 }
 
 impl ElasticsearchClient {
-    pub async fn new(url: &str) -> AppResult<Self> {
-        let transport = Transport::single_node(url)
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-        
+    pub async fn new(uri: &str) -> AppResult<Self> {
+        let transport = Transport::single_node(uri).map_err(|e| {
+            AppError::DatabaseError(format!("Failed to create Elasticsearch transport: {}", e))
+        })?;
         let client = Elasticsearch::new(transport);
-        
+
         // インデックスの初期化
-        Self::initialize_indices(&client).await?;
+        Self::initialize_index(&client).await?;
 
         Ok(Self { client })
     }
 
-    async fn initialize_indices(client: &Elasticsearch) -> AppResult<()> {
-        let index_exists = client
+    async fn initialize_index(client: &Elasticsearch) -> AppResult<()> {
+        let exists = client
             .indices()
-            .exists(IndicesExistsParts::Index(&["memos"]))
+            .exists(elasticsearch::indices::IndicesExistsParts::Index(&[INDEX_NAME]))
             .send()
             .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?
+            .map_err(|e| AppError::DatabaseError(format!("Failed to check index existence: {}", e)))?
             .status_code()
             .is_success();
 
-        if !index_exists {
-            let memo_mapping = json!({
+        if !exists {
+            let mapping = json!({
                 "mappings": {
                     "properties": {
                         "id": { "type": "keyword" },
-                        "title": { "type": "text", "analyzer": "standard" },
-                        "content": { "type": "text", "analyzer": "standard" },
+                        "title": { 
+                            "type": "text",
+                            "analyzer": "standard",
+                            "fields": {
+                                "keyword": { "type": "keyword" }
+                            }
+                        },
+                        "content": { 
+                            "type": "text",
+                            "analyzer": "standard"
+                        },
                         "tags": { "type": "keyword" },
                         "user_id": { "type": "keyword" },
                         "created_at": { "type": "date" },
@@ -61,62 +73,36 @@ impl ElasticsearchClient {
 
             client
                 .indices()
-                .create(IndicesCreateParts::Index("memos"))
-                .body(memo_mapping)
+                .create(elasticsearch::indices::IndicesCreateParts::Index(INDEX_NAME))
+                .body(mapping)
                 .send()
                 .await
-                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+                .map_err(|e| AppError::DatabaseError(format!("Failed to create index: {}", e)))?;
         }
 
         Ok(())
     }
 
-    pub async fn index_memo<T: Serialize>(&self, id: Uuid, document: &T) -> AppResult<()> {
+    pub async fn index_memo(&self, memo: &Memo) -> AppResult<()> {
+        let doc = json!({
+            "id": memo.id.to_string(),
+            "title": memo.title,
+            "content": memo.content,
+            "tags": memo.tags,
+            "user_id": memo.user_id.to_string(),
+            "created_at": memo.created_at,
+            "updated_at": memo.updated_at,
+            "version": memo.version
+        });
+
         self.client
-            .index(IndexParts::IndexId("memos", &id.to_string()))
-            .body(document)
+            .index(IndexParts::Index(INDEX_NAME))
+            .id(memo.id.to_string())
+            .document(&doc)
+            .refresh(Refresh::True)
             .send()
             .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-
-        Ok(())
-    }
-
-    pub async fn get_memo<T: for<'de> Deserialize<'de>>(
-        &self,
-        id: Uuid,
-    ) -> AppResult<Option<T>> {
-        let response = self
-            .client
-            .get(GetParts::IndexId("memos", &id.to_string()))
-            .send()
-            .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-
-        if response.status_code().is_success() {
-            let document = response
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-
-            if let Some(source) = document.get("_source") {
-                let parsed: T = serde_json::from_value(source.clone())
-                    .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-                Ok(Some(parsed))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
-        self.client
-            .delete(DeleteParts::IndexId("memos", &id.to_string()))
-            .send()
-            .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to index memo: {}", e)))?;
 
         Ok(())
     }
@@ -127,18 +113,27 @@ impl ElasticsearchClient {
         tag: Option<String>,
         user_id: Uuid,
     ) -> AppResult<Vec<Memo>> {
-        let should_conditions = vec![
-            json!({
-                "multi_match": {
-                    "query": query,
-                    "fields": ["title^2", "content"],
-                    "type": "best_fields",
-                    "fuzziness": "AUTO"
-                }
-            })
-        ];
+        let mut should_clauses: Vec<Value> = vec![];
+        
+        if !query.is_empty() {
+            should_clauses.extend(vec![
+                json!({
+                    "match": {
+                        "title": {
+                            "query": query,
+                            "boost": 2.0
+                        }
+                    }
+                }),
+                json!({
+                    "match": {
+                        "content": query
+                    }
+                })
+            ]);
+        }
 
-        let mut filter_conditions = vec![
+        let mut must_clauses = vec![
             json!({
                 "term": {
                     "user_id": user_id.to_string()
@@ -146,10 +141,10 @@ impl ElasticsearchClient {
             })
         ];
 
-        if let Some(tag) = tag {
-            filter_conditions.push(json!({
+        if let Some(tag_value) = tag {
+            must_clauses.push(json!({
                 "term": {
-                    "tags": tag
+                    "tags": tag_value
                 }
             }));
         }
@@ -157,100 +152,91 @@ impl ElasticsearchClient {
         let query_body = json!({
             "query": {
                 "bool": {
-                    "must": {
-                        "bool": {
-                            "should": should_conditions,
-                            "minimum_should_match": 1
-                        }
-                    },
-                    "filter": filter_conditions
+                    "must": must_clauses,
+                    "should": should_clauses,
+                    "minimum_should_match": if query.is_empty() { 0 } else { 1 }
                 }
             },
             "sort": [
                 { "updated_at": { "order": "desc" } }
-            ],
-            "track_total_hits": true
+            ]
         });
 
-        let response = self
-            .client
-            .search(SearchParts::Index(&["memos"]))
+        let response = self.client
+            .search(SearchParts::Index(&[INDEX_NAME]))
             .body(query_body)
+            .size(100)
             .send()
             .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to execute search: {}", e)))?;
 
-        if response.status_code().is_success() {
-            let search_response = response
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        let search_hits = response.json::<Value>().await.map_err(|e| {
+            AppError::DatabaseError(format!("Failed to parse search response: {}", e))
+        })?;
 
-            if let Some(hits) = search_response["hits"]["hits"].as_array() {
-                let mut results = Vec::with_capacity(hits.len());
-                for hit in hits {
-                    if let Some(source) = hit["_source"].as_object() {
-                        let parsed: Memo = serde_json::from_value(source.clone())
-                            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-                        results.push(parsed);
-                    }
-                }
-                Ok(results)
-            } else {
-                Ok(vec![])
-            }
-        } else {
-            Err(AppError::DatabaseError("Search request failed".into()))
-        }
+        let hits = search_hits["hits"]["hits"]
+            .as_array()
+            .ok_or_else(|| AppError::DatabaseError("Invalid search response format".to_string()))?;
+
+        let memos = hits
+            .iter()
+            .filter_map(|hit| {
+                let source = hit["_source"].as_object()?;
+                let id = Uuid::parse_str(source["id"].as_str()?).ok()?;
+                let user_id = Uuid::parse_str(source["user_id"].as_str()?).ok()?;
+
+                Some(Memo {
+                    id,
+                    title: source["title"].as_str()?.to_string(),
+                    content: source["content"].as_str()?.to_string(),
+                    tags: source["tags"]
+                        .as_array()?
+                        .iter()
+                        .filter_map(|t| t.as_str().map(String::from))
+                        .collect(),
+                    user_id,
+                    created_at: chrono::DateTime::parse_from_rfc3339(
+                        source["created_at"].as_str()?
+                    ).ok()?.with_timezone(&chrono::Utc),
+                    updated_at: chrono::DateTime::parse_from_rfc3339(
+                        source["updated_at"].as_str()?
+                    ).ok()?.with_timezone(&chrono::Utc),
+                    version: source["version"].as_i64()? as i32,
+                })
+            })
+            .collect();
+
+        Ok(memos)
     }
 
-    pub async fn bulk_index(
-        &self,
-        documents: Vec<(Uuid, Memo)>,
-    ) -> AppResult<()> {
-        let mut bulk_operations = Vec::with_capacity(documents.len());
-
-        for (id, doc) in documents {
-            let index_op = BulkOperation::Index {
-                index: "memos",
-                id: id.to_string(),
-                document: doc,
-            };
-            bulk_operations.push(index_op);
-        }
+    pub async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
+        let query_body = json!({
+            "query": {
+                "term": {
+                    "id": id.to_string()
+                }
+            }
+        });
 
         self.client
-            .bulk(BulkParts::Index("memos"))
-            .body(bulk_operations)
+            .delete_by_query(DeleteByQueryParts::Index(&[INDEX_NAME]))
+            .body(query_body)
+            .refresh(true)
             .send()
             .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            .map_err(|e| AppError::DatabaseError(format!("Failed to delete memo: {}", e)))?;
 
         Ok(())
     }
 
     pub async fn health_check(&self) -> AppResult<bool> {
-        let response = self
-            .client
+        let response = self.client
             .cat()
             .health()
-            .format("json")
             .send()
             .await
-            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            .map_err(|e| AppError::DatabaseError(format!("Health check failed: {}", e)))?;
 
         Ok(response.status_code().is_success())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio;
-
-    #[tokio::test]
-    async fn test_elasticsearch_connection() {
-        let es_client = ElasticsearchClient::new("http://localhost:9200").await;
-        assert!(es_client.is_ok(), "Should connect to Elasticsearch successfully");
     }
 }

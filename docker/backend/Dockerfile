@@ -1,4 +1,4 @@
-FROM rust:1.75-slim-bullseye
+FROM rust:1.81-slim-bullseye
 
 WORKDIR /app
 
