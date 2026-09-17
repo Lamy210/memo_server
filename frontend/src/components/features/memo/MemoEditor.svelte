@@ -136,7 +136,7 @@
   });
 </script>
 
-<div class="grid gap-6 xl:grid-cols-[minmax((0,1fr)_minmax(320px,0.8fr)]">
+<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
   <section class="rounded-3xl border border-slate-200 bg-white shadow-sm">
     <div class="border-b border-slate-100 px-6 py-5 sm:px-8">
       <div class="flex flex-wrap items-center justify-between gap-3">
