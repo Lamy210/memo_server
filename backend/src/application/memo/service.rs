@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cmp::Reverse, sync::Arc};
 
 use uuid::Uuid;
 
@@ -71,7 +71,7 @@ impl MemoService {
 
     pub async fn get_user_memos(&self, user_id: Uuid) -> AppResult<Vec<MemoResponse>> {
         let mut memos = self.memo_repository.find_all_by_user_id(user_id).await?;
-        memos.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        memos.sort_by_key(|memo| Reverse(memo.updated_at));
         Ok(memos.into_iter().map(MemoResponse::from).collect())
     }
 
