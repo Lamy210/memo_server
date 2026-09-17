@@ -234,9 +234,7 @@ impl ScyllaDB {
                 ),
             )
             .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!("Failed to update memo: {error}"))
-            })?;
+            .map_err(|error| AppError::DatabaseError(format!("Failed to update memo: {error}")))?;
         let rows = result.into_rows_result().map_err(|error| {
             AppError::DatabaseError(format!("Failed to read conditional update result: {error}"))
         })?;
@@ -245,10 +243,7 @@ impl ScyllaDB {
                 "Failed to deserialize conditional update result: {error}"
             ))
         })?;
-        let applied = matches!(
-            row.columns.first(),
-            Some(Some(CqlValue::Boolean(true)))
-        );
+        let applied = matches!(row.columns.first(), Some(Some(CqlValue::Boolean(true))));
 
         if !applied {
             return Err(AppError::Conflict(
