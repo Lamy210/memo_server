@@ -28,6 +28,12 @@ jobs:
       - name: Configure Rust toolchain
         run: rustup component add rustfmt clippy
 
+      - name: Configuration contract
+        run: cargo test --test config
+
+      - name: Check
+        run: cargo check
+
       - name: Format
         run: cargo fmt --check
 
@@ -36,9 +42,6 @@ jobs:
 
       - name: Test
         run: cargo test
-
-      - name: Check
-        run: cargo check
 
   frontend:
     name: Frontend
