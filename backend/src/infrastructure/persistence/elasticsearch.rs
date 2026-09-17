@@ -97,7 +97,7 @@ impl ElasticsearchClient {
 
         self.client
             .index(IndexParts::IndexId(INDEX_NAME, &memo_id))
-            .document(&doc)
+            .body(doc)
             .refresh(Refresh::True)
             .send()
             .await
