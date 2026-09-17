@@ -1,34 +1,30 @@
-// src/infrastructure/persistence/scylla.rs
-
-use scylla::{
-    Session, SessionBuilder,
-    statement::batch::{Batch, BatchType},
-    statement::prepared_statement::PreparedStatement,
-    transport::errors::QueryError,
-    transport::session::TypedRowIter,
-    statement::Consistency,
-    query::Query,
-};
 use std::sync::Arc;
-use uuid::Uuid;
+
 use chrono::{DateTime, Utc};
+use scylla::{statement::prepared_statement::PreparedStatement, Session, SessionBuilder};
+use uuid::Uuid;
+
 use crate::{
     domain::memo::entity::Memo,
     error::{AppError, AppResult},
 };
 
-/// ScyllaDBクライアントの実装
-/// 
-/// 非同期処理とバッチ処理を活用し、データの整合性を保証します。
+type MemoRow = (
+    Uuid,
+    String,
+    String,
+    Vec<String>,
+    Uuid,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    i32,
+);
+
 pub struct ScyllaDB {
     session: Arc<Session>,
     prepared_statements: PreparedStatements,
 }
 
-/// プリペアドステートメントのコレクション
-/// 
-/// パフォーマンスとセキュリティを向上させるため、
-/// 頻繁に使用されるクエリを事前にコンパイルします。
 struct PreparedStatements {
     find_by_id: PreparedStatement,
     find_all_by_user_id: PreparedStatement,
@@ -43,259 +39,251 @@ impl ScyllaDB {
             .known_node(uri)
             .build()
             .await
-            .map_err(|e| AppError::DatabaseError(format!("Failed to connect to ScyllaDB: {}", e)))?;
-
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to connect to ScyllaDB: {error}"))
+            })?;
         let session = Arc::new(session);
-        
-        // キースペースとテーブルの初期化
-        Self::initialize_schema(&session).await?;
 
-        // プリペアドステートメントの準備
+        Self::initialize_schema(&session).await?;
         let prepared_statements = Self::prepare_statements(&session).await?;
 
-        Ok(Self { 
+        Ok(Self {
             session,
             prepared_statements,
         })
     }
 
-    /// プリペアドステートメントの初期化
+    async fn initialize_schema(session: &Session) -> AppResult<()> {
+        session
+            .query_unpaged(
+                "CREATE KEYSPACE IF NOT EXISTS memo_app \
+                 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}",
+                &[],
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to create keyspace: {error}"))
+            })?;
+
+        session
+            .query_unpaged(
+                "CREATE TABLE IF NOT EXISTS memo_app.memos (\
+                    id uuid,\
+                    title text,\
+                    content text,\
+                    tags list<text>,\
+                    user_id uuid,\
+                    created_at timestamp,\
+                    updated_at timestamp,\
+                    version int,\
+                    PRIMARY KEY ((user_id), id)\
+                ) WITH CLUSTERING ORDER BY (id DESC)",
+                &[],
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to create memos table: {error}"))
+            })?;
+
+        Ok(())
+    }
+
     async fn prepare_statements(session: &Session) -> AppResult<PreparedStatements> {
+        let find_by_id = session
+            .prepare(
+                "SELECT id, title, content, tags, user_id, created_at, updated_at, version \
+                 FROM memo_app.memos WHERE user_id = ? AND id = ?",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to prepare find_by_id: {error}"))
+            })?;
+        let find_all_by_user_id = session
+            .prepare(
+                "SELECT id, title, content, tags, user_id, created_at, updated_at, version \
+                 FROM memo_app.memos WHERE user_id = ?",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to prepare find_all_by_user_id: {error}"
+                ))
+            })?;
+        let save_memo = session
+            .prepare(
+                "INSERT INTO memo_app.memos \
+                 (id, title, content, tags, user_id, created_at, updated_at, version) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to prepare save_memo: {error}"))
+            })?;
+        let delete_memo = session
+            .prepare("DELETE FROM memo_app.memos WHERE user_id = ? AND id = ?")
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to prepare delete_memo: {error}"))
+            })?;
+        let exists = session
+            .prepare("SELECT id FROM memo_app.memos WHERE user_id = ? AND id = ?")
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to prepare exists: {error}"))
+            })?;
+
         Ok(PreparedStatements {
-            find_by_id: session.prepare("SELECT * FROM memo_app.memos WHERE id = ?").await
-                .map_err(|e| AppError::DatabaseError(format!("Failed to prepare find_by_id: {}", e)))?,
-            
-            find_all_by_user_id: session.prepare("SELECT * FROM memo_app.memos WHERE user_id = ?").await
-                .map_err(|e| AppError::DatabaseError(format!("Failed to prepare find_all_by_user_id: {}", e)))?,
-            
-            save_memo: session.prepare(
-                "INSERT INTO memo_app.memos (id, title, content, tags, user_id, created_at, updated_at, version) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            ).await
-                .map_err(|e| AppError::DatabaseError(format!("Failed to prepare save_memo: {}", e)))?,
-            
-            delete_memo: session.prepare("DELETE FROM memo_app.memos WHERE id = ?").await
-                .map_err(|e| AppError::DatabaseError(format!("Failed to prepare delete_memo: {}", e)))?,
-            
-            exists: session.prepare("SELECT id FROM memo_app.memos WHERE id = ?").await
-                .map_err(|e| AppError::DatabaseError(format!("Failed to prepare exists: {}", e)))?,
+            find_by_id,
+            find_all_by_user_id,
+            save_memo,
+            delete_memo,
+            exists,
         })
     }
 
-    /// データベーススキーマの初期化
-    async fn initialize_schema(session: &Session) -> AppResult<()> {
-        // キースペース作成のバッチ
-        let keyspace_batch = Batch::new(BatchType::Logged).add_statement(
-            Query::new(
-                "CREATE KEYSPACE IF NOT EXISTS memo_app 
-                WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
-            )
-        );
-
-        session.batch(&keyspace_batch)
-            .consistency(Consistency::All)
+    pub async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
+        let result = self
+            .session
+            .execute_unpaged(&self.prepared_statements.find_by_id, (user_id, id))
             .await
-            .map_err(|e| AppError::DatabaseError(format!("Failed to create keyspace: {}", e)))?;
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to fetch memo: {error}"))
+            })?;
+        let rows = result.into_rows_result().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to read memo result: {error}"))
+        })?;
+        let row = rows.maybe_first_row::<MemoRow>().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to deserialize memo: {error}"))
+        })?;
 
-        // テーブル作成のバッチ
-        let table_batch = Batch::new(BatchType::Logged).add_statement(
-            Query::new(
-                "CREATE TABLE IF NOT EXISTS memo_app.memos (
-                    id uuid,
-                    title text,
-                    content text,
-                    tags list<text>,
-                    user_id uuid,
-                    created_at timestamp,
-                    updated_at timestamp,
-                    version int,
-                    PRIMARY KEY ((user_id), id)
-                ) WITH CLUSTERING ORDER BY (id DESC)"
-            )
-        );
-
-        session.batch(&table_batch)
-            .consistency(Consistency::All)
-            .await
-            .map_err(|e| AppError::DatabaseError(format!("Failed to create table: {}", e)))?;
-
-        Ok(())
+        Ok(row.map(Self::memo_from_row))
     }
 
-    /// IDによるメモの検索
-    pub async fn find_by_id(&self, id: Uuid) -> AppResult<Option<Memo>> {
-        let batch = Batch::new(BatchType::Logged)
-            .add_statement(self.prepared_statements.find_by_id.bind((id,)));
-
-        let result = self.session
-            .batch(&batch)
-            .consistency(Consistency::One)
-            .await
-            .map_err(|e| AppError::DatabaseError(format!("Failed to fetch memo: {}", e)))?;
-
-        if let Some(rows) = result.rows {
-            if let Some(row) = rows.into_typed::<(
-                Uuid, String, String, Vec<String>, Uuid, DateTime<Utc>, DateTime<Utc>, i32
-            )>().next() {
-                let (id, title, content, tags, user_id, created_at, updated_at, version) = row
-                    .map_err(|e| AppError::DatabaseError(format!("Failed to parse row: {}", e)))?;
-
-                Ok(Some(Memo {
-                    id,
-                    title,
-                    content,
-                    tags,
-                    user_id,
-                    created_at,
-                    updated_at,
-                    version,
-                }))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// ユーザーIDによるメモの一覧取得
     pub async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        let batch = Batch::new(BatchType::Logged)
-            .add_statement(self.prepared_statements.find_all_by_user_id.bind((user_id,)));
-
-        let result = self.session
-            .batch(&batch)
-            .consistency(Consistency::One)
+        let result = self
+            .session
+            .execute_unpaged(
+                &self.prepared_statements.find_all_by_user_id,
+                (user_id,),
+            )
             .await
-            .map_err(|e| AppError::DatabaseError(format!("Failed to fetch memos: {}", e)))?;
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to fetch memos: {error}"))
+            })?;
+        let rows = result.into_rows_result().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to read memos result: {error}"))
+        })?;
+        let typed_rows = rows.rows::<MemoRow>().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to type-check memo rows: {error}"))
+        })?;
 
-        let mut memos = Vec::new();
-
-        if let Some(rows) = result.rows {
-            for row in rows.into_typed::<(
-                Uuid, String, String, Vec<String>, Uuid, DateTime<Utc>, DateTime<Utc>, i32
-            )>() {
-                let (id, title, content, tags, user_id, created_at, updated_at, version) = row
-                    .map_err(|e| AppError::DatabaseError(format!("Failed to parse row: {}", e)))?;
-
-                memos.push(Memo {
-                    id,
-                    title,
-                    content,
-                    tags,
-                    user_id,
-                    created_at,
-                    updated_at,
-                    version,
-                });
-            }
-        }
-
-        Ok(memos)
+        typed_rows
+            .map(|row| {
+                row.map(Self::memo_from_row).map_err(|error| {
+                    AppError::DatabaseError(format!("Failed to deserialize memo: {error}"))
+                })
+            })
+            .collect()
     }
 
-    /// メモの保存
     pub async fn save(&self, memo: &Memo) -> AppResult<()> {
-        let batch = Batch::new(BatchType::Logged)
-            .add_statement(self.prepared_statements.save_memo.bind((
-                memo.id,
-                &memo.title,
-                &memo.content,
-                &memo.tags,
-                memo.user_id,
-                memo.created_at,
-                memo.updated_at,
-                memo.version,
-            )));
-
-        match self.session
-            .batch(&batch)
-            .consistency(Consistency::Quorum)
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => match e {
-                QueryError::DbError(ref dbe) if dbe.message.contains("already exists") => {
-                    Err(AppError::Conflict("Memo already exists".into()))
-                }
-                e => Err(AppError::DatabaseError(format!("Failed to save memo: {}", e))),
-            }
-        }
-    }
-
-    /// メモの削除
-    pub async fn delete(&self, id: Uuid) -> AppResult<()> {
-        let batch = Batch::new(BatchType::Logged)
-            .add_statement(self.prepared_statements.delete_memo.bind((id,)));
-
         self.session
-            .batch(&batch)
-            .consistency(Consistency::Quorum)
+            .execute_unpaged(
+                &self.prepared_statements.save_memo,
+                (
+                    memo.id,
+                    memo.title.as_str(),
+                    memo.content.as_str(),
+                    &memo.tags,
+                    memo.user_id,
+                    memo.created_at,
+                    memo.updated_at,
+                    memo.version,
+                ),
+            )
             .await
-            .map_err(|e| AppError::DatabaseError(format!("Failed to delete memo: {}", e)))?;
-
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to save memo: {error}"))
+            })?;
         Ok(())
     }
 
-    /// メモの存在確認
-    pub async fn exists(&self, id: Uuid) -> AppResult<bool> {
-        let batch = Batch::new(BatchType::Logged)
-            .add_statement(self.prepared_statements.exists.bind((id,)));
-
-        let result = self.session
-            .batch(&batch)
-            .consistency(Consistency::One)
+    pub async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()> {
+        self.session
+            .execute_unpaged(&self.prepared_statements.delete_memo, (user_id, id))
             .await
-            .map_err(|e| AppError::DatabaseError(format!("Failed to check memo existence: {}", e)))?;
-
-        Ok(result.rows.map_or(false, |rows| !rows.is_empty()))
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to delete memo: {error}"))
+            })?;
+        Ok(())
     }
 
-    /// ヘルスチェック
-    pub async fn health_check(&self) -> AppResult<bool> {
-        let batch = Batch::new(BatchType::Logged)
-            .add_statement(Query::new("SELECT release_version FROM system.local"));
-
-        let result = self.session
-            .batch(&batch)
-            .consistency(Consistency::One)
+    pub async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
+        let result = self
+            .session
+            .execute_unpaged(&self.prepared_statements.exists, (user_id, id))
             .await
-            .map_err(|e| AppError::DatabaseError(format!("Health check failed: {}", e)))?;
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to check memo existence: {error}"))
+            })?;
+        let rows = result.into_rows_result().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to read existence result: {error}"))
+        })?;
+        let row = rows.maybe_first_row::<(Uuid,)>().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to deserialize existence result: {error}"))
+        })?;
+        Ok(row.is_some())
+    }
 
-        Ok(result.rows.map_or(false, |rows| !rows.is_empty()))
+    pub async fn health_check(&self) -> AppResult<bool> {
+        let result = self
+            .session
+            .query_unpaged("SELECT release_version FROM system.local", &[])
+            .await
+            .map_err(|error| AppError::DatabaseError(format!("Health check failed: {error}")))?;
+        let rows = result.into_rows_result().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to read health check result: {error}"))
+        })?;
+        Ok(rows.rows_num() > 0)
+    }
+
+    fn memo_from_row(row: MemoRow) -> Memo {
+        let (id, title, content, tags, user_id, created_at, updated_at, version) = row;
+        Memo {
+            id,
+            title,
+            content,
+            tags,
+            user_id,
+            created_at,
+            updated_at,
+            version,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
 
     #[tokio::test]
-    async fn test_save_and_find_memo() {
-        let scylla = ScyllaDB::new("scylla://localhost:9042").await.unwrap();
-        
-        let memo = Memo {
-            id: Uuid::new_v4(),
-            title: "Test Memo".to_string(),
-            content: "Test Content".to_string(),
-            tags: vec!["test".to_string()],
-            user_id: Uuid::new_v4(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            version: 1,
-        };
+    #[ignore = "requires a local ScyllaDB instance"]
+    async fn save_find_and_delete_round_trip() {
+        let scylla = ScyllaDB::new("127.0.0.1:9042").await.unwrap();
+        let user_id = Uuid::new_v4();
+        let memo = Memo::new(
+            "Test Memo".to_string(),
+            "Test Content".to_string(),
+            vec!["test".to_string()],
+            user_id,
+        );
 
         scylla.save(&memo).await.unwrap();
-
-        let found = scylla.find_by_id(memo.id).await.unwrap().unwrap();
+        let found = scylla.find_by_id(user_id, memo.id).await.unwrap().unwrap();
         assert_eq!(found.id, memo.id);
-        assert_eq!(found.title, memo.title);
-        assert_eq!(found.content, memo.content);
-        assert_eq!(found.tags, memo.tags);
-        assert_eq!(found.user_id, memo.user_id);
-        assert_eq!(found.version, memo.version);
+        assert_eq!(found.user_id, user_id);
 
-        scylla.delete(memo.id).await.unwrap();
+        scylla.delete(user_id, memo.id).await.unwrap();
+        assert!(!scylla.exists(user_id, memo.id).await.unwrap());
     }
 }

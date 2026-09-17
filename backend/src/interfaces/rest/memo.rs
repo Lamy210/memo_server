@@ -4,6 +4,7 @@ use actix_web::{
 };
 use serde::Deserialize;
 use uuid::Uuid;
+
 use crate::{
     application::memo::{
         dto::{CreateMemoDto, UpdateMemoDto},
@@ -30,73 +31,82 @@ fn default_limit() -> usize {
     20
 }
 
-// メモ作成エンドポイント
 pub async fn create_memo(
     service: Data<MemoService>,
+    development_user_id: Data<Uuid>,
     payload: Json<CreateMemoDto>,
 ) -> AppResult<HttpResponse> {
-    let user_id = Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let memo = service.create_memo(payload.into_inner(), user_id).await?;
+    let memo = service
+        .create_memo(payload.into_inner(), *development_user_id.get_ref())
+        .await?;
     Ok(HttpResponse::Created().json(memo))
 }
 
-// メモ更新エンドポイント
 pub async fn update_memo(
     service: Data<MemoService>,
+    development_user_id: Data<Uuid>,
     id: Path<Uuid>,
     payload: Json<UpdateMemoDto>,
 ) -> AppResult<HttpResponse> {
-    let user_id = Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let memo = service.update_memo(id.into_inner(), payload.into_inner(), user_id).await?;
+    let memo = service
+        .update_memo(
+            id.into_inner(),
+            payload.into_inner(),
+            *development_user_id.get_ref(),
+        )
+        .await?;
     Ok(HttpResponse::Ok().json(memo))
 }
 
-// メモ取得エンドポイント
 pub async fn get_memo(
     service: Data<MemoService>,
+    development_user_id: Data<Uuid>,
     id: Path<Uuid>,
 ) -> AppResult<HttpResponse> {
-    let user_id = Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let memo = service.get_memo(id.into_inner(), user_id).await?;
+    let memo = service
+        .get_memo(id.into_inner(), *development_user_id.get_ref())
+        .await?;
     Ok(HttpResponse::Ok().json(memo))
 }
 
-// メモ削除エンドポイント
 pub async fn delete_memo(
     service: Data<MemoService>,
+    development_user_id: Data<Uuid>,
     id: Path<Uuid>,
 ) -> AppResult<HttpResponse> {
-    let user_id = Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    service.delete_memo(id.into_inner(), user_id).await?;
+    service
+        .delete_memo(id.into_inner(), *development_user_id.get_ref())
+        .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
-// ユーザーのメモ一覧取得エンドポイント
 pub async fn list_memos(
     service: Data<MemoService>,
+    development_user_id: Data<Uuid>,
 ) -> AppResult<HttpResponse> {
-    let user_id = Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let memos = service.get_user_memos(user_id).await?;
+    let memos = service
+        .get_user_memos(*development_user_id.get_ref())
+        .await?;
     Ok(HttpResponse::Ok().json(memos))
 }
 
-// メモ検索エンドポイント
 pub async fn search_memos(
     service: Data<MemoService>,
+    development_user_id: Data<Uuid>,
     query_params: Query<SearchParams>,
 ) -> AppResult<HttpResponse> {
-    let user_id = Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
     let result = service
         .search_memos(
             &query_params.query.clone().unwrap_or_default(),
             query_params.tag.clone(),
-            user_id,
+            *development_user_id.get_ref(),
+            query_params.page,
+            query_params.limit,
         )
         .await?;
     Ok(HttpResponse::Ok().json(result))
 }
 
-// ヘルスチェックエンドポイント
 pub async fn health_check() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "ok",

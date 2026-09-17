@@ -1,19 +1,17 @@
-// src/infrastructure/repositories/memo.rs
+use std::{sync::Arc, time::Duration};
 
-use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
+
 use crate::{
     domain::memo::{entity::Memo, repository::MemoRepository},
     error::AppResult,
     infrastructure::persistence::{
-        scylla::ScyllaDB,
-        redis::RedisCache,
-        elasticsearch::ElasticsearchClient,
+        elasticsearch::ElasticsearchClient, redis::RedisCache, scylla::ScyllaDB,
     },
 };
 
-const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(3600); // 1時間
+const CACHE_TTL: Duration = Duration::from_secs(3600);
 
 pub struct MemoRepositoryImpl {
     scylla: Arc<ScyllaDB>,
@@ -22,36 +20,35 @@ pub struct MemoRepositoryImpl {
 }
 
 impl MemoRepositoryImpl {
-    pub async fn new(
+    pub fn new(
         scylla: Arc<ScyllaDB>,
         redis: Arc<RedisCache>,
         elasticsearch: Arc<ElasticsearchClient>,
-    ) -> AppResult<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             scylla,
             redis,
             elasticsearch,
-        })
+        }
     }
 
-    fn cache_key(id: Uuid) -> String {
-        format!("memo:{}", id)
+    fn cache_key(user_id: Uuid, id: Uuid) -> String {
+        format!("memo:{user_id}:{id}")
     }
 }
 
 #[async_trait]
 impl MemoRepository for MemoRepositoryImpl {
-    async fn find_by_id(&self, id: Uuid) -> AppResult<Option<Memo>> {
-        // キャッシュから取得を試みる
-        let cache_key = Self::cache_key(id);
+    async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
+        let cache_key = Self::cache_key(user_id, id);
         if let Some(memo) = self.redis.get::<Memo>(&cache_key).await? {
             return Ok(Some(memo));
         }
 
-        // ScyllaDBから取得
-        if let Some(memo) = self.scylla.find_by_id(id).await? {
-            // キャッシュに保存
-            self.redis.set(&cache_key, &memo, Some(CACHE_TTL)).await?;
+        if let Some(memo) = self.scylla.find_by_id(user_id, id).await? {
+            self.redis
+                .set(&cache_key, &memo, Some(CACHE_TTL))
+                .await?;
             return Ok(Some(memo));
         }
 
@@ -63,29 +60,21 @@ impl MemoRepository for MemoRepositoryImpl {
     }
 
     async fn save(&self, memo: &Memo) -> AppResult<()> {
-        // ScyllaDBに保存
         self.scylla.save(memo).await?;
-
-        // Elasticsearchにインデックス
         self.elasticsearch.index_memo(memo).await?;
 
-        // キャッシュを更新
-        let cache_key = Self::cache_key(memo.id);
-        self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await?;
+        let cache_key = Self::cache_key(memo.user_id, memo.id);
+        self.redis
+            .set(&cache_key, memo, Some(CACHE_TTL))
+            .await?;
 
         Ok(())
     }
 
-    async fn delete(&self, id: Uuid) -> AppResult<()> {
-        // ScyllaDBから削除
-        self.scylla.delete(id).await?;
-
-        // Elasticsearchから削除
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()> {
+        self.scylla.delete(user_id, id).await?;
         self.elasticsearch.delete_memo(id).await?;
-
-        // キャッシュから削除
-        self.redis.delete(&Self::cache_key(id)).await?;
-
+        self.redis.delete(&Self::cache_key(user_id, id)).await?;
         Ok(())
     }
 
@@ -93,14 +82,12 @@ impl MemoRepository for MemoRepositoryImpl {
         self.elasticsearch.search_memos(query, tag, user_id).await
     }
 
-    async fn exists(&self, id: Uuid) -> AppResult<bool> {
-        // キャッシュをチェック
-        let cache_key = Self::cache_key(id);
+    async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
+        let cache_key = Self::cache_key(user_id, id);
         if self.redis.exists(&cache_key).await? {
             return Ok(true);
         }
 
-        // データベースをチェック
-        self.scylla.exists(id).await
+        self.scylla.exists(user_id, id).await
     }
 }
