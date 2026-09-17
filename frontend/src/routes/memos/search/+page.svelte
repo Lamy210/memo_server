@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
+  import { afterNavigate, goto } from '$app/navigation';
   import type { PageData } from './$types';
 
   import MemoCard from '@/components/features/memo/MemoCard.svelte';
@@ -41,7 +40,11 @@
     void goto(`/memos/search${params.size ? `?${params.toString()}` : ''}`);
   }
 
-  onMount(() => {
+  afterNavigate(({ to }) => {
+    if (!to) return;
+    query = to.url.searchParams.get('query') ?? '';
+    tag = to.url.searchParams.get('tag') ?? '';
+    page = Math.max(1, Number(to.url.searchParams.get('page') ?? '1') || 1);
     void runSearch();
   });
 </script>
