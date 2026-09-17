@@ -1,7 +1,11 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use scylla::{statement::prepared_statement::PreparedStatement, Session, SessionBuilder};
+use scylla::{
+    frame::response::result::{CqlValue, Row},
+    statement::prepared_statement::PreparedStatement,
+    Session, SessionBuilder,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -29,6 +33,7 @@ struct PreparedStatements {
     find_by_id: PreparedStatement,
     find_all_by_user_id: PreparedStatement,
     save_memo: PreparedStatement,
+    update_memo_if_version: PreparedStatement,
     delete_memo: PreparedStatement,
     exists: PreparedStatement,
 }
@@ -117,6 +122,17 @@ impl ScyllaDB {
             .map_err(|error| {
                 AppError::DatabaseError(format!("Failed to prepare save_memo: {error}"))
             })?;
+        let update_memo_if_version = session
+            .prepare(
+                "UPDATE memo_app.memos SET title = ?, content = ?, tags = ?, updated_at = ?, version = ? \
+                 WHERE user_id = ? AND id = ? IF version = ?",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to prepare update_memo_if_version: {error}"
+                ))
+            })?;
         let delete_memo = session
             .prepare("DELETE FROM memo_app.memos WHERE user_id = ? AND id = ?")
             .await
@@ -134,6 +150,7 @@ impl ScyllaDB {
             find_by_id,
             find_all_by_user_id,
             save_memo,
+            update_memo_if_version,
             delete_memo,
             exists,
         })
@@ -178,22 +195,67 @@ impl ScyllaDB {
     }
 
     pub async fn save(&self, memo: &Memo) -> AppResult<()> {
-        self.session
+        if memo.version == 1 {
+            self.session
+                .execute_unpaged(
+                    &self.prepared_statements.save_memo,
+                    (
+                        memo.id,
+                        memo.title.as_str(),
+                        memo.content.as_str(),
+                        &memo.tags,
+                        memo.user_id,
+                        memo.created_at,
+                        memo.updated_at,
+                        memo.version,
+                    ),
+                )
+                .await
+                .map_err(|error| {
+                    AppError::DatabaseError(format!("Failed to create memo: {error}"))
+                })?;
+            return Ok(());
+        }
+
+        let expected_version = memo.version - 1;
+        let result = self
+            .session
             .execute_unpaged(
-                &self.prepared_statements.save_memo,
+                &self.prepared_statements.update_memo_if_version,
                 (
-                    memo.id,
                     memo.title.as_str(),
                     memo.content.as_str(),
                     &memo.tags,
-                    memo.user_id,
-                    memo.created_at,
                     memo.updated_at,
                     memo.version,
+                    memo.user_id,
+                    memo.id,
+                    expected_version,
                 ),
             )
             .await
-            .map_err(|error| AppError::DatabaseError(format!("Failed to save memo: {error}")))?;
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to update memo: {error}"))
+            })?;
+        let rows = result.into_rows_result().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to read conditional update result: {error}"))
+        })?;
+        let row = rows.first_row::<Row>().map_err(|error| {
+            AppError::DatabaseError(format!(
+                "Failed to deserialize conditional update result: {error}"
+            ))
+        })?;
+        let applied = matches!(
+            row.columns.first(),
+            Some(Some(CqlValue::Boolean(true)))
+        );
+
+        if !applied {
+            return Err(AppError::Conflict(
+                "Memo has been updated by another client".into(),
+            ));
+        }
+
         Ok(())
     }
 
