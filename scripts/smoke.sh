@@ -24,7 +24,12 @@ wait_for_url() {
   return 1
 }
 
-docker compose up -d --build
+if ! docker compose up -d --build; then
+  echo "Docker Compose startup failed" >&2
+  docker compose ps >&2 || true
+  docker compose logs --no-color --tail=300 scylla backend elasticsearch redis frontend >&2 || true
+  exit 1
+fi
 
 wait_for_url "http://localhost:8083/api/v1/health" 120 5
 wait_for_url "http://localhost:3001/memos" 60 3

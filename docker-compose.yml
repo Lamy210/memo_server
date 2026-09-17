@@ -60,7 +60,7 @@ services:
       - "9042:9042"
     volumes:
       - scylla_data:/var/lib/scylla
-    command: --developer-mode 1 --smp 2
+    command: --developer-mode 1 --overprovisioned 1 --smp 1 --memory 2G
     healthcheck:
       test: ["CMD-SHELL", "nodetool status 2>/dev/null | grep -q '^UN'"]
       interval: 10s
