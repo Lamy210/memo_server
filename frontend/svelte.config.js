@@ -12,12 +12,7 @@ const config = {
       '@components': 'src/components'
     }
   },
-  
-  preprocess: vitePreprocess(),
-  
-  compilerOptions: {
-    runes: true
-  }
+  preprocess: vitePreprocess()
 };
 
 export default config;
