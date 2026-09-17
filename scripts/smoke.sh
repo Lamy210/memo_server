@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cleanup() {
+  docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+wait_for_url() {
+  local url="$1"
+  local attempts="${2:-90}"
+  local sleep_seconds="${3:-5}"
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if curl -fsS "$url" >/dev/null; then
+      return 0
+    fi
+    sleep "$sleep_seconds"
+  done
+
+  echo "Timed out waiting for $url" >&2
+  docker compose ps >&2 || true
+  docker compose logs --no-color --tail=200 >&2 || true
+  return 1
+}
+
+docker compose up -d --build
+
+wait_for_url "http://localhost:8083/api/v1/health" 120 5
+wait_for_url "http://localhost:3001/memos" 60 3
+wait_for_url "http://localhost:3001/api/v1/health" 30 2
+
+created="$(curl -fsS \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Smoke memo","content":"created by the compose smoke test","tags":["ci","smoke"]}' \
+  http://localhost:8083/api/v1/memos)"
+
+memo_id="$(jq -er '.id' <<<"$created")"
+version="$(jq -er '.version' <<<"$created")"
+
+curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
+
+docker compose restart backend >/dev/null
+wait_for_url "http://localhost:8083/api/v1/health" 60 3
+
+curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
+
+updated="$(curl -fsS \
+  -X PATCH \
+  -H 'Content-Type: application/json' \
+  -d "{\"title\":\"Smoke memo updated\",\"content\":\"updated through the API\",\"tags\":[\"ci\",\"smoke\"],\"version\":$version}" \
+  "http://localhost:8083/api/v1/memos/$memo_id")"
+
+jq -e --arg id "$memo_id" '.id == $id and .title == "Smoke memo updated"' <<<"$updated" >/dev/null
+
+search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=updated&tag=smoke&page=1&limit=20')"
+jq -e --arg id "$memo_id" '.items | any(.id == $id)' <<<"$search" >/dev/null
+
+curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$memo_id" >/dev/null
+
+status="$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:8083/api/v1/memos/$memo_id")"
+if [[ "$status" != "404" ]]; then
+  echo "Expected deleted memo lookup to return 404, got $status" >&2
+  exit 1
+fi
+
+echo "Compose smoke test passed"
