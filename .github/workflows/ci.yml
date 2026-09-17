@@ -93,3 +93,19 @@ jobs:
 
       - name: Build application images
         run: docker compose build backend frontend
+
+  smoke:
+    name: Full-stack smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs:
+      - backend
+      - frontend
+      - containers
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run Compose smoke test
+        run: bash scripts/smoke.sh
