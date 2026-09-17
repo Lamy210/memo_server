@@ -1,15 +1,9 @@
-FROM node:20-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 
-# 必要なパッケージのインストール
-RUN apk add --no-cache git bash
+RUN apk add --no-cache bash curl \
+    && corepack enable \
+    && corepack prepare pnpm@9.15.9 --activate
 
-# グローバルパッケージのインストール
-RUN npm install -g pnpm
-
-# シェルをbashに変更
-SHELL ["/bin/bash", "-c"]
-
-# コンテナ起動時のデフォルトシェルを設定
-ENTRYPOINT ["/bin/bash"]
+CMD ["pnpm", "dev", "--host", "0.0.0.0", "--port", "3000"]
