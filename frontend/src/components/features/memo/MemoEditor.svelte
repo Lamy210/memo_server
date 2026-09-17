@@ -4,11 +4,14 @@
   import DOMPurify from 'dompurify';
   import { marked } from 'marked';
 
+  import { SaveRevisionTracker } from '@/lib/autosave';
   import { ApiError, createMemo, deleteMemo, updateMemo } from '@/lib/api/memo';
   import type { Memo } from '@/lib/api/types';
 
   export let mode: 'create' | 'edit';
   export let memo: Memo | undefined = undefined;
+
+  const revisions = new SaveRevisionTracker();
 
   let title = memo?.title ?? '';
   let content = memo?.content ?? '';
@@ -29,20 +32,32 @@
   $: canSave = title.trim().length > 0 && content.trim().length > 0 && !saving;
   $: previewHtml = DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
 
+  function scheduleAutosave(): void {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    if (mode !== 'edit') return;
+
+    saveTimeout = setTimeout(() => {
+      saveTimeout = undefined;
+      void save();
+    }, 1200);
+  }
+
   function markDirty(): void {
+    revisions.markDirty();
     status = 'dirty';
     errorMessage = '';
-    if (saveTimeout) clearTimeout(saveTimeout);
-    if (mode === 'edit') {
-      saveTimeout = setTimeout(() => {
-        void save();
-      }, 1200);
-    }
+    scheduleAutosave();
   }
 
   async function save(): Promise<void> {
     if (!canSave || saving) return;
 
+    if (saveTimeout) {
+      clearTimeout(saveTimeout);
+      saveTimeout = undefined;
+    }
+
+    const revisionBeingSaved = revisions.snapshot();
     saving = true;
     status = 'saving';
     errorMessage = '';
@@ -68,7 +83,13 @@
       });
       memo = updated;
       version = updated.version;
-      status = 'saved';
+
+      if (revisions.isCurrent(revisionBeingSaved)) {
+        status = 'saved';
+      } else {
+        status = 'dirty';
+        scheduleAutosave();
+      }
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         status = 'conflict';
@@ -115,7 +136,7 @@
   });
 </script>
 
-<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+<div class="grid gap-6 xl:grid-cols-[minmax((0,1fr)_minmax(320px,0.8fr)]">
   <section class="rounded-3xl border border-slate-200 bg-white shadow-sm">
     <div class="border-b border-slate-100 px-6 py-5 sm:px-8">
       <div class="flex flex-wrap items-center justify-between gap-3">
