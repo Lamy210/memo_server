@@ -1,27 +1,7 @@
-// src/routes/memos/search/+page.ts
-import { error } from '@sveltejs/kit';
-import type { PageLoad } from '@sveltejs/kit';
-import * as memoApi from '@/lib/api/memo';
+import type { PageLoad } from './$types';
 
-export const load = (async ({ url }) => {
-  const query = url.searchParams.get('q') || '';
-  const tag = url.searchParams.get('tag');
-
-  try {
-    const searchResult = await memoApi.searchMemos({ 
-      query, 
-      tag,
-      page: 1,
-      limit: 20
-    });
-
-    return {
-      memos: searchResult.items,
-      searchParams: { query, tag }
-    };
-  } catch (e) {
-    throw error(500, {
-      message: '検索に失敗しました'
-    });
-  }
-}) satisfies PageLoad;
+export const load: PageLoad = ({ url }) => ({
+  query: url.searchParams.get('query') ?? '',
+  tag: url.searchParams.get('tag') ?? '',
+  page: Math.max(1, Number(url.searchParams.get('page') ?? '1') || 1)
+});

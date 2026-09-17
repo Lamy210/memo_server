@@ -1,61 +1,44 @@
-<!-- src/components/features/memo/MemoCard.svelte -->
 <script lang="ts">
-  import { Card } from '@/components/ui';
-  import { formatDate } from '@/lib/utils/';
   import type { Memo } from '@/lib/api/types';
 
-  // Runesモードにおける型安全なプロパティ定義
-  const props = $props<{
-    memo: Memo;  // 必須プロパティとして定義
-  }>();
+  export let memo: Memo;
 
-  // メモの内容プレビューの生成（リアクティブな計算）
-  const contentPreview = $derived(
-    props.memo.content.length > 200 
-      ? `${props.memo.content.slice(0, 200)}...` 
-      : props.memo.content
-  );
+  const formatDate = (value: string) =>
+    new Intl.DateTimeFormat('ja-JP', {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(new Date(value));
 
-  // 最終更新日時のフォーマット（リアクティブな計算）
-  const formattedDate = $derived(
-    formatDate(new Date(props.memo.updated_at))
-  );
-
-  // WAI-ARIA属性の動的生成
-  const ariaLabels = $derived({
-    'aria-label': `メモ: ${props.memo.title || '無題のメモ'}`,
-    'aria-description': contentPreview
-  });
+  $: excerpt = memo.content.trim().replace(/\s+/g, ' ').slice(0, 140);
 </script>
 
-<Card 
-  hover={true} 
-  padding="md"
-  class="cursor-pointer transition-all duration-200 group"
-  {...ariaLabels}
+<a
+  href={`/memos/${memo.id}/edit`}
+  class="group block rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md"
 >
-  <div class="space-y-2">
-    <div class="flex items-start justify-between">
-      <h3 class="text-lg font-semibold text-gray-900 group-hover:text-blue-600 line-clamp-1">
-        {props.memo.title || '無題のメモ'}
-      </h3>
-      <time datetime={props.memo.updated_at} class="text-sm text-gray-500">
-        {formattedDate}
-      </time>
+  <div class="flex items-start justify-between gap-4">
+    <div class="min-w-0">
+      <h2 class="truncate text-base font-semibold text-slate-950 group-hover:text-sky-700">
+        {memo.title}
+      </h2>
+      <p class="mt-1 text-xs text-slate-500">更新 {formatDate(memo.updated_at)}</p>
     </div>
-    
-    <p class="text-gray-600 line-clamp-3">
-      {contentPreview}
-    </p>
-    
-    {#if props.memo.tags?.length > 0}
-      <div class="flex flex-wrap gap-2 mt-3">
-        {#each props.memo.tags as tag}
-          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-            {tag}
-          </span>
-        {/each}
-      </div>
-    {/if}
+    <span class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+      v{memo.version}
+    </span>
   </div>
-</Card>
+
+  <p class="mt-4 line-clamp-3 min-h-12 text-sm leading-6 text-slate-600">
+    {excerpt || '本文はまだありません'}
+  </p>
+
+  {#if memo.tags.length > 0}
+    <div class="mt-4 flex flex-wrap gap-2">
+      {#each memo.tags as tag}
+        <span class="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+          #{tag}
+        </span>
+      {/each}
+    </div>
+  {/if}
+</a>
