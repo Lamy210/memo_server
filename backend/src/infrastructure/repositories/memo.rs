@@ -46,9 +46,7 @@ impl MemoRepository for MemoRepositoryImpl {
         }
 
         if let Some(memo) = self.scylla.find_by_id(user_id, id).await? {
-            self.redis
-                .set(&cache_key, &memo, Some(CACHE_TTL))
-                .await?;
+            self.redis.set(&cache_key, &memo, Some(CACHE_TTL)).await?;
             return Ok(Some(memo));
         }
 
@@ -64,9 +62,7 @@ impl MemoRepository for MemoRepositoryImpl {
         self.elasticsearch.index_memo(memo).await?;
 
         let cache_key = Self::cache_key(memo.user_id, memo.id);
-        self.redis
-            .set(&cache_key, memo, Some(CACHE_TTL))
-            .await?;
+        self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await?;
 
         Ok(())
     }
@@ -78,7 +74,12 @@ impl MemoRepository for MemoRepositoryImpl {
         Ok(())
     }
 
-    async fn search(&self, query: &str, tag: Option<String>, user_id: Uuid) -> AppResult<Vec<Memo>> {
+    async fn search(
+        &self,
+        query: &str,
+        tag: Option<String>,
+        user_id: Uuid,
+    ) -> AppResult<Vec<Memo>> {
         self.elasticsearch.search_memos(query, tag, user_id).await
     }
 

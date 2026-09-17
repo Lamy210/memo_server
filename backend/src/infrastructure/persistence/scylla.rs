@@ -105,9 +105,7 @@ impl ScyllaDB {
             )
             .await
             .map_err(|error| {
-                AppError::DatabaseError(format!(
-                    "Failed to prepare find_all_by_user_id: {error}"
-                ))
+                AppError::DatabaseError(format!("Failed to prepare find_all_by_user_id: {error}"))
             })?;
         let save_memo = session
             .prepare(
@@ -146,9 +144,7 @@ impl ScyllaDB {
             .session
             .execute_unpaged(&self.prepared_statements.find_by_id, (user_id, id))
             .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!("Failed to fetch memo: {error}"))
-            })?;
+            .map_err(|error| AppError::DatabaseError(format!("Failed to fetch memo: {error}")))?;
         let rows = result.into_rows_result().map_err(|error| {
             AppError::DatabaseError(format!("Failed to read memo result: {error}"))
         })?;
@@ -162,14 +158,9 @@ impl ScyllaDB {
     pub async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
         let result = self
             .session
-            .execute_unpaged(
-                &self.prepared_statements.find_all_by_user_id,
-                (user_id,),
-            )
+            .execute_unpaged(&self.prepared_statements.find_all_by_user_id, (user_id,))
             .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!("Failed to fetch memos: {error}"))
-            })?;
+            .map_err(|error| AppError::DatabaseError(format!("Failed to fetch memos: {error}")))?;
         let rows = result.into_rows_result().map_err(|error| {
             AppError::DatabaseError(format!("Failed to read memos result: {error}"))
         })?;
@@ -202,9 +193,7 @@ impl ScyllaDB {
                 ),
             )
             .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!("Failed to save memo: {error}"))
-            })?;
+            .map_err(|error| AppError::DatabaseError(format!("Failed to save memo: {error}")))?;
         Ok(())
     }
 
@@ -212,9 +201,7 @@ impl ScyllaDB {
         self.session
             .execute_unpaged(&self.prepared_statements.delete_memo, (user_id, id))
             .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!("Failed to delete memo: {error}"))
-            })?;
+            .map_err(|error| AppError::DatabaseError(format!("Failed to delete memo: {error}")))?;
         Ok(())
     }
 

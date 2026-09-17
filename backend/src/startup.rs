@@ -34,11 +34,7 @@ impl Application {
                 .map_err(|error| io::Error::other(error.to_string()))?,
         );
 
-        let memo_repository = Arc::new(MemoRepositoryImpl::new(
-            scylla,
-            redis,
-            elasticsearch,
-        ));
+        let memo_repository = Arc::new(MemoRepositoryImpl::new(scylla, redis, elasticsearch));
         let memo_service = Data::new(MemoService::new(memo_repository));
         let development_user_id = Data::new(config.development_user_id);
         let port = config.port;

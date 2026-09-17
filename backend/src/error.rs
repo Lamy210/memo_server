@@ -5,19 +5,19 @@ use thiserror::Error;
 pub enum AppError {
     #[error("Internal Server Error: {0}")]
     InternalServerError(String),
-    
+
     #[error("Not Found: {0}")]
     NotFound(String),
-    
+
     #[error("Bad Request: {0}")]
     BadRequest(String),
-    
+
     #[error("Validation Error: {0}")]
     ValidationError(String),
-    
+
     #[error("Database Error: {0}")]
     DatabaseError(String),
-    
+
     #[error("Conflict: {0}")]
     Conflict(String),
 
@@ -36,10 +36,12 @@ impl ResponseError for AppError {
                 error: "Bad Request".into(),
                 message: msg.clone(),
             }),
-            AppError::ValidationError(msg) => HttpResponse::UnprocessableEntity().json(ErrorResponse {
-                error: "Validation Error".into(),
-                message: msg.clone(),
-            }),
+            AppError::ValidationError(msg) => {
+                HttpResponse::UnprocessableEntity().json(ErrorResponse {
+                    error: "Validation Error".into(),
+                    message: msg.clone(),
+                })
+            }
             AppError::Unauthorized(msg) => HttpResponse::Unauthorized().json(ErrorResponse {
                 error: "Unauthorized".into(),
                 message: msg.clone(),

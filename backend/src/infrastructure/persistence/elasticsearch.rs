@@ -70,13 +70,13 @@ impl ElasticsearchClient {
 
             client
                 .indices()
-                .create(elasticsearch::indices::IndicesCreateParts::Index(INDEX_NAME))
+                .create(elasticsearch::indices::IndicesCreateParts::Index(
+                    INDEX_NAME,
+                ))
                 .body(mapping)
                 .send()
                 .await
-                .map_err(|e| {
-                    AppError::DatabaseError(format!("Failed to create index: {}", e))
-                })?;
+                .map_err(|e| AppError::DatabaseError(format!("Failed to create index: {}", e)))?;
         }
 
         Ok(())

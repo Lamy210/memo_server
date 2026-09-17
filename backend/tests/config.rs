@@ -28,11 +28,9 @@ fn rejects_non_numeric_port() {
 
 #[test]
 fn rejects_invalid_development_user_id() {
-    let error = AppConfig::from_vars([(
-        "DEVELOPMENT_USER_ID".to_string(),
-        "not-a-uuid".to_string(),
-    )])
-    .expect_err("invalid development user UUID must be rejected");
+    let error =
+        AppConfig::from_vars([("DEVELOPMENT_USER_ID".to_string(), "not-a-uuid".to_string())])
+            .expect_err("invalid development user UUID must be rejected");
 
     assert!(matches!(
         error,
