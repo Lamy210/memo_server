@@ -56,6 +56,41 @@ jq -e --arg id "$memo_id" '.id == $id and .title == "Smoke memo updated"' <<<"$u
 search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=updated&tag=smoke&page=1&limit=20')"
 jq -e --arg id "$memo_id" '.items | any(.id == $id)' <<<"$search" >/dev/null
 
+expected_version="$(jq -er '.version' <<<"$updated")"
+for attempt in $(seq 1 8); do
+  (
+    curl -sS \
+      -o "/tmp/memo-conflict-body-$attempt.json" \
+      -w '%{http_code}' \
+      -X PATCH \
+      -H 'Content-Type: application/json' \
+      -d "{\"title\":\"Concurrent update $attempt\",\"content\":\"concurrency probe\",\"tags\":[\"ci\",\"smoke\"],\"version\":$expected_version}" \
+      "http://localhost:8083/api/v1/memos/$memo_id" \
+      > "/tmp/memo-conflict-status-$attempt"
+  ) &
+done
+wait
+
+success_count=0
+conflict_count=0
+for attempt in $(seq 1 8); do
+  code="$(cat "/tmp/memo-conflict-status-$attempt")"
+  case "$code" in
+    200) success_count=$((success_count + 1)) ;;
+    409) conflict_count=$((conflict_count + 1)) ;;
+    *)
+      echo "Unexpected status from concurrent update $attempt: $code" >&2
+      cat "/tmp/memo-conflict-body-$attempt.json" >&2 || true
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "$success_count" -ne 1 || "$conflict_count" -ne 7 ]]; then
+  echo "Expected one successful concurrent update and seven conflicts; got $success_count success(es), $conflict_count conflict(s)" >&2
+  exit 1
+fi
+
 curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$memo_id" >/dev/null
 
 status="$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:8083/api/v1/memos/$memo_id")"
