@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
@@ -41,12 +42,28 @@ impl MemoRepositoryImpl {
 impl MemoRepository for MemoRepositoryImpl {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
         let cache_key = Self::cache_key(user_id, id);
-        if let Some(memo) = self.redis.get::<Memo>(&cache_key).await? {
-            return Ok(Some(memo));
+        match self.redis.get::<Memo>(&cache_key).await {
+            Ok(Some(memo)) => return Ok(Some(memo)),
+            Ok(None) => {}
+            Err(error) => {
+                warn!(
+                    memo_id = %id,
+                    user_id = %user_id,
+                    error = %error,
+                    "Redis lookup failed; falling back to Scylla"
+                );
+            }
         }
 
         if let Some(memo) = self.scylla.find_by_id(user_id, id).await? {
-            self.redis.set(&cache_key, &memo, Some(CACHE_TTL)).await?;
+            if let Err(error) = self.redis.set(&cache_key, &memo, Some(CACHE_TTL)).await {
+                warn!(
+                    memo_id = %id,
+                    user_id = %user_id,
+                    error = %error,
+                    "Redis cache fill failed after Scylla read"
+                );
+            }
             return Ok(Some(memo));
         }
 
@@ -59,18 +76,49 @@ impl MemoRepository for MemoRepositoryImpl {
 
     async fn save(&self, memo: &Memo) -> AppResult<()> {
         self.scylla.save(memo).await?;
-        self.elasticsearch.index_memo(memo).await?;
+
+        if let Err(error) = self.elasticsearch.index_memo(memo).await {
+            warn!(
+                memo_id = %memo.id,
+                user_id = %memo.user_id,
+                error = %error,
+                "Elasticsearch projection update failed after Scylla commit"
+            );
+        }
 
         let cache_key = Self::cache_key(memo.user_id, memo.id);
-        self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await?;
+        if let Err(error) = self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await {
+            warn!(
+                memo_id = %memo.id,
+                user_id = %memo.user_id,
+                error = %error,
+                "Redis cache update failed after Scylla commit"
+            );
+        }
 
         Ok(())
     }
 
     async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()> {
         self.scylla.delete(user_id, id).await?;
-        self.elasticsearch.delete_memo(id).await?;
-        self.redis.delete(&Self::cache_key(user_id, id)).await?;
+
+        if let Err(error) = self.elasticsearch.delete_memo(id).await {
+            warn!(
+                memo_id = %id,
+                user_id = %user_id,
+                error = %error,
+                "Elasticsearch projection delete failed after Scylla delete"
+            );
+        }
+        if let Err(error) = self.redis.delete(&Self::cache_key(user_id, id)).await {
+            warn!(
+                memo_id = %id,
+                user_id = %user_id,
+                error = %error,
+                "Redis cache invalidation failed after Scylla delete"
+            );
+        }
+
         Ok(())
     }
 
@@ -89,8 +137,17 @@ impl MemoRepository for MemoRepositoryImpl {
 
     async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
         let cache_key = Self::cache_key(user_id, id);
-        if self.redis.exists(&cache_key).await? {
-            return Ok(true);
+        match self.redis.exists(&cache_key).await {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => {
+                warn!(
+                    memo_id = %id,
+                    user_id = %user_id,
+                    error = %error,
+                    "Redis existence check failed; falling back to Scylla"
+                );
+            }
         }
 
         self.scylla.exists(user_id, id).await
