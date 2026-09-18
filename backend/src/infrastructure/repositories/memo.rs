@@ -46,10 +46,7 @@ impl MemoRepository for MemoRepositoryImpl {
             Ok(None) => {}
             Err(error) => {
                 log::warn!(
-                    memo_id = %id,
-                    user_id = %user_id,
-                    error = %error,
-                    "Redis lookup failed; falling back to Scylla"
+                    "Redis lookup failed; falling back to Scylla: memo_id={id} user_id={user_id} error={error}"
                 );
             }
         }
@@ -57,10 +54,7 @@ impl MemoRepository for MemoRepositoryImpl {
         if let Some(memo) = self.scylla.find_by_id(user_id, id).await? {
             if let Err(error) = self.redis.set(&cache_key, &memo, Some(CACHE_TTL)).await {
                 log::warn!(
-                    memo_id = %id,
-                    user_id = %user_id,
-                    error = %error,
-                    "Redis cache fill failed after Scylla read"
+                    "Redis cache fill failed after Scylla read: memo_id={id} user_id={user_id} error={error}"
                 );
             }
             return Ok(Some(memo));
@@ -78,20 +72,18 @@ impl MemoRepository for MemoRepositoryImpl {
 
         if let Err(error) = self.elasticsearch.index_memo(memo).await {
             log::warn!(
-                memo_id = %memo.id,
-                user_id = %memo.user_id,
-                error = %error,
-                "Elasticsearch projection update failed after Scylla commit"
+                "Elasticsearch projection update failed after Scylla commit: memo_id={} user_id={} error={error}",
+                memo.id,
+                memo.user_id
             );
         }
 
         let cache_key = Self::cache_key(memo.user_id, memo.id);
         if let Err(error) = self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await {
             log::warn!(
-                memo_id = %memo.id,
-                user_id = %memo.user_id,
-                error = %error,
-                "Redis cache update failed after Scylla commit"
+                "Redis cache update failed after Scylla commit: memo_id={} user_id={} error={error}",
+                memo.id,
+                memo.user_id
             );
         }
 
@@ -103,18 +95,12 @@ impl MemoRepository for MemoRepositoryImpl {
 
         if let Err(error) = self.elasticsearch.delete_memo(id).await {
             log::warn!(
-                memo_id = %id,
-                user_id = %user_id,
-                error = %error,
-                "Elasticsearch projection delete failed after Scylla delete"
+                "Elasticsearch projection delete failed after Scylla delete: memo_id={id} user_id={user_id} error={error}"
             );
         }
         if let Err(error) = self.redis.delete(&Self::cache_key(user_id, id)).await {
             log::warn!(
-                memo_id = %id,
-                user_id = %user_id,
-                error = %error,
-                "Redis cache invalidation failed after Scylla delete"
+                "Redis cache invalidation failed after Scylla delete: memo_id={id} user_id={user_id} error={error}"
             );
         }
 
@@ -141,10 +127,7 @@ impl MemoRepository for MemoRepositoryImpl {
             Ok(false) => {}
             Err(error) => {
                 log::warn!(
-                    memo_id = %id,
-                    user_id = %user_id,
-                    error = %error,
-                    "Redis existence check failed; falling back to Scylla"
+                    "Redis existence check failed; falling back to Scylla: memo_id={id} user_id={user_id} error={error}"
                 );
             }
         }
