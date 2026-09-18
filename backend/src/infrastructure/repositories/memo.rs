@@ -79,8 +79,12 @@ impl MemoRepository for MemoRepositoryImpl {
         query: &str,
         tag: Option<String>,
         user_id: Uuid,
-    ) -> AppResult<Vec<Memo>> {
-        self.elasticsearch.search_memos(query, tag, user_id).await
+        page: usize,
+        limit: usize,
+    ) -> AppResult<crate::domain::memo::repository::MemoSearchPage> {
+        self.elasticsearch
+            .search_memos(query, tag, user_id, page, limit)
+            .await
     }
 
     async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
