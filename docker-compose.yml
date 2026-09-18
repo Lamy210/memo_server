@@ -37,7 +37,7 @@ services:
       ELASTICSEARCH_URL: http://elasticsearch:9200
       PORT: "8080"
       DEVELOPMENT_USER_ID: 12345678-1234-1234-1234-123456789012
-    command: ["cargo", "run"]
+    command: ["cargo", "run", "--locked"]
     depends_on:
       scylla:
         condition: service_healthy

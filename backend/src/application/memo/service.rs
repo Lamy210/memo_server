@@ -83,22 +83,22 @@ impl MemoService {
         page: usize,
         limit: usize,
     ) -> AppResult<SearchResponse> {
-        let memos = self.memo_repository.search(query, tag, user_id).await?;
-        let total = memos.len();
         let page = page.max(1);
         let limit = limit.clamp(1, 100);
-        let total_pages = total.div_ceil(limit);
-        let start = (page - 1).saturating_mul(limit);
-        let items = memos
+        let search_page = self
+            .memo_repository
+            .search(query, tag, user_id, page, limit)
+            .await?;
+        let total_pages = search_page.total.div_ceil(limit);
+        let items = search_page
+            .items
             .into_iter()
-            .skip(start)
-            .take(limit)
             .map(MemoResponse::from)
             .collect();
 
         Ok(SearchResponse {
             items,
-            total,
+            total: search_page.total,
             page,
             total_pages,
         })

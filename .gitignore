@@ -28,5 +28,4 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Rust specific
-Cargo.lock
 debug/

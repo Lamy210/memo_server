@@ -1,4 +1,4 @@
-use crate::domain::memo::entity::Memo;
+use crate::domain::memo::{entity::Memo, repository::MemoSearchPage};
 use crate::error::{AppError, AppResult};
 use elasticsearch::{
     http::transport::Transport, params::Refresh, DeleteByQueryParts, Elasticsearch, IndexParts,
@@ -111,7 +111,9 @@ impl ElasticsearchClient {
         query: &str,
         tag: Option<String>,
         user_id: Uuid,
-    ) -> AppResult<Vec<Memo>> {
+        page: usize,
+        limit: usize,
+    ) -> AppResult<MemoSearchPage> {
         let mut should_clauses: Vec<Value> = vec![];
 
         if !query.is_empty() {
@@ -146,7 +148,12 @@ impl ElasticsearchClient {
             }));
         }
 
+        let offset = (page - 1).saturating_mul(limit);
+
         let query_body = json!({
+            "from": offset,
+            "size": limit,
+            "track_total_hits": true,
             "query": {
                 "bool": {
                     "must": must_clauses,
@@ -163,7 +170,6 @@ impl ElasticsearchClient {
             .client
             .search(SearchParts::Index(&[INDEX_NAME]))
             .body(query_body)
-            .size(100)
             .send()
             .await
             .map_err(|e| AppError::DatabaseError(format!("Failed to execute search: {}", e)))?;
@@ -172,6 +178,20 @@ impl ElasticsearchClient {
             AppError::DatabaseError(format!("Failed to parse search response: {}", e))
         })?;
 
+        let total = search_hits["hits"]["total"]["value"]
+            .as_u64()
+            .ok_or_else(|| {
+                AppError::DatabaseError(
+                    "Invalid search total in Elasticsearch response".to_string(),
+                )
+            })
+            .and_then(|value| {
+                usize::try_from(value).map_err(|_| {
+                    AppError::DatabaseError(
+                        "Elasticsearch search total exceeds platform limits".to_string(),
+                    )
+                })
+            })?;
         let hits = search_hits["hits"]["hits"]
             .as_array()
             .ok_or_else(|| AppError::DatabaseError("Invalid search response format".to_string()))?;
@@ -208,7 +228,10 @@ impl ElasticsearchClient {
             })
             .collect();
 
-        Ok(memos)
+        Ok(MemoSearchPage {
+            items: memos,
+            total,
+        })
     }
 
     pub async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
