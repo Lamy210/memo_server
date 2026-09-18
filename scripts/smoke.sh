@@ -61,6 +61,23 @@ jq -e --arg id "$memo_id" '.id == $id and .title == "Smoke memo updated"' <<<"$u
 search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=updated&tag=smoke&page=1&limit=20')"
 jq -e --arg id "$memo_id" '.items | any(.id == $id)' <<<"$search" >/dev/null
 
+bulk_file="$(mktemp)"
+for index in $(seq 1 105); do
+  pagination_id="$(printf '00000000-0000-4000-8000-%012d' "$index")"
+  printf '{"index":{"_index":"memos","_id":"%s"}}\n' "$pagination_id" >>"$bulk_file"
+  printf '{"id":"%s","title":"pagination-probe %d","content":"pagination-probe","tags":["pagination"],"user_id":"12345678-1234-1234-1234-123456789012","created_at":"2026-09-18T00:00:00Z","updated_at":"2026-09-18T00:00:00Z","version":1}\n' "$pagination_id" "$index" >>"$bulk_file"
+done
+
+curl -fsS \
+  -H 'Content-Type: application/x-ndjson' \
+  --data-binary @"$bulk_file" \
+  'http://localhost:9200/_bulk?refresh=true' \
+  | jq -e '.errors == false' >/dev/null
+rm -f "$bulk_file"
+
+pagination_search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=pagination-probe&page=6&limit=20')"
+jq -e '.total == 105 and .page == 6 and .total_pages == 6 and (.items | length) == 5' <<<"$pagination_search" >/dev/null
+
 expected_version="$(jq -er '.version' <<<"$updated")"
 for attempt in $(seq 1 8); do
   (
@@ -103,5 +120,26 @@ if [[ "$status" != "404" ]]; then
   echo "Expected deleted memo lookup to return 404, got $status" >&2
   exit 1
 fi
+
+resilience_created="$(curl -fsS \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Resilience memo","content":"survives secondary store outages","tags":["ci","resilience"]}' \
+  http://localhost:8083/api/v1/memos)"
+resilience_id="$(jq -er '.id' <<<"$resilience_created")"
+
+docker compose stop redis elasticsearch >/dev/null
+
+curl -fsS "http://localhost:8083/api/v1/memos/$resilience_id" \
+  | jq -e --arg id "$resilience_id" '.id == $id' >/dev/null
+
+outage_created="$(curl -fsS \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Outage write","content":"Scylla remains authoritative","tags":["ci","resilience"]}' \
+  http://localhost:8083/api/v1/memos)"
+outage_id="$(jq -er '.id' <<<"$outage_created")"
+
+curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$resilience_id" >/dev/null
+curl -fsS "http://localhost:8083/api/v1/memos/$outage_id" \
+  | jq -e --arg id "$outage_id" '.id == $id' >/dev/null
 
 echo "Compose smoke test passed"
