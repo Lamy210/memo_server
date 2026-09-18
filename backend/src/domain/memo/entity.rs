@@ -1,15 +1,8 @@
-// src/domain/memo/entity.rs
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use scylla::{
-    frame::value::Value,
-    serialize::{SerializeRow, CqlSerializeError},
-    cql_to_rust::FromRowError,
-    macros::FromRow,
-};
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memo {
     pub id: Uuid,
     pub title: String,
@@ -36,7 +29,12 @@ impl Memo {
         }
     }
 
-    pub fn update(&mut self, title: Option<String>, content: Option<String>, tags: Option<Vec<String>>) {
+    pub fn update(
+        &mut self,
+        title: Option<String>,
+        content: Option<String>,
+        tags: Option<Vec<String>>,
+    ) {
         if let Some(title) = title {
             self.title = title;
         }
@@ -51,27 +49,10 @@ impl Memo {
     }
 
     pub fn validate(&self) -> bool {
-        !self.title.trim().is_empty() 
+        !self.title.trim().is_empty()
             && !self.content.trim().is_empty()
             && self.tags.len() <= 10
             && self.tags.iter().all(|tag| !tag.trim().is_empty())
-    }
-}
-
-impl SerializeRow for Memo {
-    fn serialize<'b>(
-        &self,
-        buf: &'b mut Vec<u8>,
-    ) -> Result<&'b mut Vec<u8>, CqlSerializeError> {
-        self.id.serialize(buf)?;
-        self.title.serialize(buf)?;
-        self.content.serialize(buf)?;
-        self.tags.serialize(buf)?;
-        self.user_id.serialize(buf)?;
-        self.created_at.timestamp_millis().serialize(buf)?;
-        self.updated_at.timestamp_millis().serialize(buf)?;
-        self.version.serialize(buf)?;
-        Ok(buf)
     }
 }
 

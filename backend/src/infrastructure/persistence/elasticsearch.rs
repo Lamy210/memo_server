@@ -1,17 +1,11 @@
-// src/infrastructure/persistence/elasticsearch.rs
-
+use crate::domain::memo::entity::Memo;
+use crate::error::{AppError, AppResult};
 use elasticsearch::{
-    Elasticsearch,
-    http::transport::Transport,
+    http::transport::Transport, params::Refresh, DeleteByQueryParts, Elasticsearch, IndexParts,
     SearchParts,
-    DeleteByQueryParts,
-    IndexParts,
-    params::Refresh,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
-use crate::error::{AppError, AppResult};
-use crate::domain::memo::entity::Memo;
 
 const INDEX_NAME: &str = "memos";
 
@@ -26,7 +20,6 @@ impl ElasticsearchClient {
         })?;
         let client = Elasticsearch::new(transport);
 
-        // インデックスの初期化
         Self::initialize_index(&client).await?;
 
         Ok(Self { client })
@@ -35,10 +28,14 @@ impl ElasticsearchClient {
     async fn initialize_index(client: &Elasticsearch) -> AppResult<()> {
         let exists = client
             .indices()
-            .exists(elasticsearch::indices::IndicesExistsParts::Index(&[INDEX_NAME]))
+            .exists(elasticsearch::indices::IndicesExistsParts::Index(&[
+                INDEX_NAME,
+            ]))
             .send()
             .await
-            .map_err(|e| AppError::DatabaseError(format!("Failed to check index existence: {}", e)))?
+            .map_err(|e| {
+                AppError::DatabaseError(format!("Failed to check index existence: {}", e))
+            })?
             .status_code()
             .is_success();
 
@@ -47,14 +44,14 @@ impl ElasticsearchClient {
                 "mappings": {
                     "properties": {
                         "id": { "type": "keyword" },
-                        "title": { 
+                        "title": {
                             "type": "text",
                             "analyzer": "standard",
                             "fields": {
                                 "keyword": { "type": "keyword" }
                             }
                         },
-                        "content": { 
+                        "content": {
                             "type": "text",
                             "analyzer": "standard"
                         },
@@ -67,13 +64,15 @@ impl ElasticsearchClient {
                 },
                 "settings": {
                     "number_of_shards": 1,
-                    "number_of_replicas": 1
+                    "number_of_replicas": 0
                 }
             });
 
             client
                 .indices()
-                .create(elasticsearch::indices::IndicesCreateParts::Index(INDEX_NAME))
+                .create(elasticsearch::indices::IndicesCreateParts::Index(
+                    INDEX_NAME,
+                ))
                 .body(mapping)
                 .send()
                 .await
@@ -94,11 +93,11 @@ impl ElasticsearchClient {
             "updated_at": memo.updated_at,
             "version": memo.version
         });
+        let memo_id = memo.id.to_string();
 
         self.client
-            .index(IndexParts::Index(INDEX_NAME))
-            .id(memo.id.to_string())
-            .document(&doc)
+            .index(IndexParts::IndexId(INDEX_NAME, &memo_id))
+            .body(doc)
             .refresh(Refresh::True)
             .send()
             .await
@@ -114,7 +113,7 @@ impl ElasticsearchClient {
         user_id: Uuid,
     ) -> AppResult<Vec<Memo>> {
         let mut should_clauses: Vec<Value> = vec![];
-        
+
         if !query.is_empty() {
             should_clauses.extend(vec![
                 json!({
@@ -129,17 +128,15 @@ impl ElasticsearchClient {
                     "match": {
                         "content": query
                     }
-                })
+                }),
             ]);
         }
 
-        let mut must_clauses = vec![
-            json!({
-                "term": {
-                    "user_id": user_id.to_string()
-                }
-            })
-        ];
+        let mut must_clauses = vec![json!({
+            "term": {
+                "user_id": user_id.to_string()
+            }
+        })];
 
         if let Some(tag_value) = tag {
             must_clauses.push(json!({
@@ -162,7 +159,8 @@ impl ElasticsearchClient {
             ]
         });
 
-        let response = self.client
+        let response = self
+            .client
             .search(SearchParts::Index(&[INDEX_NAME]))
             .body(query_body)
             .size(100)
@@ -196,11 +194,15 @@ impl ElasticsearchClient {
                         .collect(),
                     user_id,
                     created_at: chrono::DateTime::parse_from_rfc3339(
-                        source["created_at"].as_str()?
-                    ).ok()?.with_timezone(&chrono::Utc),
+                        source["created_at"].as_str()?,
+                    )
+                    .ok()?
+                    .with_timezone(&chrono::Utc),
                     updated_at: chrono::DateTime::parse_from_rfc3339(
-                        source["updated_at"].as_str()?
-                    ).ok()?.with_timezone(&chrono::Utc),
+                        source["updated_at"].as_str()?,
+                    )
+                    .ok()?
+                    .with_timezone(&chrono::Utc),
                     version: source["version"].as_i64()? as i32,
                 })
             })
@@ -230,7 +232,8 @@ impl ElasticsearchClient {
     }
 
     pub async fn health_check(&self) -> AppResult<bool> {
-        let response = self.client
+        let response = self
+            .client
             .cat()
             .health()
             .send()

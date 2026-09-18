@@ -1,52 +1,23 @@
-// src/routes/memos/+page.svelte
-<script lang="ts">
-  import { onMount } from 'svelte';
-  import { memoStore } from '@/lib/stores';
-  import MemoCard from '@/components/features/memo/MemoCard.svelte';
-  import { Button } from '@/components/ui';
-
-  let isLoading = $state(true);
-  let error = $state<string | null>(null);
-
-  // メモの取得
-  onMount(async () => {
-    try {
-      await memoStore.fetchAll();
-    } catch (e) {
-      error = 'メモの読み込みに失敗しました';
-      console.error('Error fetching memos:', e);
-    } finally {
-      isLoading = false;
-    }
-  });
-</script>
-
-<div class="space-y-6">
-  <div class="flex justify-between items-center">
-    <h1 class="text-2xl font-bold text-gray-900">メモ一覧</h1>
-    <Button href="/memos/new">新規メモ</Button>
+<section class="mx-auto max-w-4xl py-12 sm:py-20">
+  <div class="rounded-[2rem] border border-slate-200 bg-white px-6 py-12 shadow-sm sm:px-12 sm:py-16">
+    <span class="inline-flex rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+      Focused memo workspace
+    </span>
+    <h1 class="mt-6 max-w-2xl text-4xl font-bold tracking-tight text-slate-950 sm:text-5xl">
+      書く、探す、育てる。メモに集中できる場所。
+    </h1>
+    <p class="mt-5 max-w-2xl text-base leading-8 text-slate-600 sm:text-lg">
+      Schnee Memo は Markdown、タグ検索、競合検知、自動保存を備えたシンプルなメモワークスペースです。
+    </p>
+    <div class="mt-8 flex flex-wrap gap-3">
+      <a
+        href="/memos"
+        class="rounded-xl bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700"
+      >メモを開く</a>
+      <a
+        href="/memos/new"
+        class="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+      >新しいメモを書く</a>
+    </div>
   </div>
-
-  {#if isLoading}
-    <div class="flex justify-center py-8">
-      <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-    </div>
-  {:else if error}
-    <div class="bg-red-50 text-red-600 p-4 rounded-lg">
-      {error}
-    </div>
-  {:else if $memoStore.items.length === 0}
-    <div class="text-center py-12">
-      <p class="text-gray-500 mb-4">メモがありません</p>
-      <Button href="/memos/new">最初のメモを作成</Button>
-    </div>
-  {:else}
-    <div class="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-      {#each $memoStore.items as memo (memo.id)}
-        <a href="/memos/{memo.id}/edit">
-          <MemoCard {memo} />
-        </a>
-      {/each}
-    </div>
-  {/if}
-</div>
+</section>

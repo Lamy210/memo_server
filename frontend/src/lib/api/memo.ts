@@ -1,61 +1,78 @@
-// src/lib/api/memo.ts
-import type { Memo } from './types';
-import type { SearchParams, SearchResult } from './types/search';
+import type {
+  CreateMemoInput,
+  Memo,
+  SearchParams,
+  SearchResult,
+  UpdateMemoInput
+} from './types';
+
 const API_BASE = '/api/v1';
 
-export async function fetchMemos(): Promise<Memo[]> {
-  const response = await fetch(`${API_BASE}/memos`);
-  if (!response.ok) {
-    throw new Error('Failed to fetch memos');
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number
+  ) {
+    super(message);
+    this.name = 'ApiError';
   }
-  return response.json();
 }
 
-export async function fetchMemoById(id: string): Promise<Memo> {
-  const response = await fetch(`${API_BASE}/memos/${id}`);
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
   if (!response.ok) {
-    throw new Error('Failed to fetch memo');
+    let message = `Request failed with status ${response.status}`;
+    try {
+      const body = (await response.json()) as { message?: string };
+      if (body.message) message = body.message;
+    } catch {
+      // Keep the HTTP status based fallback when the response is not JSON.
+    }
+    throw new ApiError(message, response.status);
   }
-  return response.json();
+
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
 }
 
-export async function createMemo(data: Omit<Memo, 'id' | 'created_at' | 'updated_at'>): Promise<Memo> {
-  const response = await fetch(`${API_BASE}/memos`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) {
-    throw new Error('Failed to create memo');
-  }
-  return response.json();
-}
-
-export async function updateMemo(id: string, data: Partial<Memo>): Promise<Memo> {
-  const response = await fetch(`${API_BASE}/memos/${id}`, {
-    method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
-  if (!response.ok) {
-    throw new Error('Failed to update memo');
-  }
-  return response.json();
-}
-export async function searchMemos(params: SearchParams): Promise<SearchResult<Memo>> {
+export function buildSearchQuery(params: SearchParams): string {
   const searchParams = new URLSearchParams();
-  if (params.query) searchParams.append('q', params.query);
-  if (params.tag) searchParams.append('tag', params.tag);
-  if (params.page) searchParams.append('page', params.page.toString());
-  if (params.limit) searchParams.append('limit', params.limit.toString());
+  if (params.query) searchParams.set('query', params.query);
+  if (params.tag) searchParams.set('tag', params.tag);
+  if (params.page) searchParams.set('page', params.page.toString());
+  if (params.limit) searchParams.set('limit', params.limit.toString());
+  return searchParams.toString();
+}
 
-  const response = await fetch(`${API_BASE}/memos/search?${searchParams.toString()}`);
-  if (!response.ok) {
-    throw new Error('Failed to search memos');
-  }
-  return response.json();
+export function fetchMemos(): Promise<Memo[]> {
+  return request<Memo[]>(`${API_BASE}/memos`);
+}
+
+export function fetchMemoById(id: string): Promise<Memo> {
+  return request<Memo>(`${API_BASE}/memos/${id}`);
+}
+
+export function createMemo(data: CreateMemoInput): Promise<Memo> {
+  return request<Memo>(`${API_BASE}/memos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+}
+
+export function updateMemo(id: string, data: UpdateMemoInput): Promise<Memo> {
+  return request<Memo>(`${API_BASE}/memos/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+}
+
+export function deleteMemo(id: string): Promise<void> {
+  return request<void>(`${API_BASE}/memos/${id}`, { method: 'DELETE' });
+}
+
+export function searchMemos(params: SearchParams): Promise<SearchResult<Memo>> {
+  const query = buildSearchQuery(params);
+  return request<SearchResult<Memo>>(`${API_BASE}/memos/search${query ? `?${query}` : ''}`);
 }
