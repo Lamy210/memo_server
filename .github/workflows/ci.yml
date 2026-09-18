@@ -17,6 +17,8 @@ jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: backend
@@ -35,12 +37,28 @@ jobs:
       - name: Configuration contract
         run: cargo test --test config
 
-      - name: Upload generated Cargo.lock
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-cargo-lock
-          path: backend/Cargo.lock
-          if-no-files-found: error
+      - name: Commit generated Cargo.lock once
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.head_ref == 'fix/post-mvp-reliability' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1; then
+            exit 0
+          fi
+          jq -n \
+            --arg message "build: lock backend dependencies" \
+            --arg content "$(base64 -w0 Cargo.lock)" \
+            --arg branch "$GITHUB_HEAD_REF" \
+            '{message: $message, content: $content, branch: $branch}' \
+            > /tmp/cargo-lock.json
+          gh api \
+            --method PUT \
+            "repos/$GITHUB_REPOSITORY/contents/backend/Cargo.lock" \
+            --input /tmp/cargo-lock.json \
+            >/dev/null
 
       - name: Check
         run: cargo check
