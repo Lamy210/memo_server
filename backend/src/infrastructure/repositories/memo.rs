@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
@@ -46,7 +45,7 @@ impl MemoRepository for MemoRepositoryImpl {
             Ok(Some(memo)) => return Ok(Some(memo)),
             Ok(None) => {}
             Err(error) => {
-                warn!(
+                log::warn!(
                     memo_id = %id,
                     user_id = %user_id,
                     error = %error,
@@ -57,7 +56,7 @@ impl MemoRepository for MemoRepositoryImpl {
 
         if let Some(memo) = self.scylla.find_by_id(user_id, id).await? {
             if let Err(error) = self.redis.set(&cache_key, &memo, Some(CACHE_TTL)).await {
-                warn!(
+                log::warn!(
                     memo_id = %id,
                     user_id = %user_id,
                     error = %error,
@@ -78,7 +77,7 @@ impl MemoRepository for MemoRepositoryImpl {
         self.scylla.save(memo).await?;
 
         if let Err(error) = self.elasticsearch.index_memo(memo).await {
-            warn!(
+            log::warn!(
                 memo_id = %memo.id,
                 user_id = %memo.user_id,
                 error = %error,
@@ -88,7 +87,7 @@ impl MemoRepository for MemoRepositoryImpl {
 
         let cache_key = Self::cache_key(memo.user_id, memo.id);
         if let Err(error) = self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await {
-            warn!(
+            log::warn!(
                 memo_id = %memo.id,
                 user_id = %memo.user_id,
                 error = %error,
@@ -103,7 +102,7 @@ impl MemoRepository for MemoRepositoryImpl {
         self.scylla.delete(user_id, id).await?;
 
         if let Err(error) = self.elasticsearch.delete_memo(id).await {
-            warn!(
+            log::warn!(
                 memo_id = %id,
                 user_id = %user_id,
                 error = %error,
@@ -111,7 +110,7 @@ impl MemoRepository for MemoRepositoryImpl {
             );
         }
         if let Err(error) = self.redis.delete(&Self::cache_key(user_id, id)).await {
-            warn!(
+            log::warn!(
                 memo_id = %id,
                 user_id = %user_id,
                 error = %error,
@@ -141,7 +140,7 @@ impl MemoRepository for MemoRepositoryImpl {
             Ok(true) => return Ok(true),
             Ok(false) => {}
             Err(error) => {
-                warn!(
+                log::warn!(
                     memo_id = %id,
                     user_id = %user_id,
                     error = %error,
