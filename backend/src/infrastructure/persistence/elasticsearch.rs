@@ -181,7 +181,9 @@ impl ElasticsearchClient {
         let total = search_hits["hits"]["total"]["value"]
             .as_u64()
             .ok_or_else(|| {
-                AppError::DatabaseError("Invalid search total in Elasticsearch response".to_string())
+                AppError::DatabaseError(
+                    "Invalid search total in Elasticsearch response".to_string(),
+                )
             })
             .and_then(|value| {
                 usize::try_from(value).map_err(|_| {
