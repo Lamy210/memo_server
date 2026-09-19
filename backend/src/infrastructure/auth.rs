@@ -76,9 +76,7 @@ impl AuthService {
 
 fn authenticate_development_user(value: Option<&str>) -> AppResult<AuthenticatedIdentity> {
     let value = value.ok_or_else(|| {
-        AppError::Unauthorized(
-            "X-Development-User-Id is required in development auth mode".into(),
-        )
+        AppError::Unauthorized("X-Development-User-Id is required in development auth mode".into())
     })?;
     let user_id = Uuid::parse_str(value).map_err(|_| {
         AppError::Unauthorized("X-Development-User-Id must contain a valid UUID".into())
@@ -120,9 +118,7 @@ impl OidcVerifier {
             .map_err(|_| AppError::Unauthorized("Access token header is invalid".into()))?;
 
         if header.alg != Algorithm::RS256 {
-            return Err(AppError::Unauthorized(
-                "Access token must use RS256".into(),
-            ));
+            return Err(AppError::Unauthorized("Access token must use RS256".into()));
         }
 
         let kid = header
