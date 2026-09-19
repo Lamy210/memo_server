@@ -270,7 +270,6 @@ impl ElasticsearchClient {
     }
 }
 
-
 #[async_trait]
 impl HealthProbe for ElasticsearchClient {
     async fn check(&self) -> bool {
