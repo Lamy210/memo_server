@@ -6,6 +6,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+DEVELOPMENT_USER_ID="12345678-1234-1234-1234-123456789012"
+
+memo_curl() {
+  curl -H "X-Development-User-Id: $DEVELOPMENT_USER_ID" "$@"
+}
+
 wait_for_url() {
   local url="$1"
   local attempts="${2:-90}"
@@ -55,7 +61,7 @@ if [[ "$unauthenticated_status" != "401" ]]; then
   exit 1
 fi
 
-created="$(curl -fsS \
+created="$(memo_curl -fsS \
   -H 'Content-Type: application/json' \
   -d '{"title":"Smoke memo","content":"created by the compose smoke test","tags":["ci","smoke"]}' \
   http://localhost:8083/api/v1/memos)"
@@ -63,14 +69,14 @@ created="$(curl -fsS \
 memo_id="$(jq -er '.id' <<<"$created")"
 version="$(jq -er '.version' <<<"$created")"
 
-curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
+memo_curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
 
 docker compose restart backend >/dev/null
 wait_for_url "http://localhost:8083/api/v1/health" 60 3
 
-curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
+memo_curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
 
-updated="$(curl -fsS \
+updated="$(memo_curl -fsS \
   -X PATCH \
   -H 'Content-Type: application/json' \
   -d "{\"title\":\"Smoke memo updated\",\"content\":\"updated through the API\",\"tags\":[\"ci\",\"smoke\"],\"version\":$version}" \
@@ -78,7 +84,7 @@ updated="$(curl -fsS \
 
 jq -e --arg id "$memo_id" '.id == $id and .title == "Smoke memo updated"' <<<"$updated" >/dev/null
 
-search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=updated&tag=smoke&page=1&limit=20')"
+search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=updated&tag=smoke&page=1&limit=20')"
 jq -e --arg id "$memo_id" '.items | any(.id == $id)' <<<"$search" >/dev/null
 
 bulk_file="$(mktemp)"
@@ -95,13 +101,13 @@ curl -fsS \
   | jq -e '.errors == false' >/dev/null
 rm -f "$bulk_file"
 
-pagination_search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=pagination-probe&page=6&limit=20')"
+pagination_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=pagination-probe&page=6&limit=20')"
 jq -e '.total == 105 and .page == 6 and .total_pages == 6 and (.items | length) == 5' <<<"$pagination_search" >/dev/null
 
 expected_version="$(jq -er '.version' <<<"$updated")"
 for attempt in $(seq 1 8); do
   (
-    curl -sS \
+    memo_curl -sS \
       -o "/tmp/memo-conflict-body-$attempt.json" \
       -w '%{http_code}' \
       -X PATCH \
@@ -133,15 +139,15 @@ if [[ "$success_count" -ne 1 || "$conflict_count" -ne 7 ]]; then
   exit 1
 fi
 
-curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$memo_id" >/dev/null
+memo_curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$memo_id" >/dev/null
 
-status="$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:8083/api/v1/memos/$memo_id")"
+status="$(memo_curl -sS -o /dev/null -w '%{http_code}' "http://localhost:8083/api/v1/memos/$memo_id")"
 if [[ "$status" != "404" ]]; then
   echo "Expected deleted memo lookup to return 404, got $status" >&2
   exit 1
 fi
 
-resilience_created="$(curl -fsS \
+resilience_created="$(memo_curl -fsS \
   -H 'Content-Type: application/json' \
   -d '{"title":"Resilience memo","content":"survives secondary store outages","tags":["ci","resilience"]}' \
   http://localhost:8083/api/v1/memos)"
@@ -158,17 +164,17 @@ jq -e '
   and .checks.elasticsearch == "down"
 ' <<<"$degraded_ready" >/dev/null
 
-curl -fsS "http://localhost:8083/api/v1/memos/$resilience_id" \
+memo_curl -fsS "http://localhost:8083/api/v1/memos/$resilience_id" \
   | jq -e --arg id "$resilience_id" '.id == $id' >/dev/null
 
-outage_created="$(curl -fsS \
+outage_created="$(memo_curl -fsS \
   -H 'Content-Type: application/json' \
   -d '{"title":"Outage write","content":"Scylla remains authoritative","tags":["ci","resilience"]}' \
   http://localhost:8083/api/v1/memos)"
 outage_id="$(jq -er '.id' <<<"$outage_created")"
 
-curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$resilience_id" >/dev/null
-curl -fsS "http://localhost:8083/api/v1/memos/$outage_id" \
+memo_curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$resilience_id" >/dev/null
+memo_curl -fsS "http://localhost:8083/api/v1/memos/$outage_id" \
   | jq -e --arg id "$outage_id" '.id == $id' >/dev/null
 
 docker compose restart backend >/dev/null
@@ -200,8 +206,8 @@ fi
 
 projection_recovered=0
 for _ in $(seq 1 60); do
-  outage_search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Outage%20write&page=1&limit=20')"
-  deleted_search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Resilience%20memo&page=1&limit=20')"
+  outage_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Outage%20write&page=1&limit=20')"
+  deleted_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Resilience%20memo&page=1&limit=20')"
   if jq -e --arg id "$outage_id" '.items | any(.id == $id)' <<<"$outage_search" >/dev/null \
     && jq -e --arg id "$resilience_id" '.items | all(.id != $id)' <<<"$deleted_search" >/dev/null; then
     projection_recovered=1
