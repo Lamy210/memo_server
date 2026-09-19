@@ -13,8 +13,8 @@ Rust/Actix Web + SvelteKit で構成したメモアプリケーションです�
 
 ScyllaDB をメモ本体の永続化先とし、Redis はキャッシュ、Elasticsearch は検索用インデックスとして利用します。
 
-> [!WARNING]
-> 現在の `DEVELOPMENT_USER_ID` はローカル開発用の固定ユーザーです。認証・認可の代替ではありません。外部公開する前に実際の認証基盤へ置き換えてください。
+> [!NOTE]
+> メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、Frontend がリクエストごとに `X-Development-User-Id` を付与します。本番では独立した認証サービスを運用し、`AUTH_MODE=jwt` でそのサービスが発行するaccess tokenを検証します。
 
 ## 起動
 
@@ -77,6 +77,21 @@ Base path は `/api/v1` です。
 | `PATCH` | `/memos/{id}` | 更新 |
 | `DELETE` | `/memos/{id}` | 削除 |
 | `GET` | `/memos/search` | 検索 |
+
+### Authentication
+
+Health endpoint 以外の memo API は認証が必要です。
+
+ローカル開発では `AUTH_MODE=development` を明示し、各リクエストに `X-Development-User-Id: <UUID>` を付与します。固定ユーザーをBackendへ暗黙注入する方式は使用しません。Compose のFrontendは `VITE_DEVELOPMENT_USER_ID` からこのheaderを付与します。
+
+本番では `AUTH_MODE=jwt` を使用します。Backendは専用の認証サービスが発行したBearer access tokenをRS256で検証し、設定したissuer・audience・expiry・issued-at・subjectを検証します。署名鍵は `AUTH_JWKS_URI` のJWKSから取得し、key rotation時はJWKSを再取得します。JWT `sub` はmemo_server内のuser UUIDとして扱います。
+
+memo_serverは認証サービスと独立して運用します。Oryや共通認証基盤との連携は前提にせず、認証サービス側がユーザー登録・ログイン・セッション/refresh token・パスワード/MFA等を担当し、memo_serverはaccess tokenの検証とuser境界の適用だけを担当します。
+
+```bash
+curl -H 'Authorization: Bearer <access-token>' \
+  http://localhost:8083/api/v1/memos
+```
 
 ### Health / readiness
 
@@ -146,14 +161,17 @@ Backend が利用する主な環境変数:
 | `REDIS_URL` | `redis://127.0.0.1:6379` |
 | `ELASTICSEARCH_URL` | `http://127.0.0.1:9200` |
 | `PORT` | `8080` |
-| `DEVELOPMENT_USER_ID` | `12345678-1234-1234-1234-123456789012` |
+| `AUTH_MODE` | 必須。Composeでは `development` |
+| `AUTH_ISSUER` | `AUTH_MODE=jwt` のとき必須 |
+| `AUTH_AUDIENCE` | `AUTH_MODE=jwt` のとき必須。memo API向けのaudience値 |
+| `AUTH_JWKS_URI` | `AUTH_MODE=jwt` のとき必須 |
 
 `DATABASE_URL` は既存環境との互換目的で Scylla の接続先としても読み取りますが、新規設定では `SCYLLA_URI` を使ってください。
 
-Frontend の Vite 開発サーバーは `BACKEND_URL` を `/api` のproxy先として利用します。Compose では `http://backend:8080` が設定されます。
+Frontend の Vite 開発サーバーは `BACKEND_URL` を `/api` のproxy先として利用します。Compose では `http://backend:8080` が設定されます。ローカル開発用の `VITE_DEVELOPMENT_USER_ID` はFrontendから `X-Development-User-Id` として送信されます。本番buildでは設定しないでください。
 
 ## スコープ
 
-現在のMVPには認証/OIDC、添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクルと開発・CI基盤を安定させ、その後に拡張します。
+現在のMVPは専用Authサービスが発行するJWTのresource-server検証までを対象にします。添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクル、認証境界、開発・CI基盤を安定させ、その後に拡張します。
 
-開発規約とPR運用は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+認証サービス境界の詳細は [docs/authentication.md](docs/authentication.md) を参照してください。開発規約とPR運用は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。

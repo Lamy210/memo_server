@@ -23,6 +23,9 @@ pub enum AppError {
 
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
+
+    #[error("Service Unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 impl ResponseError for AppError {
@@ -46,6 +49,12 @@ impl ResponseError for AppError {
                 error: "Unauthorized".into(),
                 message: msg.clone(),
             }),
+            AppError::ServiceUnavailable(msg) => {
+                HttpResponse::ServiceUnavailable().json(ErrorResponse {
+                    error: "Service Unavailable".into(),
+                    message: msg.clone(),
+                })
+            }
             AppError::Conflict(msg) => HttpResponse::Conflict().json(ErrorResponse {
                 error: "Conflict".into(),
                 message: msg.clone(),

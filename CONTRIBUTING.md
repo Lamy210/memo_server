@@ -101,7 +101,7 @@ docker compose build backend frontend
 
 ## Security
 
-- `DEVELOPMENT_USER_ID` はローカル開発専用です。認証済みidentityとして扱わないでください。
+- `AUTH_MODE=development` と `X-Development-User-Id` はローカル開発専用です。本番では使用せず、独立した認証サービスが発行するBearer JWTを検証してください。Oryや共通認証基盤への依存をmemo_serverへ持ち込まないでください。
 - credential、token、API keyをrepositoryへcommitしないでください。
 - ユーザー入力をHTMLへ描画する場合はsanitizeを維持してください。
 - tenant/user境界を外す変更は、明示的な認可設計なしに行わないでください。
