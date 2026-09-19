@@ -80,7 +80,12 @@ impl MemoRepository for MemoRepositoryImpl {
             .reconciler
             .prepare(memo.user_id, memo.id, memo.version)
             .await?;
-        self.scylla.save(memo).await?;
+
+        if let Err(error) = self.scylla.save(memo).await {
+            self.reconciler.cancel(&intent).await;
+            return Err(error);
+        }
+
         self.reconciler.reconcile_now(&intent).await;
         Ok(())
     }
@@ -90,7 +95,12 @@ impl MemoRepository for MemoRepositoryImpl {
             .reconciler
             .prepare(user_id, id, PROJECTION_DELETE_TARGET)
             .await?;
-        self.scylla.delete(user_id, id).await?;
+
+        if let Err(error) = self.scylla.delete(user_id, id).await {
+            self.reconciler.cancel(&intent).await;
+            return Err(error);
+        }
+
         self.reconciler.reconcile_now(&intent).await;
         Ok(())
     }

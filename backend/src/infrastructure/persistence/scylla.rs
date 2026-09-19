@@ -24,7 +24,7 @@ type MemoRow = (
     DateTime<Utc>,
     i32,
 );
-type ProjectionRetryRow = (Uuid, Uuid, i32);
+type ProjectionRetryRow = (Uuid, Uuid, Uuid, i32);
 
 pub const PROJECTION_RETRY_BUCKETS: i32 = 16;
 pub const PROJECTION_DELETE_TARGET: i32 = -1;
@@ -32,6 +32,7 @@ pub const PROJECTION_DELETE_TARGET: i32 = -1;
 #[derive(Debug, Clone)]
 pub struct ProjectionRetry {
     pub bucket: i32,
+    pub event_id: Uuid,
     pub user_id: Uuid,
     pub memo_id: Uuid,
     pub target_version: i32,
@@ -52,7 +53,6 @@ struct PreparedStatements {
     enqueue_projection_retry: PreparedStatement,
     list_projection_retries: PreparedStatement,
     acknowledge_projection_retry: PreparedStatement,
-    ensure_projection_retry_if_absent: PreparedStatement,
 }
 
 impl ScyllaDB {
@@ -111,10 +111,11 @@ impl ScyllaDB {
             .query_unpaged(
                 "CREATE TABLE IF NOT EXISTS memo_app.projection_intents (\
                     bucket int,\
-                    memo_id uuid,\
+                    event_id uuid,\
                     user_id uuid,\
+                    memo_id uuid,\
                     target_version int,\
-                    PRIMARY KEY ((bucket), memo_id)\
+                    PRIMARY KEY ((bucket), event_id)\
                 )",
                 &[],
             )
@@ -182,8 +183,8 @@ impl ScyllaDB {
             })?;
         let enqueue_projection_retry = session
             .prepare(
-                "INSERT INTO memo_app.projection_intents (bucket, memo_id, user_id, target_version) \
-                 VALUES (?, ?, ?, ?)",
+                "INSERT INTO memo_app.projection_intents \
+                 (bucket, event_id, user_id, memo_id, target_version) VALUES (?, ?, ?, ?, ?)",
             )
             .await
             .map_err(|error| {
@@ -193,7 +194,7 @@ impl ScyllaDB {
             })?;
         let list_projection_retries = session
             .prepare(
-                "SELECT memo_id, user_id, target_version FROM memo_app.projection_intents \
+                "SELECT event_id, user_id, memo_id, target_version FROM memo_app.projection_intents \
                  WHERE bucket = ?",
             )
             .await
@@ -204,24 +205,12 @@ impl ScyllaDB {
             })?;
         let acknowledge_projection_retry = session
             .prepare(
-                "DELETE FROM memo_app.projection_intents \
-                 WHERE bucket = ? AND memo_id = ? IF target_version = ?",
+                "DELETE FROM memo_app.projection_intents WHERE bucket = ? AND event_id = ?",
             )
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
                     "Failed to prepare acknowledge_projection_retry: {error}"
-                ))
-            })?;
-        let ensure_projection_retry_if_absent = session
-            .prepare(
-                "INSERT INTO memo_app.projection_intents \
-                 (bucket, memo_id, user_id, target_version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
-            )
-            .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!(
-                    "Failed to prepare ensure_projection_retry_if_absent: {error}"
                 ))
             })?;
 
@@ -235,7 +224,6 @@ impl ScyllaDB {
             enqueue_projection_retry,
             list_projection_retries,
             acknowledge_projection_retry,
-            ensure_projection_retry_if_absent,
         })
     }
 
@@ -370,6 +358,7 @@ impl ScyllaDB {
     ) -> AppResult<ProjectionRetry> {
         let event = ProjectionRetry {
             bucket: projection_retry_bucket(memo_id),
+            event_id: Uuid::new_v4(),
             user_id,
             memo_id,
             target_version,
@@ -380,8 +369,9 @@ impl ScyllaDB {
                 &self.prepared_statements.enqueue_projection_retry,
                 (
                     event.bucket,
-                    event.memo_id,
+                    event.event_id,
                     event.user_id,
+                    event.memo_id,
                     event.target_version,
                 ),
             )
@@ -418,12 +408,15 @@ impl ScyllaDB {
 
         typed_rows
             .map(|row| {
-                row.map(|(memo_id, user_id, target_version)| ProjectionRetry {
-                    bucket,
-                    user_id,
-                    memo_id,
-                    target_version,
-                })
+                row.map(
+                    |(event_id, user_id, memo_id, target_version)| ProjectionRetry {
+                        bucket,
+                        event_id,
+                        user_id,
+                        memo_id,
+                        target_version,
+                    },
+                )
                 .map_err(|error| {
                     AppError::DatabaseError(format!(
                         "Failed to deserialize projection reconciliation intent: {error}"
@@ -433,50 +426,16 @@ impl ScyllaDB {
             .collect()
     }
 
-    pub async fn acknowledge_projection_retry(&self, event: &ProjectionRetry) -> AppResult<bool> {
-        let result = self
-            .session
+    pub async fn acknowledge_projection_retry(&self, event: &ProjectionRetry) -> AppResult<()> {
+        self.session
             .execute_unpaged(
                 &self.prepared_statements.acknowledge_projection_retry,
-                (event.bucket, event.memo_id, event.target_version),
+                (event.bucket, event.event_id),
             )
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
                     "Failed to acknowledge projection reconciliation intent: {error}"
-                ))
-            })?;
-        let rows = result.into_rows_result().map_err(|error| {
-            AppError::DatabaseError(format!(
-                "Failed to read projection acknowledgement result: {error}"
-            ))
-        })?;
-        let (applied, _current_target_version) =
-            rows.first_row::<(bool, Option<i32>)>().map_err(|error| {
-                AppError::DatabaseError(format!(
-                    "Failed to deserialize projection acknowledgement result: {error}"
-                ))
-            })?;
-
-        Ok(applied)
-    }
-
-    pub async fn ensure_projection_retry_if_absent(
-        &self,
-        user_id: Uuid,
-        memo_id: Uuid,
-        target_version: i32,
-    ) -> AppResult<()> {
-        let bucket = projection_retry_bucket(memo_id);
-        self.session
-            .execute_unpaged(
-                &self.prepared_statements.ensure_projection_retry_if_absent,
-                (bucket, memo_id, user_id, target_version),
-            )
-            .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!(
-                    "Failed to restore projection reconciliation intent: {error}"
                 ))
             })?;
         Ok(())

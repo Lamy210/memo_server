@@ -48,7 +48,8 @@ impl ProjectionReconciler {
     pub async fn reconcile_now(&self, event: &ProjectionRetry) {
         if let Err(error) = self.reconcile_event(event).await {
             log::warn!(
-                "Projection reconciliation deferred: memo_id={} user_id={} target_version={} error={error}",
+                "Projection reconciliation deferred: event_id={} memo_id={} user_id={} target_version={} error={error}",
+                event.event_id,
                 event.memo_id,
                 event.user_id,
                 event.target_version
@@ -71,7 +72,8 @@ impl ProjectionReconciler {
             for event in events {
                 if let Err(error) = self.reconcile_event(&event).await {
                     log::warn!(
-                        "Projection reconciliation retry failed: memo_id={} user_id={} target_version={} error={error}",
+                        "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target_version={} error={error}",
+                        event.event_id,
                         event.memo_id,
                         event.user_id,
                         event.target_version
@@ -116,30 +118,34 @@ impl ProjectionReconciler {
             return Err(AppError::DatabaseError(failures.join("; ")));
         }
 
-        let acknowledged = self.scylla.acknowledge_projection_retry(event).await?;
-        if !acknowledged {
-            self.restore_current_intent_if_absent(event.user_id, event.memo_id)
+        let current = self.scylla.find_by_id(event.user_id, event.memo_id).await?;
+        if projection_state(memo.as_ref()) != projection_state(current.as_ref()) {
+            let target_version = current
+                .as_ref()
+                .map(|memo| memo.version)
+                .unwrap_or(PROJECTION_DELETE_TARGET);
+            self.scylla
+                .enqueue_projection_retry(event.user_id, event.memo_id, target_version)
                 .await?;
         }
 
-        Ok(())
+        self.scylla.acknowledge_projection_retry(event).await
     }
 
-    async fn restore_current_intent_if_absent(
-        &self,
-        user_id: Uuid,
-        memo_id: Uuid,
-    ) -> AppResult<()> {
-        let current = self.scylla.find_by_id(user_id, memo_id).await?;
-        let target_version = current
-            .as_ref()
-            .map(|memo| memo.version)
-            .unwrap_or(PROJECTION_DELETE_TARGET);
-
-        self.scylla
-            .ensure_projection_retry_if_absent(user_id, memo_id, target_version)
-            .await
+    pub async fn cancel(&self, event: &ProjectionRetry) {
+        if let Err(error) = self.scylla.acknowledge_projection_retry(event).await {
+            log::warn!(
+                "Failed to cancel unused projection intent: event_id={} memo_id={} user_id={} error={error}",
+                event.event_id,
+                event.memo_id,
+                event.user_id
+            );
+        }
     }
+}
+
+fn projection_state(memo: Option<&crate::domain::memo::entity::Memo>) -> Option<i32> {
+    memo.map(|memo| memo.version)
 }
 
 fn target_reached(
@@ -164,6 +170,7 @@ mod tests {
     fn retry(user_id: Uuid, memo_id: Uuid, target_version: i32) -> ProjectionRetry {
         ProjectionRetry {
             bucket: ScyllaDB::projection_retry_bucket(memo_id),
+            event_id: Uuid::new_v4(),
             user_id,
             memo_id,
             target_version,
@@ -208,6 +215,23 @@ mod tests {
 
         assert!(!target_reached(&event, Some(&memo)));
         assert!(target_reached(&event, None));
+    }
+
+    #[test]
+    fn projection_state_changes_when_version_or_presence_changes() {
+        let user_id = Uuid::new_v4();
+        let mut memo = crate::domain::memo::entity::Memo::new(
+            "title".into(),
+            "content".into(),
+            vec![],
+            user_id,
+        );
+
+        assert_eq!(projection_state(None), None);
+        assert_eq!(projection_state(Some(&memo)), Some(1));
+
+        memo.version = 2;
+        assert_eq!(projection_state(Some(&memo)), Some(2));
     }
 
     #[test]
