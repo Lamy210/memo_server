@@ -99,13 +99,8 @@ struct JwtVerifier {
 
 impl JwtVerifier {
     fn new(issuer: String, audience: String, jwks_uri: String) -> Self {
-        let client = Client::builder()
-            .timeout(JWKS_REQUEST_TIMEOUT)
-            .build()
-            .expect("static authentication HTTP client configuration must be valid");
-
         Self {
-            client,
+            client: Client::new(),
             issuer,
             audience,
             jwks_uri,
@@ -215,6 +210,7 @@ impl JwtVerifier {
         let response = self
             .client
             .get(&self.jwks_uri)
+            .timeout(JWKS_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|error| {
