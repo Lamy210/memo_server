@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scylla::{
     frame::response::result::{CqlValue, Row},
@@ -9,6 +10,7 @@ use scylla::{
 use uuid::Uuid;
 
 use crate::{
+    application::health::HealthProbe,
     domain::memo::entity::Memo,
     error::{AppError, AppResult},
 };
@@ -329,5 +331,19 @@ mod tests {
 
         scylla.delete(user_id, memo.id).await.unwrap();
         assert!(!scylla.exists(user_id, memo.id).await.unwrap());
+    }
+}
+
+
+#[async_trait]
+impl HealthProbe for ScyllaDB {
+    async fn check(&self) -> bool {
+        match self.health_check().await {
+            Ok(healthy) => healthy,
+            Err(error) => {
+                log::warn!("Scylla health check failed: {error}");
+                false
+            }
+        }
     }
 }
