@@ -15,7 +15,7 @@ summary="$output_dir/summary.md"
   echo "| --- | ---: |"
 } > "$summary"
 
-screens=(memos search new edit)
+screens=(memos search new edit unauthorized)
 
 for screen in "${screens[@]}"; do
   before="$baseline_dir/$screen.png"
