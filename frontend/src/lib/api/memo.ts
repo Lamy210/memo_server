@@ -7,6 +7,7 @@ import type {
 } from './types';
 
 const API_BASE = '/api/v1';
+const DEVELOPMENT_USER_ID = import.meta.env.VITE_DEVELOPMENT_USER_ID as string | undefined;
 
 export class ApiError extends Error {
   constructor(
@@ -19,7 +20,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const headers = new Headers(init?.headers);
+  if (DEVELOPMENT_USER_ID) {
+    headers.set('X-Development-User-Id', DEVELOPMENT_USER_ID);
+  }
+
+  const response = await fetch(url, { ...init, headers });
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`;
     try {
