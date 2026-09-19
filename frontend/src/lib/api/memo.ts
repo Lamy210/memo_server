@@ -7,6 +7,8 @@ import type {
 } from './types';
 
 const API_BASE = '/api/v1';
+export const AUTH_REQUIRED_MESSAGE = '認証セッションが無効です。再ログインしてください。';
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -15,6 +17,15 @@ export class ApiError extends Error {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+export function isUnauthorizedApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 401;
+}
+
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (isUnauthorizedApiError(error)) return AUTH_REQUIRED_MESSAGE;
+  return error instanceof Error ? error.message : fallback;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
