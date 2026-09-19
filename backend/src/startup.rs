@@ -7,6 +7,7 @@ use crate::{
     config::AppConfig,
     infrastructure::{
         persistence::{elasticsearch::ElasticsearchClient, redis::RedisCache, scylla::ScyllaDB},
+        reconciliation::ProjectionReconciler,
         repositories::memo::MemoRepositoryImpl,
     },
     interfaces::routes::configure_routes,
@@ -39,7 +40,18 @@ impl Application {
             redis.clone(),
             elasticsearch.clone(),
         ));
-        let memo_repository = Arc::new(MemoRepositoryImpl::new(scylla, redis, elasticsearch));
+        let projection_reconciler = Arc::new(ProjectionReconciler::new(
+            scylla.clone(),
+            redis.clone(),
+            elasticsearch.clone(),
+        ));
+        let memo_repository = Arc::new(MemoRepositoryImpl::new(
+            scylla,
+            redis,
+            elasticsearch,
+            projection_reconciler.clone(),
+        ));
+        let _projection_reconciler_task = tokio::spawn(projection_reconciler.run());
         let memo_service = Data::new(MemoService::new(memo_repository));
         let development_user_id = Data::new(config.development_user_id);
         let port = config.port;

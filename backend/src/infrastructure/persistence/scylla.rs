@@ -24,6 +24,17 @@ type MemoRow = (
     DateTime<Utc>,
     i32,
 );
+type ProjectionRetryRow = (Uuid, Uuid, Uuid);
+
+pub const PROJECTION_RETRY_BUCKETS: i32 = 16;
+
+#[derive(Debug, Clone)]
+pub struct ProjectionRetry {
+    pub bucket: i32,
+    pub event_id: Uuid,
+    pub user_id: Uuid,
+    pub memo_id: Uuid,
+}
 
 pub struct ScyllaDB {
     session: Arc<Session>,
@@ -37,6 +48,9 @@ struct PreparedStatements {
     update_memo_if_version: PreparedStatement,
     delete_memo: PreparedStatement,
     exists: PreparedStatement,
+    enqueue_projection_retry: PreparedStatement,
+    list_projection_retries: PreparedStatement,
+    acknowledge_projection_retry: PreparedStatement,
 }
 
 impl ScyllaDB {
@@ -89,6 +103,24 @@ impl ScyllaDB {
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!("Failed to create memos table: {error}"))
+            })?;
+
+        session
+            .query_unpaged(
+                "CREATE TABLE IF NOT EXISTS memo_app.projection_retries (\
+                    bucket int,\
+                    event_id uuid,\
+                    user_id uuid,\
+                    memo_id uuid,\
+                    PRIMARY KEY ((bucket), event_id)\
+                )",
+                &[],
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to create projection_retries table: {error}"
+                ))
             })?;
 
         Ok(())
@@ -146,6 +178,38 @@ impl ScyllaDB {
             .map_err(|error| {
                 AppError::DatabaseError(format!("Failed to prepare exists: {error}"))
             })?;
+        let enqueue_projection_retry = session
+            .prepare(
+                "INSERT INTO memo_app.projection_retries (bucket, event_id, user_id, memo_id) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to prepare enqueue_projection_retry: {error}"
+                ))
+            })?;
+        let list_projection_retries = session
+            .prepare(
+                "SELECT event_id, user_id, memo_id FROM memo_app.projection_retries \
+                 WHERE bucket = ? LIMIT 32",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to prepare list_projection_retries: {error}"
+                ))
+            })?;
+        let acknowledge_projection_retry = session
+            .prepare(
+                "DELETE FROM memo_app.projection_retries WHERE bucket = ? AND event_id = ?",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to prepare acknowledge_projection_retry: {error}"
+                ))
+            })?;
 
         Ok(PreparedStatements {
             find_by_id,
@@ -154,6 +218,9 @@ impl ScyllaDB {
             update_memo_if_version,
             delete_memo,
             exists,
+            enqueue_projection_retry,
+            list_projection_retries,
+            acknowledge_projection_retry,
         })
     }
 
@@ -280,6 +347,89 @@ impl ScyllaDB {
         Ok(row.is_some())
     }
 
+    pub async fn enqueue_projection_retry(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<ProjectionRetry> {
+        let event = ProjectionRetry {
+            bucket: projection_retry_bucket(memo_id),
+            event_id: Uuid::new_v4(),
+            user_id,
+            memo_id,
+        };
+
+        self.session
+            .execute_unpaged(
+                &self.prepared_statements.enqueue_projection_retry,
+                (event.bucket, event.event_id, event.user_id, event.memo_id),
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to enqueue projection reconciliation: {error}"
+                ))
+            })?;
+
+        Ok(event)
+    }
+
+    pub async fn list_projection_retries(
+        &self,
+        bucket: i32,
+    ) -> AppResult<Vec<ProjectionRetry>> {
+        let result = self
+            .session
+            .execute_unpaged(&self.prepared_statements.list_projection_retries, (bucket,))
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to fetch projection reconciliation events: {error}"
+                ))
+            })?;
+        let rows = result.into_rows_result().map_err(|error| {
+            AppError::DatabaseError(format!(
+                "Failed to read projection reconciliation events: {error}"
+            ))
+        })?;
+        let typed_rows = rows.rows::<ProjectionRetryRow>().map_err(|error| {
+            AppError::DatabaseError(format!(
+                "Failed to type-check projection reconciliation events: {error}"
+            ))
+        })?;
+
+        typed_rows
+            .map(|row| {
+                row.map(|(event_id, user_id, memo_id)| ProjectionRetry {
+                    bucket,
+                    event_id,
+                    user_id,
+                    memo_id,
+                })
+                .map_err(|error| {
+                    AppError::DatabaseError(format!(
+                        "Failed to deserialize projection reconciliation event: {error}"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    pub async fn acknowledge_projection_retry(&self, event: &ProjectionRetry) -> AppResult<()> {
+        self.session
+            .execute_unpaged(
+                &self.prepared_statements.acknowledge_projection_retry,
+                (event.bucket, event.event_id),
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to acknowledge projection reconciliation event: {error}"
+                ))
+            })?;
+        Ok(())
+    }
+
     pub async fn health_check(&self) -> AppResult<bool> {
         let result = self
             .session
@@ -290,6 +440,10 @@ impl ScyllaDB {
             AppError::DatabaseError(format!("Failed to read health check result: {error}"))
         })?;
         Ok(rows.rows_num() > 0)
+    }
+
+    pub fn projection_retry_bucket(memo_id: Uuid) -> i32 {
+        projection_retry_bucket(memo_id)
     }
 
     fn memo_from_row(row: MemoRow) -> Memo {
@@ -305,6 +459,10 @@ impl ScyllaDB {
             version,
         }
     }
+}
+
+fn projection_retry_bucket(memo_id: Uuid) -> i32 {
+    (memo_id.as_u128() % PROJECTION_RETRY_BUCKETS as u128) as i32
 }
 
 #[async_trait]

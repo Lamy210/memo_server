@@ -98,13 +98,21 @@ impl ElasticsearchClient {
         });
         let memo_id = memo.id.to_string();
 
-        self.client
+        let response = self
+            .client
             .index(IndexParts::IndexId(INDEX_NAME, &memo_id))
             .body(doc)
             .refresh(Refresh::True)
             .send()
             .await
             .map_err(|e| AppError::DatabaseError(format!("Failed to index memo: {}", e)))?;
+
+        if !response.status_code().is_success() {
+            return Err(AppError::DatabaseError(format!(
+                "Elasticsearch rejected memo index request with status {}",
+                response.status_code()
+            )));
+        }
 
         Ok(())
     }
@@ -246,13 +254,21 @@ impl ElasticsearchClient {
             }
         });
 
-        self.client
+        let response = self
+            .client
             .delete_by_query(DeleteByQueryParts::Index(&[INDEX_NAME]))
             .body(query_body)
             .refresh(true)
             .send()
             .await
             .map_err(|e| AppError::DatabaseError(format!("Failed to delete memo: {}", e)))?;
+
+        if !response.status_code().is_success() {
+            return Err(AppError::DatabaseError(format!(
+                "Elasticsearch rejected memo delete request with status {}",
+                response.status_code()
+            )));
+        }
 
         Ok(())
     }

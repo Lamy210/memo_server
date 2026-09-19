@@ -6,8 +6,9 @@ use uuid::Uuid;
 use crate::{
     domain::memo::{entity::Memo, repository::MemoRepository},
     error::AppResult,
-    infrastructure::persistence::{
-        elasticsearch::ElasticsearchClient, redis::RedisCache, scylla::ScyllaDB,
+    infrastructure::{
+        persistence::{elasticsearch::ElasticsearchClient, redis::RedisCache, scylla::ScyllaDB},
+        reconciliation::ProjectionReconciler,
     },
 };
 
@@ -17,6 +18,7 @@ pub struct MemoRepositoryImpl {
     scylla: Arc<ScyllaDB>,
     redis: Arc<RedisCache>,
     elasticsearch: Arc<ElasticsearchClient>,
+    reconciler: Arc<ProjectionReconciler>,
 }
 
 impl MemoRepositoryImpl {
@@ -24,11 +26,13 @@ impl MemoRepositoryImpl {
         scylla: Arc<ScyllaDB>,
         redis: Arc<RedisCache>,
         elasticsearch: Arc<ElasticsearchClient>,
+        reconciler: Arc<ProjectionReconciler>,
     ) -> Self {
         Self {
             scylla,
             redis,
             elasticsearch,
+            reconciler,
         }
     }
 
@@ -69,42 +73,12 @@ impl MemoRepository for MemoRepositoryImpl {
 
     async fn save(&self, memo: &Memo) -> AppResult<()> {
         self.scylla.save(memo).await?;
-
-        if let Err(error) = self.elasticsearch.index_memo(memo).await {
-            log::warn!(
-                "Elasticsearch projection update failed after Scylla commit: memo_id={} user_id={} error={error}",
-                memo.id,
-                memo.user_id
-            );
-        }
-
-        let cache_key = Self::cache_key(memo.user_id, memo.id);
-        if let Err(error) = self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await {
-            log::warn!(
-                "Redis cache update failed after Scylla commit: memo_id={} user_id={} error={error}",
-                memo.id,
-                memo.user_id
-            );
-        }
-
-        Ok(())
+        self.reconciler.schedule(memo.user_id, memo.id).await
     }
 
     async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()> {
         self.scylla.delete(user_id, id).await?;
-
-        if let Err(error) = self.elasticsearch.delete_memo(id).await {
-            log::warn!(
-                "Elasticsearch projection delete failed after Scylla delete: memo_id={id} user_id={user_id} error={error}"
-            );
-        }
-        if let Err(error) = self.redis.delete(&Self::cache_key(user_id, id)).await {
-            log::warn!(
-                "Redis cache invalidation failed after Scylla delete: memo_id={id} user_id={user_id} error={error}"
-            );
-        }
-
-        Ok(())
+        self.reconciler.schedule(user_id, id).await
     }
 
     async fn search(
