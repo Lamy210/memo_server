@@ -8,9 +8,7 @@ use crate::{
     infrastructure::persistence::{
         elasticsearch::ElasticsearchClient,
         redis::RedisCache,
-        scylla::{
-            ProjectionRetry, ScyllaDB, PROJECTION_DELETE_TARGET, PROJECTION_RETRY_BUCKETS,
-        },
+        scylla::{ProjectionRetry, ScyllaDB, PROJECTION_DELETE_TARGET, PROJECTION_RETRY_BUCKETS},
     },
 };
 
@@ -123,7 +121,10 @@ impl ProjectionReconciler {
     }
 }
 
-fn target_reached(event: &ProjectionRetry, memo: Option<&crate::domain::memo::entity::Memo>) -> bool {
+fn target_reached(
+    event: &ProjectionRetry,
+    memo: Option<&crate::domain::memo::entity::Memo>,
+) -> bool {
     if event.target_version == PROJECTION_DELETE_TARGET {
         return memo.is_none();
     }
