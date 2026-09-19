@@ -3,19 +3,21 @@
   import { goto } from '$app/navigation';
 
   import MemoCard from '@/components/features/memo/MemoCard.svelte';
-  import { fetchMemos } from '@/lib/api/memo';
+  import { fetchMemos, getApiErrorMessage, isUnauthorizedApiError } from '@/lib/api/memo';
   import type { Memo } from '@/lib/api/types';
 
   let memos: Memo[] = [];
   let loading = true;
   let errorMessage = '';
+  let authRequired = false;
   let query = '';
 
   onMount(async () => {
     try {
       memos = await fetchMemos();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'メモ一覧の取得に失敗しました';
+      authRequired = isUnauthorizedApiError(error);
+      errorMessage = getApiErrorMessage(error, 'メモ一覧の取得に失敗しました');
     } finally {
       loading = false;
     }
@@ -66,8 +68,16 @@
       {/each}
     </div>
   {:else if errorMessage}
-    <div class="mt-8 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700">
-      {errorMessage}
+    <div
+      class="mt-8 rounded-2xl border px-5 py-4 text-sm {authRequired
+        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : 'border-rose-200 bg-rose-50 text-rose-700'}"
+      role="alert"
+    >
+      {#if authRequired}
+        <p class="font-semibold">認証が必要です</p>
+      {/if}
+      <p class={authRequired ? 'mt-1' : ''}>{errorMessage}</p>
     </div>
   {:else if memos.length === 0}
     <div class="mt-8 rounded-3xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
