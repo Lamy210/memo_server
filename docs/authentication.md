@@ -69,8 +69,10 @@ memo_server intentionally ignores unrelated custom claims. Authentication-provid
 memo_server reads public verification keys from `AUTH_JWKS_URI`.
 
 - JWKS is cached for five minutes.
-- An unknown `kid` causes an immediate refresh.
-- An invalid signature causes one forced JWKS refresh before the token is rejected.
+- An unknown `kid` can trigger a forced refresh.
+- An invalid signature can trigger one forced JWKS refresh before the token is rejected.
+- Refresh work is serialized so concurrent cache misses do not fan out into parallel JWKS requests.
+- Forced refresh attempts are rate-limited per memo_server process by a short cooldown, including failed attempts, so attacker-controlled `kid` values or invalid signatures cannot cause one outbound JWKS request per API request.
 - JWKS requests have a bounded timeout.
 - Cached keys may continue to be used when a normal refresh temporarily fails, but only for a bounded stale-if-error window (currently one hour from the successful fetch).
 - Private signing keys remain only in the authentication service.
