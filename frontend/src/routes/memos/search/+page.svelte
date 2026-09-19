@@ -3,7 +3,7 @@
   import type { PageData } from './$types';
 
   import MemoCard from '@/components/features/memo/MemoCard.svelte';
-  import { searchMemos } from '@/lib/api/memo';
+  import { getApiErrorMessage, isUnauthorizedApiError, searchMemos } from '@/lib/api/memo';
   import type { Memo } from '@/lib/api/types';
 
   export let data: PageData;
@@ -16,17 +16,20 @@
   let totalPages = 0;
   let loading = true;
   let errorMessage = '';
+  let authRequired = false;
 
   async function runSearch(): Promise<void> {
     loading = true;
     errorMessage = '';
+    authRequired = false;
     try {
       const result = await searchMemos({ query, tag, page, limit: 20 });
       items = result.items;
       total = result.total;
       totalPages = result.total_pages;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : '検索に失敗しました';
+      authRequired = isUnauthorizedApiError(error);
+      errorMessage = getApiErrorMessage(error, '検索に失敗しました');
     } finally {
       loading = false;
     }
@@ -90,8 +93,16 @@
   </div>
 
   {#if errorMessage}
-    <div class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700">
-      {errorMessage}
+    <div
+      class="mt-6 rounded-2xl border px-5 py-4 text-sm {authRequired
+        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : 'border-rose-200 bg-rose-50 text-rose-700'}"
+      role="alert"
+    >
+      {#if authRequired}
+        <p class="font-semibold">認証が必要です</p>
+      {/if}
+      <p class={authRequired ? 'mt-1' : ''}>{errorMessage}</p>
     </div>
   {:else if loading}
     <div class="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
