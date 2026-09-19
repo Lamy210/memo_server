@@ -106,10 +106,3 @@ pub async fn search_memos(
         .await?;
     Ok(HttpResponse::Ok().json(result))
 }
-
-pub async fn health_check() -> HttpResponse {
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "ok",
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    }))
-}
