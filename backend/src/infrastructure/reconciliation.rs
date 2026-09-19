@@ -256,7 +256,9 @@ impl ProjectionReconciler {
 
     fn track_event(&self, event_id: Uuid, now: Instant) {
         let mut states = self.retry_states();
-        states.entry(event_id).or_insert_with(|| RetryState::new(now));
+        states
+            .entry(event_id)
+            .or_insert_with(|| RetryState::new(now));
     }
 
     fn is_due(&self, event_id: Uuid, now: Instant) -> bool {
