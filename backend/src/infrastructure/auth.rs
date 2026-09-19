@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::Utc;
 use jsonwebtoken::{
     decode, decode_header,
     errors::{Error as JwtError, ErrorKind},
@@ -19,6 +20,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
+const JWT_CLOCK_SKEW_SECONDS: i64 = 30;
 const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
 const JWKS_STALE_IF_ERROR_TTL: Duration = Duration::from_secs(3600);
 const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -136,7 +138,7 @@ impl JwtVerifier {
         key: &DecodingKey,
     ) -> Result<AuthenticatedIdentity, ClaimsVerificationError> {
         let mut validation = Validation::new(Algorithm::RS256);
-        validation.leeway = 30;
+        validation.leeway = JWT_CLOCK_SKEW_SECONDS as u64;
         validation.validate_nbf = true;
         validation.set_audience(&[self.audience.as_str()]);
         validation.set_issuer(&[self.issuer.as_str()]);
@@ -233,6 +235,7 @@ impl JwtVerifier {
 #[derive(Debug, Deserialize)]
 struct AccessTokenClaims {
     sub: String,
+    iat: i64,
 }
 
 impl TryFrom<AccessTokenClaims> for AuthenticatedIdentity {
@@ -241,6 +244,9 @@ impl TryFrom<AccessTokenClaims> for AuthenticatedIdentity {
     fn try_from(claims: AccessTokenClaims) -> Result<Self, Self::Error> {
         let user_id =
             Uuid::parse_str(&claims.sub).map_err(|_| ClaimsVerificationError::InvalidIdentity)?;
+        if claims.iat > Utc::now().timestamp() + JWT_CLOCK_SKEW_SECONDS {
+            return Err(ClaimsVerificationError::InvalidIdentity);
+        }
 
         Ok(Self { user_id })
     }
@@ -421,6 +427,17 @@ zwIDAQAB
         assert!(matches!(
             verifier().decode_claims(&token(&claims), &key()),
             Err(ClaimsVerificationError::Jwt(_))
+        ));
+    }
+
+    #[test]
+    fn future_issued_at_is_rejected() {
+        let mut claims = valid_claims();
+        claims.iat = Utc::now().timestamp() + 120;
+
+        assert!(matches!(
+            verifier().decode_claims(&token(&claims), &key()),
+            Err(ClaimsVerificationError::InvalidIdentity)
         ));
     }
 
