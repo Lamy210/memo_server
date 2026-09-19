@@ -43,9 +43,6 @@ MEMOS = [
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        return
-
     def send_json(self, status, payload):
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
