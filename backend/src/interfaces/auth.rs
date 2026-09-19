@@ -1,9 +1,4 @@
-use actix_web::{
-    dev::Payload,
-    http::header::AUTHORIZATION,
-    web::Data,
-    FromRequest, HttpRequest,
-};
+use actix_web::{dev::Payload, http::header::AUTHORIZATION, web::Data, FromRequest, HttpRequest};
 use futures::future::LocalBoxFuture;
 
 use crate::{
