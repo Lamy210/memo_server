@@ -318,7 +318,7 @@ impl ProjectionReconciler {
 
     fn emit_metrics_if_due(&self) {
         let pass = self.counters.passes.fetch_add(1, Ordering::Relaxed) + 1;
-        if pass % METRICS_LOG_EVERY_PASSES != 0 {
+        if !pass.is_multiple_of(METRICS_LOG_EVERY_PASSES) {
             return;
         }
 
