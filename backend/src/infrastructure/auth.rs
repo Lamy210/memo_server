@@ -151,6 +151,7 @@ impl OidcVerifier {
     ) -> Result<AuthenticatedIdentity, ClaimsVerificationError> {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.leeway = 30;
+        validation.validate_nbf = true;
         validation.set_audience(&[self.audience.as_str()]);
         validation.set_issuer(&[self.issuer.as_str()]);
         validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
