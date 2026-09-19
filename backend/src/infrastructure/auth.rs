@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    config::{AuthConfig, AuthMode},
+    config::AuthConfig,
     error::{AppError, AppResult},
 };
 
@@ -39,19 +39,13 @@ enum AuthBackend {
 
 impl AuthService {
     pub fn new(config: AuthConfig) -> Self {
-        let backend = match config.mode {
-            AuthMode::Development => AuthBackend::Development,
-            AuthMode::Jwt => AuthBackend::Jwt(JwtVerifier::new(
-                config
-                    .issuer
-                    .expect("validated JWT configuration must contain issuer"),
-                config
-                    .audience
-                    .expect("validated JWT configuration must contain audience"),
-                config
-                    .jwks_uri
-                    .expect("validated JWT configuration must contain JWKS URI"),
-            )),
+        let backend = match config {
+            AuthConfig::Development => AuthBackend::Development,
+            AuthConfig::Jwt {
+                issuer,
+                audience,
+                jwks_uri,
+            } => AuthBackend::Jwt(JwtVerifier::new(issuer, audience, jwks_uri)),
         };
 
         Self { backend }
@@ -324,12 +318,7 @@ zwIDAQAB
     }
 
     fn development_service() -> AuthService {
-        AuthService::new(AuthConfig {
-            mode: AuthMode::Development,
-            issuer: None,
-            audience: None,
-            jwks_uri: None,
-        })
+        AuthService::new(AuthConfig::Development)
     }
 
     fn verifier() -> JwtVerifier {
