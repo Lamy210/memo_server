@@ -20,12 +20,11 @@ use crate::{
 };
 
 const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
+const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedIdentity {
     pub user_id: Uuid,
-    pub active_tenant_id: Option<Uuid>,
-    pub tenant_role: Option<String>,
 }
 
 pub struct AuthService {
@@ -34,23 +33,23 @@ pub struct AuthService {
 
 enum AuthBackend {
     Development,
-    Oidc(OidcVerifier),
+    Jwt(JwtVerifier),
 }
 
 impl AuthService {
     pub fn new(config: AuthConfig) -> Self {
         let backend = match config.mode {
             AuthMode::Development => AuthBackend::Development,
-            AuthMode::Oidc => AuthBackend::Oidc(OidcVerifier::new(
+            AuthMode::Jwt => AuthBackend::Jwt(JwtVerifier::new(
                 config
                     .issuer
-                    .expect("validated OIDC configuration must contain issuer"),
+                    .expect("validated JWT configuration must contain issuer"),
                 config
                     .audience
-                    .expect("validated OIDC configuration must contain audience"),
+                    .expect("validated JWT configuration must contain audience"),
                 config
                     .jwks_uri
-                    .expect("validated OIDC configuration must contain JWKS URI"),
+                    .expect("validated JWT configuration must contain JWKS URI"),
             )),
         };
 
@@ -64,7 +63,7 @@ impl AuthService {
     ) -> AppResult<AuthenticatedIdentity> {
         match &self.backend {
             AuthBackend::Development => authenticate_development_user(development_user_id),
-            AuthBackend::Oidc(verifier) => {
+            AuthBackend::Jwt(verifier) => {
                 let token = bearer_token.ok_or_else(|| {
                     AppError::Unauthorized("Bearer access token is required".into())
                 })?;
@@ -82,11 +81,7 @@ fn authenticate_development_user(value: Option<&str>) -> AppResult<Authenticated
         AppError::Unauthorized("X-Development-User-Id must contain a valid UUID".into())
     })?;
 
-    Ok(AuthenticatedIdentity {
-        user_id,
-        active_tenant_id: None,
-        tenant_role: None,
-    })
+    Ok(AuthenticatedIdentity { user_id })
 }
 
 struct CachedJwks {
@@ -94,7 +89,7 @@ struct CachedJwks {
     fetched_at: Instant,
 }
 
-struct OidcVerifier {
+struct JwtVerifier {
     client: Client,
     issuer: String,
     audience: String,
@@ -102,10 +97,15 @@ struct OidcVerifier {
     jwks: RwLock<Option<CachedJwks>>,
 }
 
-impl OidcVerifier {
+impl JwtVerifier {
     fn new(issuer: String, audience: String, jwks_uri: String) -> Self {
+        let client = Client::builder()
+            .timeout(JWKS_REQUEST_TIMEOUT)
+            .build()
+            .expect("static authentication HTTP client configuration must be valid");
+
         Self {
-            client: Client::new(),
+            client,
             issuer,
             audience,
             jwks_uri,
@@ -150,7 +150,7 @@ impl OidcVerifier {
         validation.validate_nbf = true;
         validation.set_audience(&[self.audience.as_str()]);
         validation.set_issuer(&[self.issuer.as_str()]);
-        validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
+        validation.set_required_spec_claims(&["exp", "iat", "iss", "aud", "sub"]);
 
         let claims = decode::<AccessTokenClaims>(token, key, &validation)?.claims;
         claims.try_into()
@@ -218,17 +218,17 @@ impl OidcVerifier {
             .send()
             .await
             .map_err(|error| {
-                log::warn!("Failed to fetch OIDC JWKS: {error}");
+                log::warn!("Failed to fetch authentication JWKS: {error}");
                 AppError::ServiceUnavailable("Authentication key service is unavailable".into())
             })?
             .error_for_status()
             .map_err(|error| {
-                log::warn!("OIDC JWKS endpoint returned an error: {error}");
+                log::warn!("Authentication JWKS endpoint returned an error: {error}");
                 AppError::ServiceUnavailable("Authentication key service is unavailable".into())
             })?;
 
         response.json::<JwkSet>().await.map_err(|error| {
-            log::error!("OIDC JWKS response could not be decoded: {error}");
+            log::error!("Authentication JWKS response could not be decoded: {error}");
             AppError::ServiceUnavailable("Authentication key service returned invalid data".into())
         })
     }
@@ -237,12 +237,6 @@ impl OidcVerifier {
 #[derive(Debug, Deserialize)]
 struct AccessTokenClaims {
     sub: String,
-    #[serde(default)]
-    platform_user_id: Option<String>,
-    #[serde(default)]
-    active_tenant_id: Option<String>,
-    #[serde(default)]
-    tenant_role: Option<String>,
 }
 
 impl TryFrom<AccessTokenClaims> for AuthenticatedIdentity {
@@ -252,26 +246,7 @@ impl TryFrom<AccessTokenClaims> for AuthenticatedIdentity {
         let user_id =
             Uuid::parse_str(&claims.sub).map_err(|_| ClaimsVerificationError::InvalidIdentity)?;
 
-        if let Some(platform_user_id) = claims.platform_user_id.as_deref() {
-            let platform_user_id = Uuid::parse_str(platform_user_id)
-                .map_err(|_| ClaimsVerificationError::InvalidIdentity)?;
-            if platform_user_id != user_id {
-                return Err(ClaimsVerificationError::InvalidIdentity);
-            }
-        }
-
-        let active_tenant_id = claims
-            .active_tenant_id
-            .as_deref()
-            .map(Uuid::parse_str)
-            .transpose()
-            .map_err(|_| ClaimsVerificationError::InvalidIdentity)?;
-
-        Ok(Self {
-            user_id,
-            active_tenant_id,
-            tenant_role: claims.tenant_role,
-        })
+        Ok(Self { user_id })
     }
 }
 
@@ -322,13 +297,9 @@ mod tests {
     }
 
     #[test]
-    fn access_token_identity_requires_platform_user_to_match_subject() {
-        let user_id = Uuid::new_v4();
+    fn access_token_subject_must_be_uuid() {
         let claims = AccessTokenClaims {
-            sub: user_id.to_string(),
-            platform_user_id: Some(Uuid::new_v4().to_string()),
-            active_tenant_id: None,
-            tenant_role: None,
+            sub: "not-a-uuid".to_string(),
         };
 
         assert!(matches!(
