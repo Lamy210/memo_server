@@ -204,9 +204,7 @@ impl ScyllaDB {
                 ))
             })?;
         let acknowledge_projection_retry = session
-            .prepare(
-                "DELETE FROM memo_app.projection_intents WHERE bucket = ? AND event_id = ?",
-            )
+            .prepare("DELETE FROM memo_app.projection_intents WHERE bucket = ? AND event_id = ?")
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
