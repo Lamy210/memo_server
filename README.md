@@ -13,8 +13,8 @@ Rust/Actix Web + SvelteKit で構成したメモアプリケーションです�
 
 ScyllaDB をメモ本体の永続化先とし、Redis はキャッシュ、Elasticsearch は検索用インデックスとして利用します。
 
-> [!WARNING]
-> 現在の `DEVELOPMENT_USER_ID` はローカル開発用の固定ユーザーです。認証・認可の代替ではありません。外部公開する前に実際の認証基盤へ置き換えてください。
+> [!NOTE]
+> メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、Frontend がリクエストごとに `X-Development-User-Id` を付与します。本番では `AUTH_MODE=oidc` を使用してください。
 
 ## 起動
 
@@ -77,6 +77,19 @@ Base path は `/api/v1` です。
 | `PATCH` | `/memos/{id}` | 更新 |
 | `DELETE` | `/memos/{id}` | 削除 |
 | `GET` | `/memos/search` | 検索 |
+
+### Authentication
+
+Health endpoint 以外の memo API は認証が必要です。
+
+ローカル開発では `AUTH_MODE=development` を明示し、各リクエストに `X-Development-User-Id: <UUID>` を付与します。固定ユーザーをBackendへ暗黙注入する方式は使用しません。Compose のFrontendは `VITE_DEVELOPMENT_USER_ID` からこのheaderを付与します。
+
+本番では `AUTH_MODE=oidc` を使用します。BackendはOAuth2 Bearer access tokenをRS256で検証し、設定したissuer・audience・expiry・subjectを検証します。署名鍵は `AUTH_JWKS_URI` のJWKSから取得し、key rotation時はJWKSを再取得します。認証基盤の契約に合わせ、JWT `sub` をcanonical platform user UUIDとしてmemo ownershipに利用します。
+
+```bash
+curl -H 'Authorization: Bearer <access-token>' \
+  http://localhost:8083/api/v1/memos
+```
 
 ### Health / readiness
 
@@ -146,14 +159,17 @@ Backend が利用する主な環境変数:
 | `REDIS_URL` | `redis://127.0.0.1:6379` |
 | `ELASTICSEARCH_URL` | `http://127.0.0.1:9200` |
 | `PORT` | `8080` |
-| `DEVELOPMENT_USER_ID` | `12345678-1234-1234-1234-123456789012` |
+| `AUTH_MODE` | 必須。Composeでは `development` |
+| `AUTH_ISSUER` | `AUTH_MODE=oidc` のとき必須 |
+| `AUTH_AUDIENCE` | `AUTH_MODE=oidc` のとき必須。consuming serviceのOAuth2 client ID |
+| `AUTH_JWKS_URI` | `AUTH_MODE=oidc` のとき必須 |
 
 `DATABASE_URL` は既存環境との互換目的で Scylla の接続先としても読み取りますが、新規設定では `SCYLLA_URI` を使ってください。
 
-Frontend の Vite 開発サーバーは `BACKEND_URL` を `/api` のproxy先として利用します。Compose では `http://backend:8080` が設定されます。
+Frontend の Vite 開発サーバーは `BACKEND_URL` を `/api` のproxy先として利用します。Compose では `http://backend:8080` が設定されます。ローカル開発用の `VITE_DEVELOPMENT_USER_ID` はFrontendから `X-Development-User-Id` として送信されます。本番buildでは設定しないでください。
 
 ## スコープ
 
-現在のMVPには認証/OIDC、添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクルと開発・CI基盤を安定させ、その後に拡張します。
+現在のMVPはOIDC resource-server認証までを対象にします。添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクル、認証境界、開発・CI基盤を安定させ、その後に拡張します。
 
 開発規約とPR運用は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
