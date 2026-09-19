@@ -252,6 +252,7 @@ impl TryFrom<AccessTokenClaims> for AuthenticatedIdentity {
     }
 }
 
+#[derive(Debug)]
 enum ClaimsVerificationError {
     Jwt(JwtError),
     InvalidIdentity,
