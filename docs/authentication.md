@@ -72,7 +72,7 @@ memo_server reads public verification keys from `AUTH_JWKS_URI`.
 - An unknown `kid` causes an immediate refresh.
 - An invalid signature causes one forced JWKS refresh before the token is rejected.
 - JWKS requests have a bounded timeout.
-- Cached keys may continue to be used when a normal refresh temporarily fails.
+- Cached keys may continue to be used when a normal refresh temporarily fails, but only for a bounded stale-if-error window (currently one hour from the successful fetch).
 - Private signing keys remain only in the authentication service.
 
 This allows the authentication service and memo_server to be deployed and released independently.
