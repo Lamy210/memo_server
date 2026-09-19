@@ -266,62 +266,27 @@ impl From<JwtError> for ClaimsVerificationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use jsonwebtoken::{encode, EncodingKey, Header};
-    use serde::Serialize;
 
     const TEST_ISSUER: &str = "https://auth.memo.test";
     const TEST_AUDIENCE: &str = "memo-api";
-
-    const TEST_PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
-MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDwsmGP/sob7cun
-H8wOG4P08vigQUmDtawJQPjaE5WCn5a4iSpoBsUNHJ5v6eC6kDZVQK+Rb98KIlgc
-Zc+oARPdJMQvqx5Yd05yUHPkSnynMPu+XMTwemERwdaKBdWBibm5pUKLJJJkfIV3
-cuXWUUksyoHwloiW58tGC0TbA1JtLLFnz3MdKyowRbXzcAmKcFkUFSNsmJljL0e+
-TRiiGFgtQBpeTPuoJwfPBqoCaQKhGfChBGnHzp8eUY4OZ/xdmPig+wL8qKHqH8iy
-TVyqqvPMIIEBi1dWzap21B0bV2NCde/3VWJ9ijp8nLGbCqt3IZHevigUP0XQfpuL
-jda8MfPPAgMBAAECggEAJTxLSIXviUuLvlJ2dFZAXzP5T31aHJSNxS62cLIn5nm+
-zNR3aXlmoYUkY4bIW8Q0i5LCtlqapAw1GkuLyN9FzefCq+cqfiAS1C9rBk2ZpBm5
-UDU0yEj+XEti355QbcY7I6OTvEfPl9kForl1IecYTWQUnv4Cqmm4ciELKWCFr1q2
-VuOn2+VG8TaYzX2gGTcXVxguDKQvglJscdd1uDMhJQZqEaFUCd/W4i45uZTH11QR
-DkD0UIdy4eUKjrNkKuxVnF5ontYWbBcD8epuvOt4ptYHLEiWW5MAX/2+9P3WoXL9
-JX54DRjmIKtrUj/8ARadNB4Mbp12VoWt7jLHEmeR4QKBgQD6TXdHU5lIvOQvMGqC
-HSqtKIafC8sUl5uRt1pZypTeChLvc7z6+evxkB9dymFbinUlnbBg4gllbPWlUdbG
-28H/NwtGaH8HYRfZNd/xL6eT6mF1KwLLaqQose7CXLe+s18+K/ob/VeGihIo4Sue
-FX7VjZKjlLwX94PFAa4hYq08oQKBgQD2LPD9+2kUjrndN3CZv/y/Uf8hNlAyoW+b
-6WHu/Xf0S1xbqSq4McztD99CBctYJz+EXgOvxu7j/BOX8TPmYKK0kFQ7qEGpIB4d
-8sQWaoHAGlcabMDdH5NE3ZmrBZt5MmrGibPwzLUqW13UJPZws5hZsj0Dx9gyrvNG
-2tvgS7pqbwKBgQCwuIbxng2IdIzq4FUinnMmJIm/uzTbyhq1a+3nnYczqYsq8t1H
-mbLDL81li+DnH7+MGmSQUqbtrFtXKIvqhPfYOEXGpTqivCN5YXdGMy4u2fmLHx3u
-/tD+RnpbUdkNVFl3bNc+ccUdIVim8iu4hlaxci5JPlb62O945bHKsn+7YQKBgQCh
-Z1vmmmUOFnokYYoRNIBpjEBjrTGt0IzVw5HzWPrCEHsQmfypYfWDZMmzhwsI1Erf
-5agzIpJUplzOXVXy8V8cVhj0OGA8nBNC/X21WMWTh3GeoLlfAanUGBr9t6J1Nyos
-2/I/qmgJynfddRKjWA1GmgdJKElHCc/1n99T0zL5PwKBgQChhuC8J5326x0w/Ukv
-SV5GWLQPq9PBrH51fsCdTQrlLti+gUAFBzG071GLSnmCZCM/rXQVpSRBhVdJ5f2l
-6rAhPH7c/Aj9bVpEUy0pm+BK6BKUC0d/+mCIB9DpIHneHD5dmXC2vf8TFg0lr2kU
-v/dOTGuiCKJBodwU65TTAMoWkA==
------END PRIVATE KEY-----"#;
+    const TEST_USER_ID: &str = "12345678-1234-4234-8234-123456789012";
 
     const TEST_PUBLIC_KEY: &str = r#"-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8LJhj/7KG+3Lpx/MDhuD
-9PL4oEFJg7WsCUD42hOVgp+WuIkqaAbFDRyeb+ngupA2VUCvkW/fCiJYHGXPqAET
-3STEL6seWHdOclBz5Ep8pzD7vlzE8HphEcHWigXVgYm5uaVCiySSZHyFd3Ll1lFJ
-LMqB8JaIlufLRgtE2wNSbSyxZ89zHSsqMEW183AJinBZFBUjbJiZYy9Hvk0YohhY
-LUAaXkz7qCcHzwaqAmkCoRnwoQRpx86fHlGODmf8XZj4oPsC/Kih6h/Isk1cqqrz
-zCCBAYtXVs2qdtQdG1djQnXv91VifYo6fJyxmwqrdyGR3r4oFD9F0H6bi43WvDHz
-zwIDAQAB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtlnUM/RW7JKMCCHvVHJM
+iBP8EXJvvSiNVHgFUzBhNlubzwDDjOYo7MY6L1KZbfLnDVZAR/J5KpSwtChtROUy
+G0dLBuxHCb5GqC0wBQgl4meYQBAHavGUqh/eRKM6F7xugJcYDRTaEL7XvPK8LMYp
+x/NhImq39KQiPfF+BkB8GIinJE0rTJbPKzQa+Gao4jTd7sq3HKFdw6Inigq6NA1N
+bpPx+7wF+9L0mjLL+a/apkyhuIOrPn12LeROE+8mWPpOji0qMNg1fNOVrGlEzWUI
+OZmuvIiigM0y15IJU2LOl6NJ5U61QYjBEgW+nx8yHEIwjKzaeR/aSH2F7Zd1upoW
+oQIDAQAB
 -----END PUBLIC KEY-----"#;
 
-    #[derive(Serialize)]
-    struct TestClaims {
-        sub: String,
-        iss: String,
-        aud: String,
-        iat: i64,
-        exp: i64,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        nbf: Option<i64>,
-    }
+    const VALID_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoibWVtby1hcGkiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxNzAwMDAwMDAwfQ.PH4lN-zA2kKRaSPA2aWmt8lFiw8Wok3r2NKnXVwtQ2mNl4uOEQs3FcwhAsoaFyYsLwoqJOdvshtetqZIrUQFUzHI72Jilc1DDfnDkDG4RQOfcgs-T3wvrQpy8UjuWx1x70fwHaBLbhXhUrlCKa51jFTGN3Q5d57fMRFQzAQu1Y47QefykfgV0BUd1WNmeh9QKxKp0SDu53v6nV3S2EmHaARXjspOlyrCj4V0nju2niCQMDywdJS2kNYaTcZOQdvbac6aO1B-IPliaXAZ6_V4tjstmcUnSDBp2yszOqTNLpNC3vmHl25IZQUbb-ekSdbuZcvgqwweFbVB8wUZsG4HBw";
+    const WRONG_AUDIENCE_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoib3RoZXItYXBpIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjQxMDI0NDQ4MDAsIm5iZiI6MTcwMDAwMDAwMH0.HHCNOau4DlsdRy4ZRCZ8ukNvJXAoJGyHlgkBb0EKUlvieHPauVNsDk8T0Wf6L0EDvS_G0gdylxd6UoD20HH68eX8xyLKrNk03y9p5F40wP-Ofir3mX-1Kufy-DSoKhu4RkBC2V3Qs7-lvNRkHRwWF1x1Ms7zE_O42sGDccqe6PIJnzoRMohNFllScrnYAzusgGgRfnLZM9j2ElmMiR0xJJsO48Lt-SjBPEWJUdFHZZ3zM5Jfx-HpmQBnQbfzZwPubDYhGN4zlrcpsIWI3tf3SZlbROqGnklYtAQVodTcV5awiBSXlTep1_duetc7MW2CPBrxgAtc2DWTUs_5fy6drg";
+    const EXPIRED_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoibWVtby1hcGkiLCJpYXQiOjE1MDAwMDAwMDAsImV4cCI6MTYwMDAwMDAwMCwibmJmIjoxNTAwMDAwMDAwfQ.kBPL0cWfwAbdQ8rKYMWtOTfcyjooaZlXtyrtUCJNKTzdObRZgsryiBokjnsspuPwLlJuGWzf5kV-VfHcOKbYFnsriijPqCMEfyHTI9d_BPvKR2PSpXZN6eyTrJpQzl8SgNF0G6bTunXhM7qjwEh33gZjf3nMYJVxqWL_E7eOkPvBHYcNQh5m2R2PTVVr_q5uaBhLTESOgCVwKlBEGjoKq3aWrPW7kpdY6ocCXnMANKSbDsiy0pxw2fNGWtrLB_ADao6pLrZdZl_b32sJbsrka8uRKQ-pATa-9FAyKIIS-wvGVDfihuvxcujZmYE3wgPmnPy1L1suZvf3EYNaYD0lXA";
+    const FUTURE_NBF_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoibWVtby1hcGkiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6NDIwMDAwMDAwMCwibmJmIjo0MTAyNDQ0ODAwfQ.U-DvNnbNWaxK-XpXVI4yKqdOaUeuTPsjYoIxKeaDKAjaWHtGg2Ze5vkDDfmbr-GriLO7QxKZEJU3oll5J9I6DjXAyj_QaRR5kjoA_iOFZNfClaQ91w1bkdnrhfcgqliZO7OAinUWsk57sbeqEwlnqW387-M29Ac2qpdyXcBTt0zzgvMYAMtHfTaEj3iDLTTtV3E39ViRknMtBZSlXbb-6312MGaeQ5aquP-_KY6XtnqB4aMbgJwbIVtqe-t4-zJoOVpQR9ljDZwbbGjIrdn7WDByunfQRf6Ci7Jp9svDIRI5UOYaG_MV1tX2Ivo4EeuBmMBumWV4xHQg55H_MNMa6g";
+    const FUTURE_IAT_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoibWVtby1hcGkiLCJpYXQiOjQxMDI0NDQ4MDAsImV4cCI6NDIwMDAwMDAwMCwibmJmIjoxNzAwMDAwMDAwfQ.rmdARz5KEmqAXtcBQGkvmY0ROwSyv8QBt8CIVv6bCtd_Kpk5VTzkkuNAXMBDqm5iRIXcqfg1kzUl9R6DztTrAsJAkex-migwhg7mU9P9I2iwZbI0ES7-nduW1Tau1AlXHdPLUHM6xiTIkZGeh9myQZP1HqJw8xACcRB9mVD-HNyHno9GRLz1n88y9nMjpvx2byDYz7G0vmpoDPQ6zzGhVzqeVpBYnulF6z0fisRVobDPlni_FHoLQsjW5V_7YW56S0-FR_-h4qmVxaFY8XRn-dxfpZQzcliATb1_lLCz7leqWqLeY9XW9VbFg25POdODjMkg2vtIv1rWznKkROdi5g";
+    const INVALID_SUBJECT_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJub3QtYS11dWlkIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLm1lbW8udGVzdCIsImF1ZCI6Im1lbW8tYXBpIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjQxMDI0NDQ4MDAsIm5iZiI6MTcwMDAwMDAwMH0.i9Zp4kqvf4A90JiUoSSm3SqJ6TG0jfAua2zGivdvHyUOzOjoCRDO3uqQXHJmQnlxYBfGbghWxykFdm10gZw-bUFLQtPqSFRqwNw4vxwQUCmhsbiZiKpMkO80LVz2GiXn-_hm1WPUcBr5qJk--wGwO58zRHoXk-AF1j0tH4QvZ-1tCcua8bmbR8FdxcCPcdpfpYVcIUnunQvcnRKyHKyeENIrPF8yre7ArhziQcqyZtDjJGataBodvdvNek6Le27I9sRngopTeRzCU687L_awKDvTD4bEYpMilzh2pItJ4WpJizUrQbtF4PXoXAZqbdVabOXkikoZkolx6DEVy0x4uw";
 
     fn development_service() -> AuthService {
         AuthService::new(AuthConfig::Development)
@@ -337,28 +302,6 @@ zwIDAQAB
 
     fn key() -> DecodingKey {
         DecodingKey::from_rsa_pem(TEST_PUBLIC_KEY.as_bytes()).expect("test public key must parse")
-    }
-
-    fn token(claims: &TestClaims) -> String {
-        encode(
-            &Header::new(Algorithm::RS256),
-            claims,
-            &EncodingKey::from_rsa_pem(TEST_PRIVATE_KEY.as_bytes())
-                .expect("test private key must parse"),
-        )
-        .expect("test token must encode")
-    }
-
-    fn valid_claims() -> TestClaims {
-        let now = Utc::now().timestamp();
-        TestClaims {
-            sub: Uuid::new_v4().to_string(),
-            iss: TEST_ISSUER.to_string(),
-            aud: TEST_AUDIENCE.to_string(),
-            iat: now,
-            exp: now + 300,
-            nbf: Some(now - 1),
-        }
     }
 
     #[tokio::test]
@@ -385,69 +328,52 @@ zwIDAQAB
 
     #[test]
     fn valid_signed_access_token_is_accepted() {
-        let claims = valid_claims();
-        let expected_user_id = Uuid::parse_str(&claims.sub).expect("test UUID must parse");
-
         let identity = verifier()
-            .decode_claims(&token(&claims), &key())
+            .decode_claims(VALID_TOKEN, &key())
             .expect("valid token must verify");
 
-        assert_eq!(identity.user_id, expected_user_id);
+        assert_eq!(
+            identity.user_id,
+            Uuid::parse_str(TEST_USER_ID).expect("test UUID must parse")
+        );
     }
 
     #[test]
     fn wrong_audience_is_rejected() {
-        let mut claims = valid_claims();
-        claims.aud = "other-api".to_string();
-
         assert!(matches!(
-            verifier().decode_claims(&token(&claims), &key()),
+            verifier().decode_claims(WRONG_AUDIENCE_TOKEN, &key()),
             Err(ClaimsVerificationError::Jwt(_))
         ));
     }
 
     #[test]
     fn expired_token_is_rejected() {
-        let mut claims = valid_claims();
-        let now = Utc::now().timestamp();
-        claims.iat = now - 600;
-        claims.exp = now - 60;
-
         assert!(matches!(
-            verifier().decode_claims(&token(&claims), &key()),
+            verifier().decode_claims(EXPIRED_TOKEN, &key()),
             Err(ClaimsVerificationError::Jwt(_))
         ));
     }
 
     #[test]
     fn future_not_before_is_rejected() {
-        let mut claims = valid_claims();
-        claims.nbf = Some(Utc::now().timestamp() + 120);
-
         assert!(matches!(
-            verifier().decode_claims(&token(&claims), &key()),
+            verifier().decode_claims(FUTURE_NBF_TOKEN, &key()),
             Err(ClaimsVerificationError::Jwt(_))
         ));
     }
 
     #[test]
     fn future_issued_at_is_rejected() {
-        let mut claims = valid_claims();
-        claims.iat = Utc::now().timestamp() + 120;
-
         assert!(matches!(
-            verifier().decode_claims(&token(&claims), &key()),
+            verifier().decode_claims(FUTURE_IAT_TOKEN, &key()),
             Err(ClaimsVerificationError::InvalidIdentity)
         ));
     }
 
     #[test]
     fn access_token_subject_must_be_uuid() {
-        let mut claims = valid_claims();
-        claims.sub = "not-a-uuid".to_string();
-
         assert!(matches!(
-            verifier().decode_claims(&token(&claims), &key()),
+            verifier().decode_claims(INVALID_SUBJECT_TOKEN, &key()),
             Err(ClaimsVerificationError::InvalidIdentity)
         ));
     }
