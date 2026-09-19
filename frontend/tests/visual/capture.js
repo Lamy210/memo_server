@@ -12,7 +12,21 @@ const memoId = '018f0c7a-8b7d-7f25-b239-36e6d9f9b001';
  */
 async function capture(page, pathname, filename, readyText) {
   await page.goto(new URL(pathname, BASE_URL).toString(), { waitUntil: 'networkidle' });
-  await page.getByText(readyText, { exact: false }).first().waitFor();
+
+  try {
+    await page.getByText(readyText, { exact: false }).first().waitFor();
+  } catch (error) {
+    const bodyText = await page.locator('body').innerText().catch(() => '<body unavailable>');
+    console.error(`Visual capture did not reach expected text "${readyText}" at ${page.url()}`);
+    console.error(bodyText);
+    await page.screenshot({
+      path: `${OUTPUT_DIR}/${filename.replace('.png', '-failure.png')}`,
+      fullPage: true,
+      animations: 'disabled'
+    });
+    throw error;
+  }
+
   await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
     path: `${OUTPUT_DIR}/${filename}`,
@@ -32,6 +46,8 @@ const context = await browser.newContext({
 });
 
 const page = await context.newPage();
+page.on('console', (message) => console.log(`browser:${message.type()}: ${message.text()}`));
+page.on('pageerror', (error) => console.error(`browser:pageerror: ${error.message}`));
 
 await capture(page, '/memos', 'memos.png', 'UI regression baseline');
 await capture(page, '/memos/search?query=architecture', 'search.png', 'Architecture notes');
