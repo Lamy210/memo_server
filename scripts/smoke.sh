@@ -47,6 +47,14 @@ jq -e '
   and .checks.elasticsearch == "ok"
 ' <<<"$ready" >/dev/null
 
+unauthenticated_status="$(curl -sS -o /tmp/memo-unauthenticated.json -w '%{http_code}' \
+  http://localhost:8083/api/v1/memos)"
+if [[ "$unauthenticated_status" != "401" ]]; then
+  echo "Expected unauthenticated memo request to return 401, got $unauthenticated_status" >&2
+  cat /tmp/memo-unauthenticated.json >&2 || true
+  exit 1
+fi
+
 created="$(curl -fsS \
   -H 'Content-Type: application/json' \
   -d '{"title":"Smoke memo","content":"created by the compose smoke test","tags":["ci","smoke"]}' \
