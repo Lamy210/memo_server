@@ -1,0 +1,130 @@
+name: UI Diff
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-diff-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  visual-diff:
+    name: Visual diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout base revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+
+      - name: Checkout PR revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+
+      - name: Install frontend dependencies
+        run: |
+          pnpm --dir baseline/frontend install --frozen-lockfile
+          pnpm --dir candidate/frontend install --frozen-lockfile
+
+      - name: Install Chromium and image diff tooling
+        run: |
+          cd candidate/frontend
+          pnpm exec playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends imagemagick
+
+      - name: Capture base UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd baseline/frontend
+            BACKEND_URL=http://127.0.0.1:9 pnpm dev --host 127.0.0.1 --port 4173
+          ) >"$RUNNER_TEMP/ui-base.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4173/memos >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$ready" -ne 1 ]]; then
+            cat "$RUNNER_TEMP/ui-base.log" >&2
+            exit 1
+          fi
+
+          BASE_URL=http://127.0.0.1:4173           OUTPUT_DIR="$GITHUB_WORKSPACE/artifacts/baseline"             node "$GITHUB_WORKSPACE/candidate/frontend/tests/visual/capture.mjs"
+
+      - name: Capture PR UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd candidate/frontend
+            BACKEND_URL=http://127.0.0.1:9 pnpm dev --host 127.0.0.1 --port 4174
+          ) >"$RUNNER_TEMP/ui-candidate.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4174/memos >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$ready" -ne 1 ]]; then
+            cat "$RUNNER_TEMP/ui-candidate.log" >&2
+            exit 1
+          fi
+
+          BASE_URL=http://127.0.0.1:4174           OUTPUT_DIR="$GITHUB_WORKSPACE/artifacts/candidate"             node "$GITHUB_WORKSPACE/candidate/frontend/tests/visual/capture.mjs"
+
+      - name: Compare screenshots
+        run: |
+          bash candidate/scripts/ui-diff.sh             artifacts/baseline             artifacts/candidate             artifacts/diff
+          cat artifacts/diff/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload UI diff artifact
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-diff-pr-${{ github.event.pull_request.number }}
+          path: artifacts
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Link UI diff artifact
+        if: always() && steps.upload.outputs.artifact-url != ''
+        run: |
+          {
+            echo
+            echo "[Open UI diff artifact](${{ steps.upload.outputs.artifact-url }})"
+          } >> "$GITHUB_STEP_SUMMARY"
