@@ -3,9 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scylla::{
-    frame::response::result::{CqlValue, Row},
-    statement::prepared_statement::PreparedStatement,
-    Session, SessionBuilder,
+    client::{session::Session, session_builder::SessionBuilder},
+    statement::prepared::PreparedStatement,
 };
 use uuid::Uuid;
 
@@ -240,12 +239,12 @@ impl ScyllaDB {
         let rows = result.into_rows_result().map_err(|error| {
             AppError::DatabaseError(format!("Failed to read conditional update result: {error}"))
         })?;
-        let row = rows.first_row::<Row>().map_err(|error| {
-            AppError::DatabaseError(format!(
-                "Failed to deserialize conditional update result: {error}"
-            ))
-        })?;
-        let applied = matches!(row.columns.first(), Some(Some(CqlValue::Boolean(true))));
+        let (applied, _current_version) =
+            rows.first_row::<(bool, Option<i32>)>().map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to deserialize conditional update result: {error}"
+                ))
+            })?;
 
         if !applied {
             return Err(AppError::Conflict(
