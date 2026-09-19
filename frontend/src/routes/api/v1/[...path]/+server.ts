@@ -10,11 +10,14 @@ import {
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8080';
 
-const proxyRequest: RequestHandler = async ({ request, params, url, fetch }) => {
+const proxyRequest: RequestHandler = async ({ request, params, url, fetch, locals }) => {
   const backendUrl = env.BACKEND_URL?.trim() || DEFAULT_BACKEND_URL;
   const developmentUserId = dev ? env.DEVELOPMENT_USER_ID?.trim() || undefined : undefined;
   const target = buildBackendUrl(backendUrl, params.path, url.search);
-  const headers = buildBackendRequestHeaders(request.headers, { developmentUserId });
+  const headers = buildBackendRequestHeaders(request.headers, {
+    developmentUserId,
+    bearerToken: locals.accessToken
+  });
   const method = request.method.toUpperCase();
   const body =
     method === 'GET' || method === 'HEAD'
