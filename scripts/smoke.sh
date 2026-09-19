@@ -163,6 +163,38 @@ curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$resilience_id" >/dev/nu
 curl -fsS "http://localhost:8083/api/v1/memos/$outage_id" \
   | jq -e --arg id "$outage_id" '.id == $id' >/dev/null
 
+docker compose start redis elasticsearch >/dev/null
+
+recovery_ready=0
+for _ in $(seq 1 60); do
+  if curl -fsS "http://localhost:8083/api/v1/health/ready" \
+    | jq -e '.status == "ready"' >/dev/null 2>&1; then
+    recovery_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$recovery_ready" -ne 1 ]]; then
+  echo "Secondary stores did not recover to ready state" >&2
+  exit 1
+fi
+
+projection_recovered=0
+for _ in $(seq 1 60); do
+  outage_search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Outage%20write&page=1&limit=20')"
+  deleted_search="$(curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Resilience%20memo&page=1&limit=20')"
+  if jq -e --arg id "$outage_id" '.items | any(.id == $id)' <<<"$outage_search" >/dev/null \
+    && jq -e --arg id "$resilience_id" '.items | all(.id != $id)' <<<"$deleted_search" >/dev/null; then
+    projection_recovered=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$projection_recovered" -ne 1 ]]; then
+  echo "Projection reconciliation did not recover create/delete changes after secondary stores returned" >&2
+  exit 1
+fi
+
 docker compose stop scylla >/dev/null
 unavailable_body="$(mktemp)"
 ready_status="$(curl -sS -o "$unavailable_body" -w '%{http_code}' "http://localhost:8083/api/v1/health/ready")"
