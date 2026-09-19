@@ -44,7 +44,7 @@ for screen in "${screens[@]}"; do
   [[ -n "$changed_pixels" ]] || changed_pixels="0"
 
   convert "$before" "$after" +append "$side_by_side"
-  echo "| `$screen` | $changed_pixels |" >> "$summary"
+  printf '| `%s` | %s |\n' "$screen" "$changed_pixels" >> "$summary"
 done
 
 {
