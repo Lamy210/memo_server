@@ -42,6 +42,9 @@ MEMOS = [
 ]
 
 
+UNAUTHORIZED = False
+
+
 class FixtureHandler(BaseHTTPRequestHandler):
     def send_json(self, status, payload):
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -75,13 +78,29 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/v1/memos":
-            self.send_json(200, MEMOS)
+            if UNAUTHORIZED:
+                self.send_json(401, {"message": "Unauthorized visual fixture"})
+            else:
+                self.send_json(200, MEMOS)
             return
 
         self.send_json(404, {"message": "Visual fixture route not found"})
 
     def do_POST(self):
-        if urlparse(self.path).path == "/api/v1/memos":
+        global UNAUTHORIZED
+        path = urlparse(self.path).path
+
+        if path == "/__visual__/scenario/unauthorized":
+            UNAUTHORIZED = True
+            self.send_json(200, {"scenario": "unauthorized"})
+            return
+
+        if path == "/__visual__/scenario/success":
+            UNAUTHORIZED = False
+            self.send_json(200, {"scenario": "success"})
+            return
+
+        if path == "/api/v1/memos":
             self.send_json(201, {**MEMOS[0], "version": 1})
             return
         self.send_json(404, {"message": "Visual fixture route not found"})
