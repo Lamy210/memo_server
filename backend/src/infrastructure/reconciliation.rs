@@ -1,4 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
 
 use tokio::time::sleep;
 use uuid::Uuid;
@@ -14,11 +21,56 @@ use crate::{
 
 const CACHE_TTL: Duration = Duration::from_secs(3600);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const STALE_INTENT_GRACE: Duration = Duration::from_secs(15 * 60);
+const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(5 * 60);
+const METRICS_LOG_EVERY_PASSES: u64 = 30;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectionReconciliationStats {
+    pub pending_intents: u64,
+    pub reconciled_total: u64,
+    pub retry_deferred_total: u64,
+    pub stale_dropped_total: u64,
+}
+
+#[derive(Default)]
+struct ReconciliationCounters {
+    pending_intents: AtomicU64,
+    reconciled_total: AtomicU64,
+    retry_deferred_total: AtomicU64,
+    stale_dropped_total: AtomicU64,
+    passes: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RetryState {
+    first_seen: Instant,
+    attempt_count: u32,
+    next_attempt_at: Instant,
+}
+
+impl RetryState {
+    fn new(now: Instant) -> Self {
+        Self {
+            first_seen: now,
+            attempt_count: 0,
+            next_attempt_at: now,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileOutcome {
+    Completed,
+    WaitingForTarget,
+}
 
 pub struct ProjectionReconciler {
     scylla: Arc<ScyllaDB>,
     redis: Arc<RedisCache>,
     elasticsearch: Arc<ElasticsearchClient>,
+    retry_states: Mutex<HashMap<Uuid, RetryState>>,
+    counters: ReconciliationCounters,
 }
 
 impl ProjectionReconciler {
@@ -31,6 +83,8 @@ impl ProjectionReconciler {
             scylla,
             redis,
             elasticsearch,
+            retry_states: Mutex::new(HashMap::new()),
+            counters: ReconciliationCounters::default(),
         }
     }
 
@@ -40,20 +94,30 @@ impl ProjectionReconciler {
         memo_id: Uuid,
         target_version: i32,
     ) -> AppResult<ProjectionRetry> {
-        self.scylla
+        let event = self
+            .scylla
             .enqueue_projection_retry(user_id, memo_id, target_version)
-            .await
+            .await?;
+        self.track_event(event.event_id, Instant::now());
+        Ok(event)
     }
 
     pub async fn reconcile_now(&self, event: &ProjectionRetry) {
-        if let Err(error) = self.reconcile_event(event).await {
-            log::warn!(
-                "Projection reconciliation deferred: event_id={} memo_id={} user_id={} target_version={} error={error}",
-                event.event_id,
-                event.memo_id,
-                event.user_id,
-                event.target_version
-            );
+        let now = Instant::now();
+        match self.reconcile_event(event).await {
+            Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
+            Ok(ReconcileOutcome::WaitingForTarget) => {}
+            Err(error) => {
+                let retry_after = self.defer_after_failure(event.event_id, now);
+                log::warn!(
+                    "Projection reconciliation deferred: event_id={} memo_id={} user_id={} target_version={} retry_after_seconds={} error={error}",
+                    event.event_id,
+                    event.memo_id,
+                    event.user_id,
+                    event.target_version,
+                    retry_after.as_secs()
+                );
+            }
         }
     }
 
@@ -62,34 +126,68 @@ impl ProjectionReconciler {
             if let Err(error) = self.run_once().await {
                 log::warn!("Projection reconciliation pass failed: {error}");
             }
+            self.emit_metrics_if_due();
             sleep(POLL_INTERVAL).await;
         }
     }
 
     async fn run_once(&self) -> AppResult<()> {
+        let mut pending_intents = 0_u64;
+
         for bucket in 0..PROJECTION_RETRY_BUCKETS {
             let events = self.scylla.list_projection_retries(bucket).await?;
+            pending_intents = pending_intents.saturating_add(events.len() as u64);
+
             for event in events {
-                if let Err(error) = self.reconcile_event(&event).await {
-                    log::warn!(
-                        "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target_version={} error={error}",
-                        event.event_id,
-                        event.memo_id,
-                        event.user_id,
-                        event.target_version
-                    );
+                let now = Instant::now();
+                if !self.is_due(event.event_id, now) {
+                    continue;
+                }
+
+                match self.reconcile_event(&event).await {
+                    Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
+                    Ok(ReconcileOutcome::WaitingForTarget) => {
+                        if self.is_stale_unreached(event.event_id, now) {
+                            self.scylla.acknowledge_projection_retry(&event).await?;
+                            self.clear_retry_state(event.event_id);
+                            self.counters
+                                .stale_dropped_total
+                                .fetch_add(1, Ordering::Relaxed);
+                            log::warn!(
+                                "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target_version={}",
+                                event.event_id,
+                                event.memo_id,
+                                event.user_id,
+                                event.target_version
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        let retry_after = self.defer_after_failure(event.event_id, now);
+                        log::warn!(
+                            "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target_version={} retry_after_seconds={} error={error}",
+                            event.event_id,
+                            event.memo_id,
+                            event.user_id,
+                            event.target_version,
+                            retry_after.as_secs()
+                        );
+                    }
                 }
             }
         }
 
+        self.counters
+            .pending_intents
+            .store(pending_intents, Ordering::Relaxed);
         Ok(())
     }
 
-    async fn reconcile_event(&self, event: &ProjectionRetry) -> AppResult<()> {
+    async fn reconcile_event(&self, event: &ProjectionRetry) -> AppResult<ReconcileOutcome> {
         let memo = self.scylla.find_by_id(event.user_id, event.memo_id).await?;
 
         if !target_reached(event, memo.as_ref()) {
-            return Ok(());
+            return Ok(ReconcileOutcome::WaitingForTarget);
         }
 
         let mut failures = Vec::new();
@@ -129,19 +227,115 @@ impl ProjectionReconciler {
                 .await?;
         }
 
-        self.scylla.acknowledge_projection_retry(event).await
+        self.scylla.acknowledge_projection_retry(event).await?;
+        Ok(ReconcileOutcome::Completed)
     }
 
     pub async fn cancel(&self, event: &ProjectionRetry) {
-        if let Err(error) = self.scylla.acknowledge_projection_retry(event).await {
-            log::warn!(
-                "Failed to cancel unused projection intent: event_id={} memo_id={} user_id={} error={error}",
-                event.event_id,
-                event.memo_id,
-                event.user_id
-            );
+        match self.scylla.acknowledge_projection_retry(event).await {
+            Ok(()) => self.clear_retry_state(event.event_id),
+            Err(error) => {
+                log::warn!(
+                    "Failed to cancel unused projection intent: event_id={} memo_id={} user_id={} error={error}",
+                    event.event_id,
+                    event.memo_id,
+                    event.user_id
+                );
+            }
         }
     }
+
+    pub fn stats(&self) -> ProjectionReconciliationStats {
+        ProjectionReconciliationStats {
+            pending_intents: self.counters.pending_intents.load(Ordering::Relaxed),
+            reconciled_total: self.counters.reconciled_total.load(Ordering::Relaxed),
+            retry_deferred_total: self.counters.retry_deferred_total.load(Ordering::Relaxed),
+            stale_dropped_total: self.counters.stale_dropped_total.load(Ordering::Relaxed),
+        }
+    }
+
+    fn track_event(&self, event_id: Uuid, now: Instant) {
+        let mut states = self.retry_states();
+        states.entry(event_id).or_insert_with(|| RetryState::new(now));
+    }
+
+    fn is_due(&self, event_id: Uuid, now: Instant) -> bool {
+        let mut states = self.retry_states();
+        let state = states
+            .entry(event_id)
+            .or_insert_with(|| RetryState::new(now));
+        now >= state.next_attempt_at
+    }
+
+    fn is_stale_unreached(&self, event_id: Uuid, now: Instant) -> bool {
+        let states = self.retry_states();
+        states
+            .get(&event_id)
+            .is_some_and(|state| now.duration_since(state.first_seen) >= STALE_INTENT_GRACE)
+    }
+
+    fn defer_after_failure(&self, event_id: Uuid, now: Instant) -> Duration {
+        let mut states = self.retry_states();
+        let state = states
+            .entry(event_id)
+            .or_insert_with(|| RetryState::new(now));
+        state.attempt_count = state.attempt_count.saturating_add(1);
+
+        let delay = retry_delay(event_id, state.attempt_count);
+        state.next_attempt_at = now + delay;
+        self.counters
+            .retry_deferred_total
+            .fetch_add(1, Ordering::Relaxed);
+        delay
+    }
+
+    fn record_completed(&self, event_id: Uuid) {
+        self.clear_retry_state(event_id);
+        self.counters
+            .reconciled_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn clear_retry_state(&self, event_id: Uuid) {
+        self.retry_states().remove(&event_id);
+    }
+
+    fn retry_states(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, RetryState>> {
+        self.retry_states
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn emit_metrics_if_due(&self) {
+        let pass = self.counters.passes.fetch_add(1, Ordering::Relaxed) + 1;
+        if !pass.is_multiple_of(METRICS_LOG_EVERY_PASSES) {
+            return;
+        }
+
+        let stats = self.stats();
+        log::info!(
+            "Projection reconciliation metrics: pending_intents={} reconciled_total={} retry_deferred_total={} stale_dropped_total={}",
+            stats.pending_intents,
+            stats.reconciled_total,
+            stats.retry_deferred_total,
+            stats.stale_dropped_total
+        );
+    }
+}
+
+fn retry_delay(event_id: Uuid, attempt_count: u32) -> Duration {
+    let exponent = attempt_count.saturating_sub(1).min(8);
+    let base_seconds = 2_u64
+        .saturating_mul(1_u64 << exponent)
+        .min(MAX_RETRY_BACKOFF.as_secs());
+    let jitter_window = (base_seconds / 4).max(1);
+    let jitter = (event_id.as_u128() as u64) % (jitter_window + 1);
+
+    Duration::from_secs(
+        base_seconds
+            .saturating_add(jitter)
+            .min(MAX_RETRY_BACKOFF.as_secs()),
+    )
 }
 
 fn projection_state(memo: Option<&crate::domain::memo::entity::Memo>) -> Option<i32> {
@@ -243,5 +437,27 @@ mod tests {
             cache_key(user_id, memo_id),
             format!("memo:{user_id}:{memo_id}")
         );
+    }
+
+    #[test]
+    fn retry_delay_grows_exponentially_and_caps() {
+        let event_id = Uuid::nil();
+
+        assert_eq!(retry_delay(event_id, 1), Duration::from_secs(2));
+        assert_eq!(retry_delay(event_id, 2), Duration::from_secs(4));
+        assert_eq!(retry_delay(event_id, 3), Duration::from_secs(8));
+        assert_eq!(
+            retry_delay(event_id, 9),
+            Duration::from_secs(MAX_RETRY_BACKOFF.as_secs())
+        );
+    }
+
+    #[test]
+    fn retry_delay_is_deterministic_for_an_event() {
+        let event_id = Uuid::new_v4();
+
+        assert_eq!(retry_delay(event_id, 4), retry_delay(event_id, 4));
+        assert!(retry_delay(event_id, 4) >= Duration::from_secs(16));
+        assert!(retry_delay(event_id, 4) <= Duration::from_secs(20));
     }
 }
