@@ -1,3 +1,6 @@
+use async_trait::async_trait;
+
+use crate::application::health::HealthProbe;
 use crate::domain::memo::{entity::Memo, repository::MemoSearchPage};
 use crate::error::{AppError, AppResult};
 use elasticsearch::{
@@ -264,5 +267,19 @@ impl ElasticsearchClient {
             .map_err(|e| AppError::DatabaseError(format!("Health check failed: {}", e)))?;
 
         Ok(response.status_code().is_success())
+    }
+}
+
+
+#[async_trait]
+impl HealthProbe for ElasticsearchClient {
+    async fn check(&self) -> bool {
+        match self.health_check().await {
+            Ok(healthy) => healthy,
+            Err(error) => {
+                log::warn!("Elasticsearch health check failed: {error}");
+                false
+            }
+        }
     }
 }
