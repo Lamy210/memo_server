@@ -114,18 +114,29 @@ The production frontend integration should prefer:
 - validated return/callback targets
 - explicit logout and session invalidation
 
-A BFF may be used to keep access/refresh credentials away from ordinary frontend JavaScript. The chosen browser flow is tracked separately from the backend resource-server work.
+The frontend uses a SvelteKit server-side proxy as the memo API BFF boundary. Browser-supplied `Authorization`, `X-Development-User-Id`, and Cookie headers are not forwarded directly to memo_server. The proxy only adds authentication from server-controlled context:
+
+- local development: private `DEVELOPMENT_USER_ID`, only when the SvelteKit server is running in development mode
+- production: a short-lived access token resolved by the future server-side authentication/session hook and exposed as `App.Locals.accessToken`
+
+The login/session/refresh implementation that populates this production server context remains part of the dedicated authentication-service integration tracked by #10 and #13.
 
 ## Local development
 
 Local Compose uses:
 
 ```text
-AUTH_MODE=development
-X-Development-User-Id: <UUID>
+Backend:
+  AUTH_MODE=development
+
+Frontend server:
+  DEVELOPMENT_USER_ID=<UUID>
+
+Forwarded to memo_server:
+  X-Development-User-Id: <UUID>
 ```
 
-This mode is only for local development and CI. Production deployments must use `AUTH_MODE=jwt`.
+The development identity is private server configuration, not a `VITE_*` browser variable. Client-supplied authentication headers are discarded by the frontend proxy. This mode is only for local development and CI. Production deployments must use `AUTH_MODE=jwt`.
 
 ## Non-goals
 

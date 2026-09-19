@@ -12,7 +12,7 @@ services:
     environment:
       NODE_ENV: development
       BACKEND_URL: http://backend:8080
-      VITE_DEVELOPMENT_USER_ID: 12345678-1234-1234-1234-123456789012
+      DEVELOPMENT_USER_ID: 12345678-1234-1234-1234-123456789012
     command: ["sh", "-c", "pnpm install --frozen-lockfile && pnpm dev --host 0.0.0.0 --port 3000"]
     depends_on:
       backend:
