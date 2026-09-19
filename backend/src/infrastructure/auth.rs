@@ -20,6 +20,7 @@ use crate::{
 };
 
 const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
+const JWKS_STALE_IF_ERROR_TTL: Duration = Duration::from_secs(3600);
 const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
@@ -194,11 +195,16 @@ impl JwtVerifier {
                 Ok(set)
             }
             Err(error) if !force_refresh => {
-                if let Some((set, _)) = cached {
+                if let Some((set, fetched_at)) = cached {
+                    if fetched_at.elapsed() < JWKS_STALE_IF_ERROR_TTL {
+                        log::warn!(
+                            "JWKS refresh failed; temporarily using stale cached keys: {error}"
+                        );
+                        return Ok(set);
+                    }
                     log::warn!(
-                        "JWKS refresh failed; using cached keys until a forced refresh is needed: {error}"
+                        "JWKS refresh failed and cached keys exceeded the stale-if-error window"
                     );
-                    return Ok(set);
                 }
                 Err(error)
             }
