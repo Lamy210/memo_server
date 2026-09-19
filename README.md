@@ -14,7 +14,7 @@ Rust/Actix Web + SvelteKit で構成したメモアプリケーションです�
 ScyllaDB をメモ本体の永続化先とし、Redis はキャッシュ、Elasticsearch は検索用インデックスとして利用します。
 
 > [!NOTE]
-> メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、Frontend がリクエストごとに `X-Development-User-Id` を付与します。本番では独立した認証サービスを運用し、`AUTH_MODE=jwt` でそのサービスが発行するaccess tokenを検証します。
+> メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、SvelteKit server proxy が private env `DEVELOPMENT_USER_ID` から `X-Development-User-Id` を付与します。ブラウザ側JSは認証headerを生成しません。本番では独立した認証サービスを運用し、`AUTH_MODE=jwt` でそのサービスが発行するaccess tokenを検証します。
 
 ## 起動
 
@@ -82,7 +82,7 @@ Base path は `/api/v1` です。
 
 Health endpoint 以外の memo API は認証が必要です。
 
-ローカル開発では `AUTH_MODE=development` を明示し、各リクエストに `X-Development-User-Id: <UUID>` を付与します。固定ユーザーをBackendへ暗黙注入する方式は使用しません。Compose のFrontendは `VITE_DEVELOPMENT_USER_ID` からこのheaderを付与します。
+ローカル開発では `AUTH_MODE=development` を明示し、SvelteKit server proxy が private env `DEVELOPMENT_USER_ID` から各Backendリクエストへ `X-Development-User-Id: <UUID>` を付与します。ブラウザから送られた `Authorization` / `X-Development-User-Id` / Cookie はそのままBackendへ転送せず、server-sideの認証コンテキストだけを利用します。
 
 本番では `AUTH_MODE=jwt` を使用します。Backendは専用の認証サービスが発行したBearer access tokenをRS256で検証し、設定したissuer・audience・expiry・issued-at・subjectを検証します。署名鍵は `AUTH_JWKS_URI` のJWKSから取得し、key rotation時はJWKSを再取得します。JWT `sub` はmemo_server内のuser UUIDとして扱います。
 
@@ -168,7 +168,7 @@ Backend が利用する主な環境変数:
 
 `DATABASE_URL` は既存環境との互換目的で Scylla の接続先としても読み取りますが、新規設定では `SCYLLA_URI` を使ってください。
 
-Frontend の Vite 開発サーバーは `BACKEND_URL` を `/api` のproxy先として利用します。Compose では `http://backend:8080` が設定されます。ローカル開発用の `VITE_DEVELOPMENT_USER_ID` はFrontendから `X-Development-User-Id` として送信されます。本番buildでは設定しないでください。
+Frontend は SvelteKit server route `/api/v1/...` をBackendへの同一origin proxyとして利用します。`BACKEND_URL` はserver-sideのみで参照され、Composeでは `http://backend:8080` が設定されます。ローカル開発では private env `DEVELOPMENT_USER_ID` を設定し、development buildのserver proxyだけが `X-Development-User-Id` を注入します。`VITE_*` へ認証情報を置かないでください。
 
 ## スコープ
 

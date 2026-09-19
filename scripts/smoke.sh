@@ -72,6 +72,12 @@ version="$(jq -er '.version' <<<"$created")"
 
 memo_curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
 
+frontend_proxy_memo="$(curl -fsS \
+  -H "Authorization: Bearer browser-controlled-token" \
+  -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
+  "http://localhost:3001/api/v1/memos/$memo_id")"
+jq -e --arg id "$memo_id" '.id == $id' <<<"$frontend_proxy_memo" >/dev/null
+
 other_user_status="$(curl -sS \
   -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
   -o /tmp/memo-other-user.json \
