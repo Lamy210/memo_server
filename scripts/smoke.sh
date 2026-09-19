@@ -35,6 +35,18 @@ wait_for_url "http://localhost:8083/api/v1/health" 120 5
 wait_for_url "http://localhost:3001/memos" 60 3
 wait_for_url "http://localhost:3001/api/v1/health" 30 2
 
+curl -fsS "http://localhost:8083/api/v1/health/live" \
+  | jq -e '.status == "ok"' >/dev/null
+
+ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
+jq -e '
+  .ready == true
+  and .status == "ready"
+  and .checks.scylla == "ok"
+  and .checks.redis == "ok"
+  and .checks.elasticsearch == "ok"
+' <<<"$ready" >/dev/null
+
 created="$(curl -fsS \
   -H 'Content-Type: application/json' \
   -d '{"title":"Smoke memo","content":"created by the compose smoke test","tags":["ci","smoke"]}' \
@@ -129,6 +141,15 @@ resilience_id="$(jq -er '.id' <<<"$resilience_created")"
 
 docker compose stop redis elasticsearch >/dev/null
 
+degraded_ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
+jq -e '
+  .ready == true
+  and .status == "degraded"
+  and .checks.scylla == "ok"
+  and .checks.redis == "down"
+  and .checks.elasticsearch == "down"
+' <<<"$degraded_ready" >/dev/null
+
 curl -fsS "http://localhost:8083/api/v1/memos/$resilience_id" \
   | jq -e --arg id "$resilience_id" '.id == $id' >/dev/null
 
@@ -141,5 +162,21 @@ outage_id="$(jq -er '.id' <<<"$outage_created")"
 curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$resilience_id" >/dev/null
 curl -fsS "http://localhost:8083/api/v1/memos/$outage_id" \
   | jq -e --arg id "$outage_id" '.id == $id' >/dev/null
+
+docker compose stop scylla >/dev/null
+unavailable_body="$(mktemp)"
+ready_status="$(curl -sS -o "$unavailable_body" -w '%{http_code}' "http://localhost:8083/api/v1/health/ready")"
+if [[ "$ready_status" != "503" ]]; then
+  echo "Expected readiness to return 503 when Scylla is down, got $ready_status" >&2
+  cat "$unavailable_body" >&2 || true
+  rm -f "$unavailable_body"
+  exit 1
+fi
+jq -e '
+  .ready == false
+  and .status == "unavailable"
+  and .checks.scylla == "down"
+' "$unavailable_body" >/dev/null
+rm -f "$unavailable_body"
 
 echo "Compose smoke test passed"
