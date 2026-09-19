@@ -11,7 +11,7 @@ const DEFAULT_PORT: u16 = 8080;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthMode {
     Development,
-    Oidc,
+    Jwt,
 }
 
 #[derive(Debug, Clone)]
@@ -35,12 +35,12 @@ pub struct AppConfig {
 pub enum ConfigError {
     #[error("PORT must be a valid u16, got `{0}`")]
     InvalidPort(String),
-    #[error("AUTH_MODE is required; use `development` or `oidc`")]
+    #[error("AUTH_MODE is required; use `development` or `jwt`")]
     MissingAuthMode,
-    #[error("AUTH_MODE must be `development` or `oidc`, got `{0}`")]
+    #[error("AUTH_MODE must be `development` or `jwt`, got `{0}`")]
     InvalidAuthMode(String),
-    #[error("{0} is required when AUTH_MODE=oidc")]
-    MissingOidcSetting(&'static str),
+    #[error("{0} is required when AUTH_MODE=jwt")]
+    MissingJwtSetting(&'static str),
 }
 
 impl AppConfig {
@@ -87,11 +87,11 @@ impl AppConfig {
                 audience: None,
                 jwks_uri: None,
             },
-            "oidc" => AuthConfig {
-                mode: AuthMode::Oidc,
-                issuer: Some(required_oidc_setting(&vars, "AUTH_ISSUER")?),
-                audience: Some(required_oidc_setting(&vars, "AUTH_AUDIENCE")?),
-                jwks_uri: Some(required_oidc_setting(&vars, "AUTH_JWKS_URI")?),
+            "jwt" => AuthConfig {
+                mode: AuthMode::Jwt,
+                issuer: Some(required_jwt_setting(&vars, "AUTH_ISSUER")?),
+                audience: Some(required_jwt_setting(&vars, "AUTH_AUDIENCE")?),
+                jwks_uri: Some(required_jwt_setting(&vars, "AUTH_JWKS_URI")?),
             },
             _ => return Err(ConfigError::InvalidAuthMode(auth_mode_value)),
         };
@@ -106,12 +106,12 @@ impl AppConfig {
     }
 }
 
-fn required_oidc_setting(
+fn required_jwt_setting(
     vars: &HashMap<String, String>,
     name: &'static str,
 ) -> Result<String, ConfigError> {
     vars.get(name)
         .filter(|value| !value.trim().is_empty())
         .cloned()
-        .ok_or(ConfigError::MissingOidcSetting(name))
+        .ok_or(ConfigError::MissingJwtSetting(name))
 }
