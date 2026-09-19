@@ -1,0 +1,208 @@
+name: UI Diff
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-diff-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  visual-diff:
+    name: Visual diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout base revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+
+      - name: Checkout PR revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+
+      - name: Install frontend dependencies
+        run: |
+          pnpm --dir baseline/frontend install --frozen-lockfile
+          pnpm --dir candidate/frontend install --frozen-lockfile
+
+      - name: Install Chromium and image diff tooling
+        run: |
+          cd candidate/frontend
+          pnpm exec playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends imagemagick
+
+      - name: Capture base UI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 candidate/scripts/ui-fixture-server.py --port 18080 >"$RUNNER_TEMP/ui-base-fixture.log" 2>&1 &
+          fixture_pid=$!
+
+          (
+            cd baseline/frontend
+            BACKEND_URL=http://127.0.0.1:18080 \
+            DEVELOPMENT_USER_ID=12345678-1234-1234-1234-123456789012 \
+            VITE_DEVELOPMENT_USER_ID=12345678-1234-1234-1234-123456789012 \
+              pnpm dev --host 127.0.0.1 --port 4173
+          ) >"$RUNNER_TEMP/ui-base.log" 2>&1 &
+          server_pid=$!
+
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            kill "$fixture_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          fixture_ready=0
+          frontend_ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then
+              fixture_ready=1
+            fi
+            if curl -fsS http://127.0.0.1:4173/memos >/dev/null; then
+              frontend_ready=1
+            fi
+            if [[ "$fixture_ready" -eq 1 && "$frontend_ready" -eq 1 ]]; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$fixture_ready" -ne 1 || "$frontend_ready" -ne 1 ]]; then
+            cat "$RUNNER_TEMP/ui-base-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/ui-base.log" >&2 || true
+            exit 1
+          fi
+
+          curl -fsS http://127.0.0.1:4173/api/v1/memos \
+            | python3 -c 'import json, sys; data=json.load(sys.stdin); assert len(data) == 3'
+
+          rm -rf candidate/frontend/.visual-output
+          mkdir -p candidate/frontend/.visual-output artifacts
+
+          if ! (
+            cd candidate/frontend
+            node tests/visual/capture.js
+          ); then
+            mkdir -p artifacts/baseline
+            cp -a candidate/frontend/.visual-output/. artifacts/baseline/ 2>/dev/null || true
+            cat "$RUNNER_TEMP/ui-base-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/ui-base.log" >&2 || true
+            exit 1
+          fi
+
+          mv candidate/frontend/.visual-output artifacts/baseline
+
+      - name: Capture PR UI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 candidate/scripts/ui-fixture-server.py --port 18080 >"$RUNNER_TEMP/ui-candidate-fixture.log" 2>&1 &
+          fixture_pid=$!
+
+          (
+            cd candidate/frontend
+            BACKEND_URL=http://127.0.0.1:18080 \
+            DEVELOPMENT_USER_ID=12345678-1234-1234-1234-123456789012 \
+            VITE_DEVELOPMENT_USER_ID=12345678-1234-1234-1234-123456789012 \
+              pnpm dev --host 127.0.0.1 --port 4173
+          ) >"$RUNNER_TEMP/ui-candidate.log" 2>&1 &
+          server_pid=$!
+
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            kill "$fixture_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          fixture_ready=0
+          frontend_ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then
+              fixture_ready=1
+            fi
+            if curl -fsS http://127.0.0.1:4173/memos >/dev/null; then
+              frontend_ready=1
+            fi
+            if [[ "$fixture_ready" -eq 1 && "$frontend_ready" -eq 1 ]]; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$fixture_ready" -ne 1 || "$frontend_ready" -ne 1 ]]; then
+            cat "$RUNNER_TEMP/ui-candidate-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/ui-candidate.log" >&2 || true
+            exit 1
+          fi
+
+          curl -fsS http://127.0.0.1:4173/api/v1/memos \
+            | python3 -c 'import json, sys; data=json.load(sys.stdin); assert len(data) == 3'
+
+          rm -rf candidate/frontend/.visual-output
+          mkdir -p candidate/frontend/.visual-output
+
+          if ! (
+            cd candidate/frontend
+            node tests/visual/capture.js
+          ); then
+            mkdir -p artifacts/candidate
+            cp -a candidate/frontend/.visual-output/. artifacts/candidate/ 2>/dev/null || true
+            cat "$RUNNER_TEMP/ui-candidate-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/ui-candidate.log" >&2 || true
+            exit 1
+          fi
+
+          mv candidate/frontend/.visual-output artifacts/candidate
+
+      - name: Compare screenshots
+        run: |
+          bash candidate/scripts/ui-diff.sh artifacts/baseline artifacts/candidate artifacts/diff
+          cat artifacts/diff/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect visual test logs
+        if: always()
+        run: |
+          mkdir -p artifacts/logs
+          cp "$RUNNER_TEMP"/ui-*.log artifacts/logs/ 2>/dev/null || true
+
+      - name: Upload UI diff artifact
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-diff-pr-${{ github.event.pull_request.number }}
+          path: artifacts
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Link UI diff artifact
+        if: always() && steps.upload.outputs.artifact-url != ''
+        run: |
+          {
+            echo
+            echo "[Open UI diff artifact](${{ steps.upload.outputs.artifact-url }})"
+          } >> "$GITHUB_STEP_SUMMARY"
