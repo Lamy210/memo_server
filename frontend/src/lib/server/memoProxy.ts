@@ -1,4 +1,5 @@
 const REQUEST_HEADERS_TO_STRIP = [
+  'accept-encoding',
   'authorization',
   'connection',
   'content-length',
@@ -7,6 +8,7 @@ const REQUEST_HEADERS_TO_STRIP = [
   'keep-alive',
   'proxy-authenticate',
   'proxy-authorization',
+  'set-cookie',
   'te',
   'trailer',
   'transfer-encoding',
