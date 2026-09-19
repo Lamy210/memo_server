@@ -193,7 +193,7 @@ impl ScyllaDB {
         let list_projection_retries = session
             .prepare(
                 "SELECT memo_id, user_id, target_version FROM memo_app.projection_intents \
-                 WHERE bucket = ? LIMIT 32",
+                 WHERE bucket = ?",
             )
             .await
             .map_err(|error| {
