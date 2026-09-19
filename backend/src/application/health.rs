@@ -67,11 +67,7 @@ impl HealthService {
         let (scylla, redis, elasticsearch) = tokio::join!(
             check_with_timeout("scylla", &self.scylla, self.probe_timeout),
             check_with_timeout("redis", &self.redis, self.probe_timeout),
-            check_with_timeout(
-                "elasticsearch",
-                &self.elasticsearch,
-                self.probe_timeout,
-            ),
+            check_with_timeout("elasticsearch", &self.elasticsearch, self.probe_timeout,),
         );
 
         readiness_from_checks(scylla, redis, elasticsearch)
