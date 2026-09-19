@@ -164,7 +164,7 @@ Backend が利用する主な環境変数:
 | `AUTH_MODE` | 必須。Composeでは `development` |
 | `AUTH_ISSUER` | `AUTH_MODE=jwt` のとき必須 |
 | `AUTH_AUDIENCE` | `AUTH_MODE=jwt` のとき必須。memo API向けのaudience値 |
-| `AUTH_JWKS_URI` | `AUTH_MODE=oidc` のとき必須 |
+| `AUTH_JWKS_URI` | `AUTH_MODE=jwt` のとき必須 |
 
 `DATABASE_URL` は既存環境との互換目的で Scylla の接続先としても読み取りますが、新規設定では `SCYLLA_URI` を使ってください。
 
@@ -174,4 +174,4 @@ Frontend の Vite 開発サーバーは `BACKEND_URL` を `/api` のproxy先と�
 
 現在のMVPは専用Authサービスが発行するJWTのresource-server検証までを対象にします。添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクル、認証境界、開発・CI基盤を安定させ、その後に拡張します。
 
-開発規約とPR運用は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+認証サービス境界の詳細は [docs/authentication.md](docs/authentication.md) を参照してください。開発規約とPR運用は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
