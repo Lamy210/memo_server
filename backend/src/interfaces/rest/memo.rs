@@ -85,9 +85,7 @@ pub async fn list_memos(
     service: Data<MemoService>,
     authenticated_user: AuthenticatedUser,
 ) -> AppResult<HttpResponse> {
-    let memos = service
-        .get_user_memos(authenticated_user.0.user_id)
-        .await?;
+    let memos = service.get_user_memos(authenticated_user.0.user_id).await?;
     Ok(HttpResponse::Ok().json(memos))
 }
 
