@@ -12,7 +12,7 @@ use jsonwebtoken::{
 };
 use reqwest::Client;
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
@@ -24,6 +24,7 @@ const JWT_CLOCK_SKEW_SECONDS: i64 = 30;
 const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
 const JWKS_STALE_IF_ERROR_TTL: Duration = Duration::from_secs(3600);
 const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const JWKS_FORCED_REFRESH_COOLDOWN: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedIdentity {
@@ -36,7 +37,7 @@ pub struct AuthService {
 
 enum AuthBackend {
     Development,
-    Jwt(JwtVerifier),
+    Jwt(Box<JwtVerifier>),
 }
 
 impl AuthService {
@@ -47,7 +48,7 @@ impl AuthService {
                 issuer,
                 audience,
                 jwks_uri,
-            } => AuthBackend::Jwt(JwtVerifier::new(issuer, audience, jwks_uri)),
+            } => AuthBackend::Jwt(Box::new(JwtVerifier::new(issuer, audience, jwks_uri))),
         };
 
         Self { backend }
@@ -86,12 +87,18 @@ struct CachedJwks {
     fetched_at: Instant,
 }
 
+#[derive(Default)]
+struct RefreshState {
+    last_forced_attempt: Option<Instant>,
+}
+
 struct JwtVerifier {
     client: Client,
     issuer: String,
     audience: String,
     jwks_uri: String,
     jwks: RwLock<Option<CachedJwks>>,
+    refresh_state: Mutex<RefreshState>,
 }
 
 impl JwtVerifier {
@@ -102,6 +109,7 @@ impl JwtVerifier {
             audience,
             jwks_uri,
             jwks: RwLock::new(None),
+            refresh_state: Mutex::new(RefreshState::default()),
         }
     }
 
@@ -166,19 +174,41 @@ impl JwtVerifier {
     }
 
     async fn jwks(&self, force_refresh: bool) -> AppResult<Arc<JwkSet>> {
-        let cached = {
-            let guard = self.jwks.read().await;
-            guard
-                .as_ref()
-                .map(|cached| (cached.set.clone(), cached.fetched_at))
-        };
+        if !force_refresh {
+            if let Some((set, fetched_at)) = self.cached_jwks().await {
+                if fetched_at.elapsed() < JWKS_CACHE_TTL {
+                    return Ok(set);
+                }
+            }
+        }
 
+        // Serialize refreshes so concurrent cache misses or attacker-controlled
+        // unknown kids cannot fan out into one JWKS request per API request.
+        let mut refresh_state = self.refresh_state.lock().await;
+        let cached = self.cached_jwks().await;
+
+        // Another waiter may have refreshed the cache while this task was
+        // waiting for the refresh lock.
         if !force_refresh {
             if let Some((set, fetched_at)) = &cached {
                 if fetched_at.elapsed() < JWKS_CACHE_TTL {
                     return Ok(set.clone());
                 }
             }
+        } else {
+            let now = Instant::now();
+            if !forced_refresh_allowed(refresh_state.last_forced_attempt, now) {
+                log::debug!("Skipping forced JWKS refresh during refresh cooldown");
+                if let Some((set, _)) = cached {
+                    return Ok(set);
+                }
+                return Err(AppError::ServiceUnavailable(
+                    "Authentication key refresh is temporarily throttled".into(),
+                ));
+            }
+            // Record attempts, not only successes, so an unavailable JWKS
+            // endpoint cannot be hammered through repeated forced refreshes.
+            refresh_state.last_forced_attempt = Some(now);
         }
 
         match self.fetch_jwks().await {
@@ -208,6 +238,13 @@ impl JwtVerifier {
         }
     }
 
+    async fn cached_jwks(&self) -> Option<(Arc<JwkSet>, Instant)> {
+        let guard = self.jwks.read().await;
+        guard
+            .as_ref()
+            .map(|cached| (cached.set.clone(), cached.fetched_at))
+    }
+
     async fn fetch_jwks(&self) -> AppResult<JwkSet> {
         let response = self
             .client
@@ -229,6 +266,15 @@ impl JwtVerifier {
             log::error!("Authentication JWKS response could not be decoded: {error}");
             AppError::ServiceUnavailable("Authentication key service returned invalid data".into())
         })
+    }
+}
+
+fn forced_refresh_allowed(last_attempt: Option<Instant>, now: Instant) -> bool {
+    match last_attempt {
+        Some(last_attempt) => {
+            now.saturating_duration_since(last_attempt) >= JWKS_FORCED_REFRESH_COOLDOWN
+        }
+        None => true,
     }
 }
 
@@ -370,6 +416,21 @@ mod tests {
         assert!(matches!(
             verifier().decode_claims(INVALID_SUBJECT_TOKEN, &key()),
             Err(ClaimsVerificationError::InvalidIdentity)
+        ));
+    }
+
+    #[test]
+    fn forced_jwks_refresh_is_throttled_within_cooldown() {
+        let first_attempt = Instant::now();
+
+        assert!(forced_refresh_allowed(None, first_attempt));
+        assert!(!forced_refresh_allowed(
+            Some(first_attempt),
+            first_attempt + JWKS_FORCED_REFRESH_COOLDOWN - Duration::from_millis(1)
+        ));
+        assert!(forced_refresh_allowed(
+            Some(first_attempt),
+            first_attempt + JWKS_FORCED_REFRESH_COOLDOWN
         ));
     }
 }
