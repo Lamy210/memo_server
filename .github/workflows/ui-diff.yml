@@ -96,13 +96,22 @@ jobs:
             exit 1
           fi
 
+          curl -fsS http://127.0.0.1:4173/api/v1/memos \
+            | python3 -c 'import json, sys; data=json.load(sys.stdin); assert len(data) == 3'
+
           rm -rf candidate/frontend/.visual-output
           mkdir -p candidate/frontend/.visual-output artifacts
 
-          (
+          if ! (
             cd candidate/frontend
             node tests/visual/capture.js
-          )
+          ); then
+            mkdir -p artifacts/baseline
+            cp -a candidate/frontend/.visual-output/. artifacts/baseline/ 2>/dev/null || true
+            cat "$RUNNER_TEMP/ui-base-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/ui-base.log" >&2 || true
+            exit 1
+          fi
 
           mv candidate/frontend/.visual-output artifacts/baseline
 
@@ -150,13 +159,22 @@ jobs:
             exit 1
           fi
 
+          curl -fsS http://127.0.0.1:4173/api/v1/memos \
+            | python3 -c 'import json, sys; data=json.load(sys.stdin); assert len(data) == 3'
+
           rm -rf candidate/frontend/.visual-output
           mkdir -p candidate/frontend/.visual-output
 
-          (
+          if ! (
             cd candidate/frontend
             node tests/visual/capture.js
-          )
+          ); then
+            mkdir -p artifacts/candidate
+            cp -a candidate/frontend/.visual-output/. artifacts/candidate/ 2>/dev/null || true
+            cat "$RUNNER_TEMP/ui-candidate-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/ui-candidate.log" >&2 || true
+            exit 1
+          fi
 
           mv candidate/frontend/.visual-output artifacts/candidate
 
