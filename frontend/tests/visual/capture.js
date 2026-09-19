@@ -1,13 +1,7 @@
 import { chromium } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
 
-const baseUrl = process.env.BASE_URL;
-const outputDir = process.env.OUTPUT_DIR;
-
-if (!baseUrl || !outputDir) {
-  throw new Error('BASE_URL and OUTPUT_DIR are required');
-}
+const BASE_URL = 'http://127.0.0.1:4173';
+const OUTPUT_DIR = '.visual-output';
 
 const memoId = '018f0c7a-8b7d-7f25-b239-36e6d9f9b001';
 const userId = '12345678-1234-1234-1234-123456789012';
@@ -46,6 +40,11 @@ const memos = [
   }
 ];
 
+/**
+ * @param {import('@playwright/test').Route} route
+ * @param {unknown} body
+ * @param {number} [status]
+ */
 function json(route, body, status = 200) {
   return route.fulfill({
     status,
@@ -54,6 +53,7 @@ function json(route, body, status = 200) {
   });
 }
 
+/** @param {import('@playwright/test').Page} page */
 async function installApiFixture(page) {
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
@@ -93,18 +93,22 @@ async function installApiFixture(page) {
   });
 }
 
+/**
+ * @param {import('@playwright/test').Page} page
+ * @param {string} pathname
+ * @param {string} filename
+ * @param {string} readyText
+ */
 async function capture(page, pathname, filename, readyText) {
-  await page.goto(new URL(pathname, baseUrl).toString(), { waitUntil: 'networkidle' });
+  await page.goto(new URL(pathname, BASE_URL).toString(), { waitUntil: 'networkidle' });
   await page.getByText(readyText, { exact: false }).first().waitFor();
   await page.evaluate(() => document.fonts.ready);
   await page.screenshot({
-    path: path.join(outputDir, filename),
+    path: `${OUTPUT_DIR}/${filename}`,
     fullPage: true,
     animations: 'disabled'
   });
 }
-
-await mkdir(outputDir, { recursive: true });
 
 const browser = await chromium.launch();
 const context = await browser.newContext({
