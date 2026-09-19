@@ -252,17 +252,19 @@ fi
 
 projection_recovered=0
 for _ in $(seq 1 60); do
-  outage_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Outage%20write&page=1&limit=20')"
-  deleted_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Resilience%20memo&page=1&limit=20')"
-  if jq -e --arg id "$outage_id" '.items | any(.id == $id)' <<<"$outage_search" >/dev/null \
-    && jq -e --arg id "$resilience_id" '.items | all(.id != $id)' <<<"$deleted_search" >/dev/null; then
-    projection_recovered=1
-    break
+  if outage_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Outage%20write&page=1&limit=20' 2>/dev/null)" \
+    && deleted_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Resilience%20memo&page=1&limit=20' 2>/dev/null)"; then
+    if jq -e --arg id "$outage_id" '.items | any(.id == $id)' <<<"$outage_search" >/dev/null \
+      && jq -e --arg id "$resilience_id" '.items | all(.id != $id)' <<<"$deleted_search" >/dev/null; then
+      projection_recovered=1
+      break
+    fi
   fi
   sleep 2
 done
 if [[ "$projection_recovered" -ne 1 ]]; then
   echo "Projection reconciliation did not recover create/delete changes after secondary stores returned" >&2
+  docker compose logs --no-color --tail=200 backend elasticsearch redis >&2 || true
   exit 1
 fi
 
