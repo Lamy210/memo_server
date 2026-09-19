@@ -308,6 +308,20 @@ impl ScyllaDB {
     }
 }
 
+
+#[async_trait]
+impl HealthProbe for ScyllaDB {
+    async fn check(&self) -> bool {
+        match self.health_check().await {
+            Ok(healthy) => healthy,
+            Err(error) => {
+                log::warn!("Scylla health check failed: {error}");
+                false
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,18 +345,5 @@ mod tests {
 
         scylla.delete(user_id, memo.id).await.unwrap();
         assert!(!scylla.exists(user_id, memo.id).await.unwrap());
-    }
-}
-
-#[async_trait]
-impl HealthProbe for ScyllaDB {
-    async fn check(&self) -> bool {
-        match self.health_check().await {
-            Ok(healthy) => healthy,
-            Err(error) => {
-                log::warn!("Scylla health check failed: {error}");
-                false
-            }
-        }
     }
 }
