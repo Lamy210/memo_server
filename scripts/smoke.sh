@@ -163,6 +163,17 @@ curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$resilience_id" >/dev/nu
 curl -fsS "http://localhost:8083/api/v1/memos/$outage_id" \
   | jq -e --arg id "$outage_id" '.id == $id' >/dev/null
 
+docker compose restart backend >/dev/null
+wait_for_url "http://localhost:8083/api/v1/health/live" 60 3
+restart_degraded="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
+jq -e '
+  .ready == true
+  and .status == "degraded"
+  and .checks.scylla == "ok"
+  and .checks.redis == "down"
+  and .checks.elasticsearch == "down"
+' <<<"$restart_degraded" >/dev/null
+
 docker compose start redis elasticsearch >/dev/null
 
 recovery_ready=0

@@ -23,9 +23,11 @@ impl ElasticsearchClient {
         })?;
         let client = Elasticsearch::new(transport);
 
-        Self::initialize_index(&client).await?;
-
         Ok(Self { client })
+    }
+
+    async fn ensure_index(&self) -> AppResult<()> {
+        Self::initialize_index(&self.client).await
     }
 
     async fn initialize_index(client: &Elasticsearch) -> AppResult<()> {
@@ -86,6 +88,8 @@ impl ElasticsearchClient {
     }
 
     pub async fn index_memo(&self, memo: &Memo) -> AppResult<()> {
+        self.ensure_index().await?;
+
         let doc = json!({
             "id": memo.id.to_string(),
             "title": memo.title,
@@ -125,6 +129,8 @@ impl ElasticsearchClient {
         page: usize,
         limit: usize,
     ) -> AppResult<MemoSearchPage> {
+        self.ensure_index().await?;
+
         let mut should_clauses: Vec<Value> = vec![];
 
         if !query.is_empty() {
@@ -246,6 +252,8 @@ impl ElasticsearchClient {
     }
 
     pub async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
+        self.ensure_index().await?;
+
         let query_body = json!({
             "query": {
                 "term": {
