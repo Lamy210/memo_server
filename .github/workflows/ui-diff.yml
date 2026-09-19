@@ -57,24 +57,42 @@ jobs:
         run: |
           set -euo pipefail
 
+          python3 candidate/scripts/ui-fixture-server.py --port 18080 >"$RUNNER_TEMP/ui-base-fixture.log" 2>&1 &
+          fixture_pid=$!
+
           (
             cd baseline/frontend
-            BACKEND_URL=http://127.0.0.1:9 pnpm dev --host 127.0.0.1 --port 4173
+            BACKEND_URL=http://127.0.0.1:18080 \
+            DEVELOPMENT_USER_ID=12345678-1234-1234-1234-123456789012 \
+            VITE_DEVELOPMENT_USER_ID=12345678-1234-1234-1234-123456789012 \
+              pnpm dev --host 127.0.0.1 --port 4173
           ) >"$RUNNER_TEMP/ui-base.log" 2>&1 &
           server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 
-          ready=0
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            kill "$fixture_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          fixture_ready=0
+          frontend_ready=0
           for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then
+              fixture_ready=1
+            fi
             if curl -fsS http://127.0.0.1:4173/memos >/dev/null; then
-              ready=1
+              frontend_ready=1
+            fi
+            if [[ "$fixture_ready" -eq 1 && "$frontend_ready" -eq 1 ]]; then
               break
             fi
             sleep 1
           done
 
-          if [[ "$ready" -ne 1 ]]; then
-            cat "$RUNNER_TEMP/ui-base.log" >&2
+          if [[ "$fixture_ready" -ne 1 || "$frontend_ready" -ne 1 ]]; then
+            cat "$RUNNER_TEMP/ui-base-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/ui-base.log" >&2 || true
             exit 1
           fi
 
@@ -93,24 +111,42 @@ jobs:
         run: |
           set -euo pipefail
 
+          python3 candidate/scripts/ui-fixture-server.py --port 18080 >"$RUNNER_TEMP/ui-candidate-fixture.log" 2>&1 &
+          fixture_pid=$!
+
           (
             cd candidate/frontend
-            BACKEND_URL=http://127.0.0.1:9 pnpm dev --host 127.0.0.1 --port 4173
+            BACKEND_URL=http://127.0.0.1:18080 \
+            DEVELOPMENT_USER_ID=12345678-1234-1234-1234-123456789012 \
+            VITE_DEVELOPMENT_USER_ID=12345678-1234-1234-1234-123456789012 \
+              pnpm dev --host 127.0.0.1 --port 4173
           ) >"$RUNNER_TEMP/ui-candidate.log" 2>&1 &
           server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 
-          ready=0
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            kill "$fixture_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          fixture_ready=0
+          frontend_ready=0
           for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then
+              fixture_ready=1
+            fi
             if curl -fsS http://127.0.0.1:4173/memos >/dev/null; then
-              ready=1
+              frontend_ready=1
+            fi
+            if [[ "$fixture_ready" -eq 1 && "$frontend_ready" -eq 1 ]]; then
               break
             fi
             sleep 1
           done
 
-          if [[ "$ready" -ne 1 ]]; then
-            cat "$RUNNER_TEMP/ui-candidate.log" >&2
+          if [[ "$fixture_ready" -ne 1 || "$frontend_ready" -ne 1 ]]; then
+            cat "$RUNNER_TEMP/ui-candidate-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/ui-candidate.log" >&2 || true
             exit 1
           fi
 
@@ -128,6 +164,12 @@ jobs:
         run: |
           bash candidate/scripts/ui-diff.sh artifacts/baseline artifacts/candidate artifacts/diff
           cat artifacts/diff/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect visual test logs
+        if: always()
+        run: |
+          mkdir -p artifacts/logs
+          cp "$RUNNER_TEMP"/ui-*.log artifacts/logs/ 2>/dev/null || true
 
       - name: Upload UI diff artifact
         id: upload
