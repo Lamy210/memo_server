@@ -8,7 +8,7 @@ const memoId = '018f0c7a-8b7d-7f25-b239-36e6d9f9b001';
  * @param {import('@playwright/test').Page} page
  * @param {string} pathname
  * @param {string} filename
- * @param {string} readyText
+ * @param {string | RegExp} readyText
  */
 async function capture(page, pathname, filename, readyText) {
   await page.goto(new URL(pathname, BASE_URL).toString(), { waitUntil: 'networkidle' });
