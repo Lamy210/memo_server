@@ -9,6 +9,7 @@ import {
 describe('buildBackendRequestHeaders', () => {
   it('strips browser credentials and injects the server-controlled development identity', () => {
     const source = new Headers({
+      'Accept-Encoding': 'gzip',
       Authorization: 'Bearer attacker-token',
       Connection: 'keep-alive',
       Cookie: 'session=browser-secret',
@@ -20,6 +21,7 @@ describe('buildBackendRequestHeaders', () => {
       developmentUserId: '12345678-1234-1234-1234-123456789012'
     });
 
+    expect(headers.get('accept-encoding')).toBeNull();
     expect(headers.get('authorization')).toBeNull();
     expect(headers.get('cookie')).toBeNull();
     expect(headers.get('connection')).toBeNull();
@@ -67,11 +69,13 @@ describe('buildFrontendResponseHeaders', () => {
       new Headers({
         Connection: 'keep-alive',
         'Content-Type': 'application/json',
+        'Set-Cookie': 'memo=should-not-cross-boundary',
         'Transfer-Encoding': 'chunked'
       })
     );
 
     expect(headers.get('connection')).toBeNull();
+    expect(headers.get('set-cookie')).toBeNull();
     expect(headers.get('transfer-encoding')).toBeNull();
     expect(headers.get('content-type')).toBe('application/json');
   });
