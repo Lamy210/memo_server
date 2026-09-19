@@ -75,12 +75,24 @@ pnpm build
 
 `pnpm check` がSvelte/TypeScriptの主要な静的検証です。現在のESLintはJavaScript設定ファイルを対象とし、Svelte/TypeScriptの構文検証は `svelte-check` が担当します。
 
+### UI visual diff
+
+PRでは `UI Diff / Visual diff` workflow がbase revisionとPR revisionを同じChromium環境で起動し、`/memos`、検索、作成、編集画面を固定fixtureで撮影します。UI差分はreview用のinformational signalであり、pixel差分そのものではPRをfailさせません。
+
+workflow artifact `ui-diff-pr-<number>` には各画面の以下を含めます。
+
+- `baseline/`: PR baseのスクリーンショット
+- `candidate/`: PR headのスクリーンショット
+- `diff/`: pixel diff、before/after横並び画像、changed-pixel summary
+
+UIを変更するPRでは、通常のFrontend CIに加えてこのartifactを確認してください。撮影や比較処理自体が壊れた場合はworkflowをfailさせます。
+
 ## Tests
 
 - bugfixでは、可能な限り不具合を再現するテストを先に追加します。
 - domain/applicationのロジックは外部サービスなしで検証できる形を優先します。
 - ScyllaDBなど実サービスが必要なintegration testは、通常のunit testと区別してください。
-- UI変更では、少なくとも `pnpm check` と `pnpm build` を通してください。
+- UI変更では、少なくとも `pnpm check` と `pnpm build` を通し、PRの `UI Diff` artifactも確認してください。
 
 ## Docker Compose
 
@@ -116,5 +128,6 @@ PRをReadyにする前に以下を確認します。
 - user/tenant境界が維持されている
 - `cargo fmt`, `clippy`, testsが通る
 - `pnpm check`, lint, tests, buildが通る
+- UI変更を含む場合、`UI Diff` artifactのbefore/after/diffを確認した
 - Docker定義がvalidでapplication imageをbuildできる
 - READMEまたは設計資料に影響する変更が反映されている
