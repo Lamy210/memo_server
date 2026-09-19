@@ -52,6 +52,11 @@ page.on('pageerror', (error) => console.error(`browser:pageerror: ${error.messag
 await capture(page, '/memos', 'memos.png', 'UI regression baseline');
 await capture(page, '/memos/search?query=architecture', 'search.png', 'Architecture notes');
 await capture(page, '/memos/new', 'new.png', '新しいメモ');
-await capture(page, `/memos/${memoId}/edit`, 'edit.png', 'UI regression baseline');
+await capture(
+  page,
+  `/memos/${memoId}/edit`,
+  'edit.png',
+  'Visual regression testing keeps layout changes reviewable before merge.'
+);
 
 await browser.close();
