@@ -1,4 +1,4 @@
-use memo_app_backend::config::{AppConfig, AuthMode, ConfigError};
+use memo_app_backend::config::{AppConfig, AuthConfig, ConfigError};
 
 fn development_vars() -> Vec<(String, String)> {
     vec![("AUTH_MODE".to_string(), "development".to_string())]
@@ -13,7 +13,7 @@ fn uses_service_defaults_in_explicit_development_mode() {
     assert_eq!(config.redis_uri, "redis://127.0.0.1:6379");
     assert_eq!(config.elasticsearch_uri, "http://127.0.0.1:9200");
     assert_eq!(config.port, 8080);
-    assert_eq!(config.auth.mode, AuthMode::Development);
+    assert_eq!(config.auth, AuthConfig::Development);
 }
 
 #[test]
@@ -67,14 +67,12 @@ fn accepts_complete_jwt_resource_server_configuration() {
     ])
     .expect("complete JWT resource server configuration should be valid");
 
-    assert_eq!(config.auth.mode, AuthMode::Jwt);
     assert_eq!(
-        config.auth.issuer.as_deref(),
-        Some("https://auth.memo.example.com")
-    );
-    assert_eq!(config.auth.audience.as_deref(), Some("memo-api"));
-    assert_eq!(
-        config.auth.jwks_uri.as_deref(),
-        Some("https://auth.memo.example.com/.well-known/jwks.json")
+        config.auth,
+        AuthConfig::Jwt {
+            issuer: "https://auth.memo.example.com".to_string(),
+            audience: "memo-api".to_string(),
+            jwks_uri: "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+        }
     );
 }
