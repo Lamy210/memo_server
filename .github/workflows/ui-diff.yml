@@ -85,14 +85,14 @@ jobs:
           set -euo pipefail
           (
             cd candidate/frontend
-            BACKEND_URL=http://127.0.0.1:9 pnpm dev --host 127.0.0.1 --port 4174
+            BACKEND_URL=http://127.0.0.1:9 pnpm dev --host 127.0.0.1 --port 4173
           ) >"$RUNNER_TEMP/ui-candidate.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
 
           ready=0
           for _ in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:4174/memos >/dev/null; then
+            if curl -fsS http://127.0.0.1:4173/memos >/dev/null; then
               ready=1
               break
             fi
@@ -104,7 +104,7 @@ jobs:
             exit 1
           fi
 
-          BASE_URL=http://127.0.0.1:4174           OUTPUT_DIR="$GITHUB_WORKSPACE/artifacts/candidate"             node "$GITHUB_WORKSPACE/candidate/frontend/tests/visual/capture.js"
+          BASE_URL=http://127.0.0.1:4173           OUTPUT_DIR="$GITHUB_WORKSPACE/artifacts/candidate"             node "$GITHUB_WORKSPACE/candidate/frontend/tests/visual/capture.js"
 
       - name: Compare screenshots
         run: |
