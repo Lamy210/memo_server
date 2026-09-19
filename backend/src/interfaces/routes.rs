@@ -1,4 +1,4 @@
-use crate::interfaces::rest::memo;
+use crate::interfaces::rest::{health, memo};
 use actix_web::web;
 
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
@@ -13,6 +13,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     .route("/{id}", web::patch().to(memo::update_memo))
                     .route("/{id}", web::delete().to(memo::delete_memo)),
             )
-            .route("/health", web::get().to(memo::health_check)),
+            .route("/health", web::get().to(health::live))
+            .service(
+                web::scope("/health")
+                    .route("/live", web::get().to(health::live))
+                    .route("/ready", web::get().to(health::ready)),
+            ),
     );
 }

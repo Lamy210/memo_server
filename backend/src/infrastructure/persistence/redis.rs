@@ -1,10 +1,14 @@
 use std::time::Duration;
 
-use redis::{AsyncCommands, Client, RedisError};
+use async_trait::async_trait;
+use redis::{AsyncCommands, Client};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::error;
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    application::health::HealthProbe,
+    error::{AppError, AppResult},
+};
 
 pub struct RedisCache {
     client: Client,
@@ -86,6 +90,18 @@ impl RedisCache {
         })
     }
 
+    pub async fn health_check(&self) -> AppResult<bool> {
+        let mut connection = self.connection().await?;
+        let pong: String = redis::cmd("PING")
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| {
+                error!("Redis health check failed: {error}");
+                AppError::DatabaseError(error.to_string())
+            })?;
+        Ok(pong == "PONG")
+    }
+
     async fn connection(&self) -> AppResult<redis::aio::MultiplexedConnection> {
         self.client
             .get_multiplexed_async_connection()
@@ -97,8 +113,15 @@ impl RedisCache {
     }
 }
 
-pub async fn health_check(redis_client: &Client) -> Result<(), RedisError> {
-    let mut connection = redis_client.get_multiplexed_async_connection().await?;
-    let _: String = redis::cmd("PING").query_async(&mut connection).await?;
-    Ok(())
+#[async_trait]
+impl HealthProbe for RedisCache {
+    async fn check(&self) -> bool {
+        match self.health_check().await {
+            Ok(healthy) => healthy,
+            Err(error) => {
+                log::warn!("Redis health check failed: {error}");
+                false
+            }
+        }
+    }
 }
