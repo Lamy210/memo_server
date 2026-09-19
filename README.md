@@ -27,7 +27,8 @@ docker compose up --build
 起動後:
 
 - Frontend: http://localhost:3001
-- Backend health: http://localhost:8083/api/v1/health
+- Backend liveness: http://localhost:8083/api/v1/health/live
+- Backend readiness: http://localhost:8083/api/v1/health/ready
 - Elasticsearch: http://localhost:9200
 - ScyllaDB: localhost:9042
 - Redis: localhost:6379
@@ -67,13 +68,29 @@ Base path は `/api/v1` です。
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | Liveness |
+| `GET` | `/health` | Legacy liveness alias |
+| `GET` | `/health/live` | Process liveness |
+| `GET` | `/health/ready` | Dependency-aware readiness |
 | `GET` | `/memos` | 一覧 |
 | `POST` | `/memos` | 作成 |
 | `GET` | `/memos/{id}` | 取得 |
 | `PATCH` | `/memos/{id}` | 更新 |
 | `DELETE` | `/memos/{id}` | 削除 |
 | `GET` | `/memos/search` | 検索 |
+
+### Health / readiness
+
+`/health/live` はプロセスがHTTPリクエストを処理できることだけを確認します。Docker Composeのbackend healthcheckもこのendpointを利用するため、任意のsecondary store障害だけではbackendコンテナをunhealthyにしません。
+
+`/health/ready` は依存サービスを最大2秒で並行probeし、次の状態を返します。
+
+| State | HTTP | ScyllaDB | Redis / Elasticsearch | Meaning |
+| --- | ---: | --- | --- | --- |
+| `ready` | 200 | healthy | healthy | 全機能を利用可能 |
+| `degraded` | 200 | healthy | 1つ以上down | CRUDは利用可能。cache/search projectionは縮退 |
+| `unavailable` | 503 | down | any | authoritative storeへ安全にアクセスできないためreadyではない |
+
+ScyllaDBがauthoritative storeです。Redisはcache、Elasticsearchは再構築可能なsearch projectionとして扱うため、secondary store障害だけではcore CRUDのreadinessを落としません。
 
 ## ローカル品質チェック
 
