@@ -55,7 +55,10 @@ fn oidc_mode_requires_all_resource_server_settings() {
 fn accepts_complete_oidc_resource_server_configuration() {
     let config = AppConfig::from_vars([
         ("AUTH_MODE".to_string(), "oidc".to_string()),
-        ("AUTH_ISSUER".to_string(), "https://auth.example.com".to_string()),
+        (
+            "AUTH_ISSUER".to_string(),
+            "https://auth.example.com".to_string(),
+        ),
         ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
         (
             "AUTH_JWKS_URI".to_string(),
@@ -65,7 +68,10 @@ fn accepts_complete_oidc_resource_server_configuration() {
     .expect("complete OIDC resource server configuration should be valid");
 
     assert_eq!(config.auth.mode, AuthMode::Oidc);
-    assert_eq!(config.auth.issuer.as_deref(), Some("https://auth.example.com"));
+    assert_eq!(
+        config.auth.issuer.as_deref(),
+        Some("https://auth.example.com")
+    );
     assert_eq!(config.auth.audience.as_deref(), Some("memo-api"));
     assert_eq!(
         config.auth.jwks_uri.as_deref(),
