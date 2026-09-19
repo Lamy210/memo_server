@@ -3,7 +3,7 @@ use std::{io, sync::Arc};
 use actix_web::{middleware, web::Data, App, HttpServer};
 
 use crate::{
-    application::memo::service::MemoService,
+    application::{health::HealthService, memo::service::MemoService},
     config::AppConfig,
     infrastructure::{
         persistence::{elasticsearch::ElasticsearchClient, redis::RedisCache, scylla::ScyllaDB},
@@ -34,6 +34,11 @@ impl Application {
                 .map_err(|error| io::Error::other(error.to_string()))?,
         );
 
+        let health_service = Data::new(HealthService::new(
+            scylla.clone(),
+            redis.clone(),
+            elasticsearch.clone(),
+        ));
         let memo_repository = Arc::new(MemoRepositoryImpl::new(scylla, redis, elasticsearch));
         let memo_service = Data::new(MemoService::new(memo_repository));
         let development_user_id = Data::new(config.development_user_id);
@@ -44,6 +49,7 @@ impl Application {
                 .wrap(middleware::Logger::default())
                 .wrap(middleware::Compress::default())
                 .app_data(memo_service.clone())
+                .app_data(health_service.clone())
                 .app_data(development_user_id.clone())
                 .configure(configure_routes)
         })
