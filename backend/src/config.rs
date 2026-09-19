@@ -9,17 +9,13 @@ const DEFAULT_ELASTICSEARCH_URI: &str = "http://127.0.0.1:9200";
 const DEFAULT_PORT: u16 = 8080;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AuthMode {
+pub enum AuthConfig {
     Development,
-    Jwt,
-}
-
-#[derive(Debug, Clone)]
-pub struct AuthConfig {
-    pub mode: AuthMode,
-    pub issuer: Option<String>,
-    pub audience: Option<String>,
-    pub jwks_uri: Option<String>,
+    Jwt {
+        issuer: String,
+        audience: String,
+        jwks_uri: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -81,17 +77,11 @@ impl AppConfig {
             .to_ascii_lowercase();
 
         let auth = match auth_mode_value.as_str() {
-            "development" => AuthConfig {
-                mode: AuthMode::Development,
-                issuer: None,
-                audience: None,
-                jwks_uri: None,
-            },
-            "jwt" => AuthConfig {
-                mode: AuthMode::Jwt,
-                issuer: Some(required_jwt_setting(&vars, "AUTH_ISSUER")?),
-                audience: Some(required_jwt_setting(&vars, "AUTH_AUDIENCE")?),
-                jwks_uri: Some(required_jwt_setting(&vars, "AUTH_JWKS_URI")?),
+            "development" => AuthConfig::Development,
+            "jwt" => AuthConfig::Jwt {
+                issuer: required_jwt_setting(&vars, "AUTH_ISSUER")?,
+                audience: required_jwt_setting(&vars, "AUTH_AUDIENCE")?,
+                jwks_uri: required_jwt_setting(&vars, "AUTH_JWKS_URI")?,
             },
             _ => return Err(ConfigError::InvalidAuthMode(auth_mode_value)),
         };
