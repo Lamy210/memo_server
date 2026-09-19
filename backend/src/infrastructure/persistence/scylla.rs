@@ -24,16 +24,17 @@ type MemoRow = (
     DateTime<Utc>,
     i32,
 );
-type ProjectionRetryRow = (Uuid, Uuid, Uuid);
+type ProjectionRetryRow = (Uuid, Uuid, i32);
 
 pub const PROJECTION_RETRY_BUCKETS: i32 = 16;
+pub const PROJECTION_DELETE_TARGET: i32 = -1;
 
 #[derive(Debug, Clone)]
 pub struct ProjectionRetry {
     pub bucket: i32,
-    pub event_id: Uuid,
     pub user_id: Uuid,
     pub memo_id: Uuid,
+    pub target_version: i32,
 }
 
 pub struct ScyllaDB {
@@ -107,19 +108,19 @@ impl ScyllaDB {
 
         session
             .query_unpaged(
-                "CREATE TABLE IF NOT EXISTS memo_app.projection_retries (\
+                "CREATE TABLE IF NOT EXISTS memo_app.projection_intents (\
                     bucket int,\
-                    event_id uuid,\
-                    user_id uuid,\
                     memo_id uuid,\
-                    PRIMARY KEY ((bucket), event_id)\
+                    user_id uuid,\
+                    target_version int,\
+                    PRIMARY KEY ((bucket), memo_id)\
                 )",
                 &[],
             )
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to create projection_retries table: {error}"
+                    "Failed to create projection_intents table: {error}"
                 ))
             })?;
 
@@ -180,7 +181,7 @@ impl ScyllaDB {
             })?;
         let enqueue_projection_retry = session
             .prepare(
-                "INSERT INTO memo_app.projection_retries (bucket, event_id, user_id, memo_id) \
+                "INSERT INTO memo_app.projection_intents (bucket, memo_id, user_id, target_version) \
                  VALUES (?, ?, ?, ?)",
             )
             .await
@@ -191,7 +192,7 @@ impl ScyllaDB {
             })?;
         let list_projection_retries = session
             .prepare(
-                "SELECT event_id, user_id, memo_id FROM memo_app.projection_retries \
+                "SELECT memo_id, user_id, target_version FROM memo_app.projection_intents \
                  WHERE bucket = ? LIMIT 32",
             )
             .await
@@ -201,7 +202,10 @@ impl ScyllaDB {
                 ))
             })?;
         let acknowledge_projection_retry = session
-            .prepare("DELETE FROM memo_app.projection_retries WHERE bucket = ? AND event_id = ?")
+            .prepare(
+                "DELETE FROM memo_app.projection_intents \
+                 WHERE bucket = ? AND memo_id = ? IF target_version = ?",
+            )
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
@@ -349,23 +353,29 @@ impl ScyllaDB {
         &self,
         user_id: Uuid,
         memo_id: Uuid,
+        target_version: i32,
     ) -> AppResult<ProjectionRetry> {
         let event = ProjectionRetry {
             bucket: projection_retry_bucket(memo_id),
-            event_id: Uuid::new_v4(),
             user_id,
             memo_id,
+            target_version,
         };
 
         self.session
             .execute_unpaged(
                 &self.prepared_statements.enqueue_projection_retry,
-                (event.bucket, event.event_id, event.user_id, event.memo_id),
+                (
+                    event.bucket,
+                    event.memo_id,
+                    event.user_id,
+                    event.target_version,
+                ),
             )
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to enqueue projection reconciliation: {error}"
+                    "Failed to persist projection reconciliation intent: {error}"
                 ))
             })?;
 
@@ -379,50 +389,63 @@ impl ScyllaDB {
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to fetch projection reconciliation events: {error}"
+                    "Failed to fetch projection reconciliation intents: {error}"
                 ))
             })?;
         let rows = result.into_rows_result().map_err(|error| {
             AppError::DatabaseError(format!(
-                "Failed to read projection reconciliation events: {error}"
+                "Failed to read projection reconciliation intents: {error}"
             ))
         })?;
         let typed_rows = rows.rows::<ProjectionRetryRow>().map_err(|error| {
             AppError::DatabaseError(format!(
-                "Failed to type-check projection reconciliation events: {error}"
+                "Failed to type-check projection reconciliation intents: {error}"
             ))
         })?;
 
         typed_rows
             .map(|row| {
-                row.map(|(event_id, user_id, memo_id)| ProjectionRetry {
+                row.map(|(memo_id, user_id, target_version)| ProjectionRetry {
                     bucket,
-                    event_id,
                     user_id,
                     memo_id,
+                    target_version,
                 })
                 .map_err(|error| {
                     AppError::DatabaseError(format!(
-                        "Failed to deserialize projection reconciliation event: {error}"
+                        "Failed to deserialize projection reconciliation intent: {error}"
                     ))
                 })
             })
             .collect()
     }
 
-    pub async fn acknowledge_projection_retry(&self, event: &ProjectionRetry) -> AppResult<()> {
-        self.session
+    pub async fn acknowledge_projection_retry(&self, event: &ProjectionRetry) -> AppResult<bool> {
+        let result = self
+            .session
             .execute_unpaged(
                 &self.prepared_statements.acknowledge_projection_retry,
-                (event.bucket, event.event_id),
+                (event.bucket, event.memo_id, event.target_version),
             )
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to acknowledge projection reconciliation event: {error}"
+                    "Failed to acknowledge projection reconciliation intent: {error}"
                 ))
             })?;
-        Ok(())
+        let rows = result.into_rows_result().map_err(|error| {
+            AppError::DatabaseError(format!(
+                "Failed to read projection acknowledgement result: {error}"
+            ))
+        })?;
+        let (applied, _current_target_version) =
+            rows.first_row::<(bool, Option<i32>)>().map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to deserialize projection acknowledgement result: {error}"
+                ))
+            })?;
+
+        Ok(applied)
     }
 
     pub async fn health_check(&self) -> AppResult<bool> {

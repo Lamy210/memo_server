@@ -7,7 +7,11 @@ use crate::{
     domain::memo::{entity::Memo, repository::MemoRepository},
     error::AppResult,
     infrastructure::{
-        persistence::{elasticsearch::ElasticsearchClient, redis::RedisCache, scylla::ScyllaDB},
+        persistence::{
+            elasticsearch::ElasticsearchClient,
+            redis::RedisCache,
+            scylla::{ScyllaDB, PROJECTION_DELETE_TARGET},
+        },
         reconciliation::ProjectionReconciler,
     },
 };
@@ -72,13 +76,23 @@ impl MemoRepository for MemoRepositoryImpl {
     }
 
     async fn save(&self, memo: &Memo) -> AppResult<()> {
+        let intent = self
+            .reconciler
+            .prepare(memo.user_id, memo.id, memo.version)
+            .await?;
         self.scylla.save(memo).await?;
-        self.reconciler.schedule(memo.user_id, memo.id).await
+        self.reconciler.reconcile_now(&intent).await;
+        Ok(())
     }
 
     async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()> {
+        let intent = self
+            .reconciler
+            .prepare(user_id, id, PROJECTION_DELETE_TARGET)
+            .await?;
         self.scylla.delete(user_id, id).await?;
-        self.reconciler.schedule(user_id, id).await
+        self.reconciler.reconcile_now(&intent).await;
+        Ok(())
     }
 
     async fn search(

@@ -8,7 +8,9 @@ use crate::{
     infrastructure::persistence::{
         elasticsearch::ElasticsearchClient,
         redis::RedisCache,
-        scylla::{ProjectionRetry, ScyllaDB, PROJECTION_RETRY_BUCKETS},
+        scylla::{
+            ProjectionRetry, ScyllaDB, PROJECTION_DELETE_TARGET, PROJECTION_RETRY_BUCKETS,
+        },
     },
 };
 
@@ -34,22 +36,26 @@ impl ProjectionReconciler {
         }
     }
 
-    pub async fn schedule(&self, user_id: Uuid, memo_id: Uuid) -> AppResult<()> {
-        let event = self
-            .scylla
-            .enqueue_projection_retry(user_id, memo_id)
-            .await?;
+    pub async fn prepare(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+        target_version: i32,
+    ) -> AppResult<ProjectionRetry> {
+        self.scylla
+            .enqueue_projection_retry(user_id, memo_id, target_version)
+            .await
+    }
 
-        if let Err(error) = self.reconcile_event(&event).await {
+    pub async fn reconcile_now(&self, event: &ProjectionRetry) {
+        if let Err(error) = self.reconcile_event(event).await {
             log::warn!(
-                "Projection reconciliation deferred: event_id={} memo_id={} user_id={} error={error}",
-                event.event_id,
+                "Projection reconciliation deferred: memo_id={} user_id={} target_version={} error={error}",
                 event.memo_id,
-                event.user_id
+                event.user_id,
+                event.target_version
             );
         }
-
-        Ok(())
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -67,10 +73,10 @@ impl ProjectionReconciler {
             for event in events {
                 if let Err(error) = self.reconcile_event(&event).await {
                     log::warn!(
-                        "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} error={error}",
-                        event.event_id,
+                        "Projection reconciliation retry failed: memo_id={} user_id={} target_version={} error={error}",
                         event.memo_id,
-                        event.user_id
+                        event.user_id,
+                        event.target_version
                     );
                 }
             }
@@ -81,6 +87,10 @@ impl ProjectionReconciler {
 
     async fn reconcile_event(&self, event: &ProjectionRetry) -> AppResult<()> {
         let memo = self.scylla.find_by_id(event.user_id, event.memo_id).await?;
+
+        if !target_reached(event, memo.as_ref()) {
+            return Ok(());
+        }
 
         let mut failures = Vec::new();
         let cache_key = cache_key(event.user_id, event.memo_id);
@@ -108,8 +118,17 @@ impl ProjectionReconciler {
             return Err(AppError::DatabaseError(failures.join("; ")));
         }
 
-        self.scylla.acknowledge_projection_retry(event).await
+        let _ = self.scylla.acknowledge_projection_retry(event).await?;
+        Ok(())
     }
+}
+
+fn target_reached(event: &ProjectionRetry, memo: Option<&crate::domain::memo::entity::Memo>) -> bool {
+    if event.target_version == PROJECTION_DELETE_TARGET {
+        return memo.is_none();
+    }
+
+    memo.is_some_and(|memo| memo.version >= event.target_version)
 }
 
 fn cache_key(user_id: Uuid, memo_id: Uuid) -> String {
@@ -119,6 +138,55 @@ fn cache_key(user_id: Uuid, memo_id: Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn retry(user_id: Uuid, memo_id: Uuid, target_version: i32) -> ProjectionRetry {
+        ProjectionRetry {
+            bucket: ScyllaDB::projection_retry_bucket(memo_id),
+            user_id,
+            memo_id,
+            target_version,
+        }
+    }
+
+    #[test]
+    fn present_target_waits_until_scylla_reaches_expected_version() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let event = retry(user_id, memo_id, 2);
+        let mut memo = crate::domain::memo::entity::Memo::new(
+            "title".into(),
+            "content".into(),
+            vec![],
+            user_id,
+        );
+        memo.id = memo_id;
+
+        assert!(!target_reached(&event, None));
+        assert!(!target_reached(&event, Some(&memo)));
+
+        memo.version = 2;
+        assert!(target_reached(&event, Some(&memo)));
+
+        memo.version = 3;
+        assert!(target_reached(&event, Some(&memo)));
+    }
+
+    #[test]
+    fn delete_target_waits_until_scylla_row_is_absent() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let event = retry(user_id, memo_id, PROJECTION_DELETE_TARGET);
+        let mut memo = crate::domain::memo::entity::Memo::new(
+            "title".into(),
+            "content".into(),
+            vec![],
+            user_id,
+        );
+        memo.id = memo_id;
+
+        assert!(!target_reached(&event, Some(&memo)));
+        assert!(target_reached(&event, None));
+    }
 
     #[test]
     fn cache_key_is_tenant_scoped() {
