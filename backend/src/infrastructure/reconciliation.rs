@@ -80,10 +80,7 @@ impl ProjectionReconciler {
     }
 
     async fn reconcile_event(&self, event: &ProjectionRetry) -> AppResult<()> {
-        let memo = self
-            .scylla
-            .find_by_id(event.user_id, event.memo_id)
-            .await?;
+        let memo = self.scylla.find_by_id(event.user_id, event.memo_id).await?;
 
         let mut failures = Vec::new();
         let cache_key = cache_key(event.user_id, event.memo_id);
