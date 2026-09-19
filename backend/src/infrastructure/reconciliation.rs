@@ -95,12 +95,12 @@ impl ProjectionReconciler {
         let mut failures = Vec::new();
         let cache_key = cache_key(event.user_id, event.memo_id);
 
-        match memo {
+        match memo.as_ref() {
             Some(memo) => {
-                if let Err(error) = self.elasticsearch.index_memo(&memo).await {
+                if let Err(error) = self.elasticsearch.index_memo(memo).await {
                     failures.push(format!("elasticsearch={error}"));
                 }
-                if let Err(error) = self.redis.set(&cache_key, &memo, Some(CACHE_TTL)).await {
+                if let Err(error) = self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await {
                     failures.push(format!("redis={error}"));
                 }
             }
