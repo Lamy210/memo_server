@@ -44,37 +44,37 @@ fn rejects_unknown_auth_mode() {
 }
 
 #[test]
-fn oidc_mode_requires_all_resource_server_settings() {
-    let error = AppConfig::from_vars([("AUTH_MODE".to_string(), "oidc".to_string())])
-        .expect_err("OIDC issuer must be configured");
+fn jwt_mode_requires_all_resource_server_settings() {
+    let error = AppConfig::from_vars([("AUTH_MODE".to_string(), "jwt".to_string())])
+        .expect_err("JWT issuer must be configured");
 
-    assert_eq!(error, ConfigError::MissingOidcSetting("AUTH_ISSUER"));
+    assert_eq!(error, ConfigError::MissingJwtSetting("AUTH_ISSUER"));
 }
 
 #[test]
-fn accepts_complete_oidc_resource_server_configuration() {
+fn accepts_complete_jwt_resource_server_configuration() {
     let config = AppConfig::from_vars([
-        ("AUTH_MODE".to_string(), "oidc".to_string()),
+        ("AUTH_MODE".to_string(), "jwt".to_string()),
         (
             "AUTH_ISSUER".to_string(),
-            "https://auth.example.com".to_string(),
+            "https://auth.memo.example.com".to_string(),
         ),
         ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
         (
             "AUTH_JWKS_URI".to_string(),
-            "https://auth.example.com/.well-known/jwks.json".to_string(),
+            "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
         ),
     ])
-    .expect("complete OIDC resource server configuration should be valid");
+    .expect("complete JWT resource server configuration should be valid");
 
-    assert_eq!(config.auth.mode, AuthMode::Oidc);
+    assert_eq!(config.auth.mode, AuthMode::Jwt);
     assert_eq!(
         config.auth.issuer.as_deref(),
-        Some("https://auth.example.com")
+        Some("https://auth.memo.example.com")
     );
     assert_eq!(config.auth.audience.as_deref(), Some("memo-api"));
     assert_eq!(
         config.auth.jwks_uri.as_deref(),
-        Some("https://auth.example.com/.well-known/jwks.json")
+        Some("https://auth.memo.example.com/.well-known/jwks.json")
     );
 }
