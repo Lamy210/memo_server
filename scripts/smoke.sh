@@ -72,15 +72,50 @@ version="$(jq -er '.version' <<<"$created")"
 
 memo_curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
 
-other_user_status="$(curl -sS   -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID"   -o /tmp/memo-other-user.json   -w '%{http_code}'   "http://localhost:8083/api/v1/memos/$memo_id")"
+other_user_status="$(curl -sS \
+  -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
+  -o /tmp/memo-other-user.json \
+  -w '%{http_code}' \
+  "http://localhost:8083/api/v1/memos/$memo_id")"
 if [[ "$other_user_status" != "404" ]]; then
   echo "Expected cross-user memo lookup to return 404, got $other_user_status" >&2
   cat /tmp/memo-other-user.json >&2 || true
   exit 1
 fi
 
-other_user_list="$(curl -fsS   -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID"   http://localhost:8083/api/v1/memos)"
+other_user_list="$(curl -fsS \
+  -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
+  http://localhost:8083/api/v1/memos)"
 jq -e --arg id "$memo_id" 'all(.id != $id)' <<<"$other_user_list" >/dev/null
+
+other_user_update_status="$(curl -sS \
+  -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
+  -H 'Content-Type: application/json' \
+  -X PATCH \
+  -d "{\"title\":\"cross-user update\",\"content\":\"must not apply\",\"tags\":[\"ci\"],\"version\":$version}" \
+  -o /tmp/memo-other-user-update.json \
+  -w '%{http_code}' \
+  "http://localhost:8083/api/v1/memos/$memo_id")"
+if [[ "$other_user_update_status" != "404" ]]; then
+  echo "Expected cross-user memo update to return 404, got $other_user_update_status" >&2
+  cat /tmp/memo-other-user-update.json >&2 || true
+  exit 1
+fi
+
+other_user_delete_status="$(curl -sS \
+  -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
+  -X DELETE \
+  -o /tmp/memo-other-user-delete.json \
+  -w '%{http_code}' \
+  "http://localhost:8083/api/v1/memos/$memo_id")"
+if [[ "$other_user_delete_status" != "404" ]]; then
+  echo "Expected cross-user memo delete to return 404, got $other_user_delete_status" >&2
+  cat /tmp/memo-other-user-delete.json >&2 || true
+  exit 1
+fi
+
+memo_curl -fsS "http://localhost:8083/api/v1/memos/$memo_id" \
+  | jq -e --arg id "$memo_id" '.id == $id' >/dev/null
 
 docker compose restart backend >/dev/null
 wait_for_url "http://localhost:8083/api/v1/health" 60 3
