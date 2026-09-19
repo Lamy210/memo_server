@@ -6,6 +6,7 @@ use crate::{
     application::{health::HealthService, memo::service::MemoService},
     config::AppConfig,
     infrastructure::{
+        auth::AuthService,
         persistence::{elasticsearch::ElasticsearchClient, redis::RedisCache, scylla::ScyllaDB},
         reconciliation::ProjectionReconciler,
         repositories::memo::MemoRepositoryImpl,
@@ -53,7 +54,7 @@ impl Application {
         ));
         let _projection_reconciler_task = tokio::spawn(projection_reconciler.run());
         let memo_service = Data::new(MemoService::new(memo_repository));
-        let development_user_id = Data::new(config.development_user_id);
+        let auth_service = Data::new(AuthService::new(config.auth));
         let port = config.port;
 
         let server = HttpServer::new(move || {
@@ -62,7 +63,7 @@ impl Application {
                 .wrap(middleware::Compress::default())
                 .app_data(memo_service.clone())
                 .app_data(health_service.clone())
-                .app_data(development_user_id.clone())
+                .app_data(auth_service.clone())
                 .configure(configure_routes)
         })
         .bind(("0.0.0.0", port))?
