@@ -59,4 +59,18 @@ await capture(
   'Visual regression testing keeps layout changes reviewable before merge.'
 );
 
+const scenarioResponse = await fetch('http://127.0.0.1:18080/__visual__/scenario/unauthorized', {
+  method: 'POST'
+});
+if (!scenarioResponse.ok) {
+  throw new Error(`Failed to activate unauthorized visual fixture: ${scenarioResponse.status}`);
+}
+
+await capture(
+  page,
+  '/memos?visual=unauthorized',
+  'unauthorized.png',
+  /Unauthorized visual fixture|認証セッション/
+);
+
 await browser.close();
