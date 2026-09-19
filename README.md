@@ -14,7 +14,7 @@ Rust/Actix Web + SvelteKit で構成したメモアプリケーションです�
 ScyllaDB をメモ本体の永続化先とし、Redis はキャッシュ、Elasticsearch は検索用インデックスとして利用します。
 
 > [!NOTE]
-> メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、Frontend がリクエストごとに `X-Development-User-Id` を付与します。本番では `AUTH_MODE=oidc` を使用してください。
+> メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、Frontend がリクエストごとに `X-Development-User-Id` を付与します。本番では独立した認証サービスを運用し、`AUTH_MODE=jwt` でそのサービスが発行するaccess tokenを検証します。
 
 ## 起動
 
@@ -84,7 +84,9 @@ Health endpoint 以外の memo API は認証が必要です。
 
 ローカル開発では `AUTH_MODE=development` を明示し、各リクエストに `X-Development-User-Id: <UUID>` を付与します。固定ユーザーをBackendへ暗黙注入する方式は使用しません。Compose のFrontendは `VITE_DEVELOPMENT_USER_ID` からこのheaderを付与します。
 
-本番では `AUTH_MODE=oidc` を使用します。BackendはOAuth2 Bearer access tokenをRS256で検証し、設定したissuer・audience・expiry・subjectを検証します。署名鍵は `AUTH_JWKS_URI` のJWKSから取得し、key rotation時はJWKSを再取得します。認証基盤の契約に合わせ、JWT `sub` をcanonical platform user UUIDとしてmemo ownershipに利用します。
+本番では `AUTH_MODE=jwt` を使用します。Backendは専用の認証サービスが発行したBearer access tokenをRS256で検証し、設定したissuer・audience・expiry・issued-at・subjectを検証します。署名鍵は `AUTH_JWKS_URI` のJWKSから取得し、key rotation時はJWKSを再取得します。JWT `sub` はmemo_server内のuser UUIDとして扱います。
+
+memo_serverは認証サービスと独立して運用します。Oryや共通認証基盤との連携は前提にせず、認証サービス側がユーザー登録・ログイン・セッション/refresh token・パスワード/MFA等を担当し、memo_serverはaccess tokenの検証とuser境界の適用だけを担当します。
 
 ```bash
 curl -H 'Authorization: Bearer <access-token>' \
@@ -160,8 +162,8 @@ Backend が利用する主な環境変数:
 | `ELASTICSEARCH_URL` | `http://127.0.0.1:9200` |
 | `PORT` | `8080` |
 | `AUTH_MODE` | 必須。Composeでは `development` |
-| `AUTH_ISSUER` | `AUTH_MODE=oidc` のとき必須 |
-| `AUTH_AUDIENCE` | `AUTH_MODE=oidc` のとき必須。consuming serviceのOAuth2 client ID |
+| `AUTH_ISSUER` | `AUTH_MODE=jwt` のとき必須 |
+| `AUTH_AUDIENCE` | `AUTH_MODE=jwt` のとき必須。memo API向けのaudience値 |
 | `AUTH_JWKS_URI` | `AUTH_MODE=oidc` のとき必須 |
 
 `DATABASE_URL` は既存環境との互換目的で Scylla の接続先としても読み取りますが、新規設定では `SCYLLA_URI` を使ってください。
@@ -170,6 +172,6 @@ Frontend の Vite 開発サーバーは `BACKEND_URL` を `/api` のproxy先と�
 
 ## スコープ
 
-現在のMVPはOIDC resource-server認証までを対象にします。添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクル、認証境界、開発・CI基盤を安定させ、その後に拡張します。
+現在のMVPは専用Authサービスが発行するJWTのresource-server検証までを対象にします。添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクル、認証境界、開発・CI基盤を安定させ、その後に拡張します。
 
 開発規約とPR運用は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
