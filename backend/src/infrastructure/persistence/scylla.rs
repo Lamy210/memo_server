@@ -201,9 +201,7 @@ impl ScyllaDB {
                 ))
             })?;
         let acknowledge_projection_retry = session
-            .prepare(
-                "DELETE FROM memo_app.projection_retries WHERE bucket = ? AND event_id = ?",
-            )
+            .prepare("DELETE FROM memo_app.projection_retries WHERE bucket = ? AND event_id = ?")
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
@@ -374,10 +372,7 @@ impl ScyllaDB {
         Ok(event)
     }
 
-    pub async fn list_projection_retries(
-        &self,
-        bucket: i32,
-    ) -> AppResult<Vec<ProjectionRetry>> {
+    pub async fn list_projection_retries(&self, bucket: i32) -> AppResult<Vec<ProjectionRetry>> {
         let result = self
             .session
             .execute_unpaged(&self.prepared_statements.list_projection_retries, (bucket,))
