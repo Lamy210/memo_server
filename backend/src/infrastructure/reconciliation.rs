@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -133,12 +133,14 @@ impl ProjectionReconciler {
 
     async fn run_once(&self) -> AppResult<()> {
         let mut pending_intents = 0_u64;
+        let mut seen_event_ids = HashSet::new();
 
         for bucket in 0..PROJECTION_RETRY_BUCKETS {
             let events = self.scylla.list_projection_retries(bucket).await?;
             pending_intents = pending_intents.saturating_add(events.len() as u64);
 
             for event in events {
+                seen_event_ids.insert(event.event_id);
                 let now = Instant::now();
                 if !self.is_due(event.event_id, now) {
                     continue;
@@ -177,6 +179,7 @@ impl ProjectionReconciler {
             }
         }
 
+        self.prune_retry_states(&seen_event_ids);
         self.counters
             .pending_intents
             .store(pending_intents, Ordering::Relaxed);
@@ -302,6 +305,11 @@ impl ProjectionReconciler {
         self.retry_states().remove(&event_id);
     }
 
+    fn prune_retry_states(&self, seen_event_ids: &HashSet<Uuid>) {
+        self.retry_states()
+            .retain(|event_id, _| seen_event_ids.contains(event_id));
+    }
+
     fn retry_states(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, RetryState>> {
         self.retry_states
             .lock()
@@ -310,7 +318,7 @@ impl ProjectionReconciler {
 
     fn emit_metrics_if_due(&self) {
         let pass = self.counters.passes.fetch_add(1, Ordering::Relaxed) + 1;
-        if !pass.is_multiple_of(METRICS_LOG_EVERY_PASSES) {
+        if pass % METRICS_LOG_EVERY_PASSES != 0 {
             return;
         }
 
