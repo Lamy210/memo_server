@@ -11,6 +11,7 @@ use crate::{
         service::MemoService,
     },
     error::AppResult,
+    interfaces::auth::AuthenticatedUser,
 };
 
 #[derive(Debug, Deserialize)]
@@ -33,18 +34,18 @@ fn default_limit() -> usize {
 
 pub async fn create_memo(
     service: Data<MemoService>,
-    development_user_id: Data<Uuid>,
+    authenticated_user: AuthenticatedUser,
     payload: Json<CreateMemoDto>,
 ) -> AppResult<HttpResponse> {
     let memo = service
-        .create_memo(payload.into_inner(), *development_user_id.get_ref())
+        .create_memo(payload.into_inner(), authenticated_user.0.user_id)
         .await?;
     Ok(HttpResponse::Created().json(memo))
 }
 
 pub async fn update_memo(
     service: Data<MemoService>,
-    development_user_id: Data<Uuid>,
+    authenticated_user: AuthenticatedUser,
     id: Path<Uuid>,
     payload: Json<UpdateMemoDto>,
 ) -> AppResult<HttpResponse> {
@@ -52,7 +53,7 @@ pub async fn update_memo(
         .update_memo(
             id.into_inner(),
             payload.into_inner(),
-            *development_user_id.get_ref(),
+            authenticated_user.0.user_id,
         )
         .await?;
     Ok(HttpResponse::Ok().json(memo))
@@ -60,46 +61,46 @@ pub async fn update_memo(
 
 pub async fn get_memo(
     service: Data<MemoService>,
-    development_user_id: Data<Uuid>,
+    authenticated_user: AuthenticatedUser,
     id: Path<Uuid>,
 ) -> AppResult<HttpResponse> {
     let memo = service
-        .get_memo(id.into_inner(), *development_user_id.get_ref())
+        .get_memo(id.into_inner(), authenticated_user.0.user_id)
         .await?;
     Ok(HttpResponse::Ok().json(memo))
 }
 
 pub async fn delete_memo(
     service: Data<MemoService>,
-    development_user_id: Data<Uuid>,
+    authenticated_user: AuthenticatedUser,
     id: Path<Uuid>,
 ) -> AppResult<HttpResponse> {
     service
-        .delete_memo(id.into_inner(), *development_user_id.get_ref())
+        .delete_memo(id.into_inner(), authenticated_user.0.user_id)
         .await?;
     Ok(HttpResponse::NoContent().finish())
 }
 
 pub async fn list_memos(
     service: Data<MemoService>,
-    development_user_id: Data<Uuid>,
+    authenticated_user: AuthenticatedUser,
 ) -> AppResult<HttpResponse> {
     let memos = service
-        .get_user_memos(*development_user_id.get_ref())
+        .get_user_memos(authenticated_user.0.user_id)
         .await?;
     Ok(HttpResponse::Ok().json(memos))
 }
 
 pub async fn search_memos(
     service: Data<MemoService>,
-    development_user_id: Data<Uuid>,
+    authenticated_user: AuthenticatedUser,
     query_params: Query<SearchParams>,
 ) -> AppResult<HttpResponse> {
     let result = service
         .search_memos(
             &query_params.query.clone().unwrap_or_default(),
             query_params.tag.clone(),
-            *development_user_id.get_ref(),
+            authenticated_user.0.user_id,
             query_params.page,
             query_params.limit,
         )
