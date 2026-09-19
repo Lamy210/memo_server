@@ -308,7 +308,6 @@ impl ScyllaDB {
     }
 }
 
-
 #[async_trait]
 impl HealthProbe for ScyllaDB {
     async fn check(&self) -> bool {
