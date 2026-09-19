@@ -52,6 +52,7 @@ struct PreparedStatements {
     enqueue_projection_retry: PreparedStatement,
     list_projection_retries: PreparedStatement,
     acknowledge_projection_retry: PreparedStatement,
+    ensure_projection_retry_if_absent: PreparedStatement,
 }
 
 impl ScyllaDB {
@@ -212,6 +213,17 @@ impl ScyllaDB {
                     "Failed to prepare acknowledge_projection_retry: {error}"
                 ))
             })?;
+        let ensure_projection_retry_if_absent = session
+            .prepare(
+                "INSERT INTO memo_app.projection_intents \
+                 (bucket, memo_id, user_id, target_version) VALUES (?, ?, ?, ?) IF NOT EXISTS",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to prepare ensure_projection_retry_if_absent: {error}"
+                ))
+            })?;
 
         Ok(PreparedStatements {
             find_by_id,
@@ -223,6 +235,7 @@ impl ScyllaDB {
             enqueue_projection_retry,
             list_projection_retries,
             acknowledge_projection_retry,
+            ensure_projection_retry_if_absent,
         })
     }
 
@@ -446,6 +459,27 @@ impl ScyllaDB {
             })?;
 
         Ok(applied)
+    }
+
+    pub async fn ensure_projection_retry_if_absent(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+        target_version: i32,
+    ) -> AppResult<()> {
+        let bucket = projection_retry_bucket(memo_id);
+        self.session
+            .execute_unpaged(
+                &self.prepared_statements.ensure_projection_retry_if_absent,
+                (bucket, memo_id, user_id, target_version),
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to restore projection reconciliation intent: {error}"
+                ))
+            })?;
+        Ok(())
     }
 
     pub async fn health_check(&self) -> AppResult<bool> {

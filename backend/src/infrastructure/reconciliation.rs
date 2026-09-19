@@ -116,8 +116,29 @@ impl ProjectionReconciler {
             return Err(AppError::DatabaseError(failures.join("; ")));
         }
 
-        let _ = self.scylla.acknowledge_projection_retry(event).await?;
+        let acknowledged = self.scylla.acknowledge_projection_retry(event).await?;
+        if !acknowledged {
+            self.restore_current_intent_if_absent(event.user_id, event.memo_id)
+                .await?;
+        }
+
         Ok(())
+    }
+
+    async fn restore_current_intent_if_absent(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<()> {
+        let current = self.scylla.find_by_id(user_id, memo_id).await?;
+        let target_version = current
+            .as_ref()
+            .map(|memo| memo.version)
+            .unwrap_or(PROJECTION_DELETE_TARGET);
+
+        self.scylla
+            .ensure_projection_retry_if_absent(user_id, memo_id, target_version)
+            .await
     }
 }
 
