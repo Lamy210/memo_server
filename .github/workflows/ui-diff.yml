@@ -56,6 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           (
             cd baseline/frontend
             BACKEND_URL=http://127.0.0.1:9 pnpm dev --host 127.0.0.1 --port 4173
@@ -77,12 +78,21 @@ jobs:
             exit 1
           fi
 
-          BASE_URL=http://127.0.0.1:4173           OUTPUT_DIR="$GITHUB_WORKSPACE/artifacts/baseline"             node "$GITHUB_WORKSPACE/candidate/frontend/tests/visual/capture.js"
+          rm -rf candidate/frontend/.visual-output
+          mkdir -p candidate/frontend/.visual-output artifacts
+
+          (
+            cd candidate/frontend
+            node tests/visual/capture.js
+          )
+
+          mv candidate/frontend/.visual-output artifacts/baseline
 
       - name: Capture PR UI
         shell: bash
         run: |
           set -euo pipefail
+
           (
             cd candidate/frontend
             BACKEND_URL=http://127.0.0.1:9 pnpm dev --host 127.0.0.1 --port 4173
@@ -104,11 +114,19 @@ jobs:
             exit 1
           fi
 
-          BASE_URL=http://127.0.0.1:4173           OUTPUT_DIR="$GITHUB_WORKSPACE/artifacts/candidate"             node "$GITHUB_WORKSPACE/candidate/frontend/tests/visual/capture.js"
+          rm -rf candidate/frontend/.visual-output
+          mkdir -p candidate/frontend/.visual-output
+
+          (
+            cd candidate/frontend
+            node tests/visual/capture.js
+          )
+
+          mv candidate/frontend/.visual-output artifacts/candidate
 
       - name: Compare screenshots
         run: |
-          bash candidate/scripts/ui-diff.sh             artifacts/baseline             artifacts/candidate             artifacts/diff
+          bash candidate/scripts/ui-diff.sh artifacts/baseline artifacts/candidate artifacts/diff
           cat artifacts/diff/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload UI diff artifact
