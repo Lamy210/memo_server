@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildBackendRequestHeaders,
   buildBackendUrl,
-  buildFrontendResponseHeaders
+  buildFrontendResponseHeaders,
+  InvalidProxyPathError
 } from './memoProxy';
 
 describe('buildBackendRequestHeaders', () => {
@@ -56,11 +57,24 @@ describe('buildBackendRequestHeaders', () => {
 });
 
 describe('buildBackendUrl', () => {
-  it('preserves the API path and query string', () => {
+  it('preserves the API namespace, encoded path and query string', () => {
     expect(
-      buildBackendUrl('http://backend:8080', 'memos/search', '?query=hello&page=2').toString()
-    ).toBe('http://backend:8080/api/v1/memos/search?query=hello&page=2');
+      buildBackendUrl(
+        'http://backend:8080',
+        'memos/folder name',
+        '?query=hello&page=2'
+      ).toString()
+    ).toBe('http://backend:8080/api/v1/memos/folder%20name?query=hello&page=2');
   });
+
+  it.each(['../admin', 'memos/../health', 'memos//admin', 'memos\\admin'])(
+    'rejects path traversal or ambiguous path %s',
+    (path) => {
+      expect(() => buildBackendUrl('http://backend:8080', path, '')).toThrow(
+        InvalidProxyPathError
+      );
+    }
+  );
 });
 
 describe('buildFrontendResponseHeaders', () => {

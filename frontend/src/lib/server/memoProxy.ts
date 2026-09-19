@@ -28,9 +28,18 @@ const RESPONSE_HEADERS_TO_STRIP = [
   'upgrade'
 ] as const;
 
+const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
+
 export interface BackendAuthContext {
   developmentUserId?: string;
   bearerToken?: string;
+}
+
+export class InvalidProxyPathError extends Error {
+  constructor() {
+    super('Invalid memo API proxy path');
+    this.name = 'InvalidProxyPathError';
+  }
 }
 
 export function buildBackendRequestHeaders(
@@ -60,9 +69,29 @@ export function buildFrontendResponseHeaders(source: Headers): Headers {
   return headers;
 }
 
+function encodeProxyPath(path: string | undefined): string {
+  if (!path) return '';
+
+  const segments = path.split('/');
+  if (
+    segments.some(
+      (segment) =>
+        segment.length === 0 ||
+        segment === '.' ||
+        segment === '..' ||
+        INVALID_PROXY_PATH_CHARACTER.test(segment)
+    )
+  ) {
+    throw new InvalidProxyPathError();
+  }
+
+  return segments.map((segment) => encodeURIComponent(segment)).join('/');
+}
+
 export function buildBackendUrl(backendUrl: string, path: string | undefined, search: string): URL {
-  const base = backendUrl.endsWith('/') ? backendUrl : `${backendUrl}/`;
-  const target = new URL(`api/v1/${path ?? ''}`, base);
+  const target = new URL(backendUrl);
+  target.pathname = `/api/v1/${encodeProxyPath(path)}`;
   target.search = search;
+  target.hash = '';
   return target;
 }

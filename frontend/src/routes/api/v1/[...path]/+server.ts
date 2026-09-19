@@ -5,7 +5,8 @@ import type { RequestHandler } from './$types';
 import {
   buildBackendRequestHeaders,
   buildBackendUrl,
-  buildFrontendResponseHeaders
+  buildFrontendResponseHeaders,
+  InvalidProxyPathError
 } from '$lib/server/memoProxy';
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8080';
@@ -13,11 +14,23 @@ const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8080';
 const proxyRequest: RequestHandler = async ({ request, params, url, fetch, locals }) => {
   const backendUrl = env.BACKEND_URL?.trim() || DEFAULT_BACKEND_URL;
   const developmentUserId = dev ? env.DEVELOPMENT_USER_ID?.trim() || undefined : undefined;
-  const target = buildBackendUrl(backendUrl, params.path, url.search);
-  const headers = buildBackendRequestHeaders(request.headers, {
-    developmentUserId,
-    bearerToken: locals.accessToken
-  });
+
+  let target: URL;
+  try {
+    target = buildBackendUrl(backendUrl, params.path, url.search);
+  } catch (error) {
+    if (error instanceof InvalidProxyPathError) {
+      return Response.json({ message: 'Invalid memo API path' }, { status: 400 });
+    }
+
+    console.error('Memo backend proxy target is invalid', error);
+    return Response.json({ message: 'Memo backend is unavailable' }, { status: 502 });
+  }
+
+  const headers = buildBackendRequestHeaders(
+    request.headers,
+    dev ? { developmentUserId } : { bearerToken: locals.accessToken }
+  );
   const method = request.method.toUpperCase();
   const body =
     method === 'GET' || method === 'HEAD'
