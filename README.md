@@ -92,6 +92,16 @@ Base path は `/api/v1` です。
 
 ScyllaDBがauthoritative storeです。Redisはcache、Elasticsearchは再構築可能なsearch projectionとして扱うため、secondary store障害だけではcore CRUDのreadinessを落としません。
 
+### Projection reconciliation
+
+メモの作成・更新・削除では、Redis/Elasticsearchへ反映するためのdurable projection intentをScyllaDBへprimary mutationより先に一意eventとして保存します。保存時は対象のmemo version、削除時はdelete targetを持ちます。primary mutation自体が失敗した場合、そのmutation専用eventだけをcleanupするため、並行mutationのintentを上書きしません。
+
+通常はprimary mutation直後に同期を試みます。RedisまたはElasticsearchが利用できない場合でもprimary CRUDは成功し、intentはScyllaDBに残ります。background reconcilerが約2秒間隔で再試行し、backend再起動後も未処理intentを再開します。
+
+reconcilerは現在のScyllaDB状態をsource of truthとして同期します。保存intentはScyllaDBがtarget version以上へ到達するまで、削除intentは行が消えるまでackしません。各intentは一意eventなのでworker同士が別mutationのintentを削除しません。secondaryへ書いた直後にScyllaDBを再確認し、同期中にsource stateが変わっていればcorrective intentを先に追加してから古いeventをackするため、stale workerによる書き戻しも最終的に再収束します。
+
+この仕組みにより、secondary store停止中のcreate/update/deleteは、secondary store復帰後にcache/search projectionへ収束します。
+
 ## ローカル品質チェック
 
 Backend:
