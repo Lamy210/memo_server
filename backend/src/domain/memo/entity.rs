@@ -2,6 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const MAX_MEMO_TITLE_CHARS: usize = 160;
+pub const MAX_MEMO_TAG_CHARS: usize = 64;
+pub const MAX_MEMO_TAGS: usize = 10;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memo {
     pub id: Uuid,
@@ -50,9 +54,12 @@ impl Memo {
 
     pub fn validate(&self) -> bool {
         !self.title.trim().is_empty()
+            && self.title.chars().count() <= MAX_MEMO_TITLE_CHARS
             && !self.content.trim().is_empty()
-            && self.tags.len() <= 10
-            && self.tags.iter().all(|tag| !tag.trim().is_empty())
+            && self.tags.len() <= MAX_MEMO_TAGS
+            && self.tags.iter().all(|tag| {
+                !tag.trim().is_empty() && tag.chars().count() <= MAX_MEMO_TAG_CHARS
+            })
     }
 }
 
@@ -71,6 +78,54 @@ mod tests {
 
         assert!(memo.validate());
         assert_eq!(memo.version, 1);
+    }
+
+    #[test]
+    fn rejects_title_over_character_limit() {
+        let memo = Memo::new(
+            "a".repeat(MAX_MEMO_TITLE_CHARS + 1),
+            "content".to_string(),
+            vec![],
+            Uuid::new_v4(),
+        );
+
+        assert!(!memo.validate());
+    }
+
+    #[test]
+    fn accepts_multibyte_title_at_character_limit() {
+        let memo = Memo::new(
+            "雪".repeat(MAX_MEMO_TITLE_CHARS),
+            "content".to_string(),
+            vec![],
+            Uuid::new_v4(),
+        );
+
+        assert!(memo.validate());
+    }
+
+    #[test]
+    fn rejects_tag_over_character_limit() {
+        let memo = Memo::new(
+            "title".to_string(),
+            "content".to_string(),
+            vec!["t".repeat(MAX_MEMO_TAG_CHARS + 1)],
+            Uuid::new_v4(),
+        );
+
+        assert!(!memo.validate());
+    }
+
+    #[test]
+    fn rejects_more_than_maximum_tags() {
+        let memo = Memo::new(
+            "title".to_string(),
+            "content".to_string(),
+            vec!["tag".to_string(); MAX_MEMO_TAGS + 1],
+            Uuid::new_v4(),
+        );
+
+        assert!(!memo.validate());
     }
 
     #[test]
