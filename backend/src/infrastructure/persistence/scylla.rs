@@ -470,17 +470,7 @@ impl MemoAuthoritativeStore for ScyllaDB {
         let event =
             ScyllaDB::enqueue_projection_intent(self, memo.user_id, memo.id, memo.version).await?;
 
-        if let Err(error) = ScyllaDB::save(self, memo).await {
-            if let Err(cleanup_error) = ScyllaDB::acknowledge_projection_intent(self, &event).await {
-                log::warn!(
-                    "Failed to clean up projection intent after Scylla save failure: event_id={} memo_id={} user_id={} error={cleanup_error}",
-                    event.event_id,
-                    event.memo_id,
-                    event.user_id
-                );
-            }
-            return Err(error);
-        }
+        ScyllaDB::save(self, memo).await?;
 
         Ok(event)
     }
@@ -493,17 +483,7 @@ impl MemoAuthoritativeStore for ScyllaDB {
         let event =
             ScyllaDB::enqueue_projection_intent(self, user_id, id, PROJECTION_DELETE_TARGET).await?;
 
-        if let Err(error) = ScyllaDB::delete(self, user_id, id).await {
-            if let Err(cleanup_error) = ScyllaDB::acknowledge_projection_intent(self, &event).await {
-                log::warn!(
-                    "Failed to clean up projection intent after Scylla delete failure: event_id={} memo_id={} user_id={} error={cleanup_error}",
-                    event.event_id,
-                    event.memo_id,
-                    event.user_id
-                );
-            }
-            return Err(error);
-        }
+        ScyllaDB::delete(self, user_id, id).await?;
 
         Ok(event)
     }
