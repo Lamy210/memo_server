@@ -1,3 +1,9 @@
+import {
+  isMemoMutationMethod,
+  MEMO_BFF_MUTATION_HEADER,
+  MEMO_BFF_MUTATION_VALUE
+} from '$lib/security/memoBff';
+
 const REQUEST_HEADERS_TO_STRIP = [
   'accept-encoding',
   'authorization',
@@ -12,7 +18,8 @@ const REQUEST_HEADERS_TO_STRIP = [
   'trailer',
   'transfer-encoding',
   'upgrade',
-  'x-development-user-id'
+  'x-development-user-id',
+  'x-schnee-memo-request'
 ] as const;
 
 const RESPONSE_HEADERS_TO_STRIP = [
@@ -94,4 +101,27 @@ export function buildBackendUrl(backendUrl: string, path: string | undefined, se
   target.search = search;
   target.hash = '';
   return target;
+}
+
+
+export function isTrustedMemoProxyRequest(
+  method: string,
+  headers: Headers,
+  requestUrl: URL
+): boolean {
+  if (!isMemoMutationMethod(method)) return true;
+
+  if (headers.get(MEMO_BFF_MUTATION_HEADER) !== MEMO_BFF_MUTATION_VALUE) {
+    return false;
+  }
+
+  const origin = headers.get('origin');
+  if (!origin) return false;
+
+  try {
+    const parsedOrigin = new URL(origin);
+    return parsedOrigin.origin === origin && parsedOrigin.origin === requestUrl.origin;
+  } catch {
+    return false;
+  }
 }
