@@ -87,6 +87,10 @@ workflow artifact `ui-diff-pr-<number>` には各画面の以下を含めます�
 
 UIを変更するPRでは、通常のFrontend CIに加えてこのartifactを確認してください。撮影や比較処理自体が壊れた場合はworkflowをfailさせます。
 
+同じcaptureでは `@axe-core/playwright` でWCAG 2.x系ルールを検査し、baseと候補画面のserious/critical違反を比較します。既存違反はbaselineとして許容しますが、新しいルールが出た場合、または同じルールで影響ノード数が増えた場合はUI Diffをfailさせます。違反が減る変更はそのまま通過します。
+
+Svelte componentは `@testing-library/svelte` + Vitest + jsdomで、DOM実装詳細ではなくrole/text/linkなど利用者から観測できる振る舞いを優先して検証します。
+
 ## Tests
 
 - bugfixでは、可能な限り不具合を再現するテストを先に追加します。

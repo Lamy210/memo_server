@@ -1,8 +1,36 @@
+import AxeBuilder from '@axe-core/playwright';
 import { chromium } from '@playwright/test';
 
 const BASE_URL = 'http://127.0.0.1:4173';
 const OUTPUT_DIR = '.visual-output';
 const memoId = '018f0c7a-8b7d-7f25-b239-36e6d9f9b001';
+
+/**
+ * Run axe in observation mode. Findings are surfaced in the workflow summary
+ * but do not fail the PR until the current UI baseline has been remediated.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} filename
+ */
+async function observeAccessibility(page, filename) {
+  const results = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+    .analyze();
+
+  const highImpact = results.violations.filter(
+    (violation) => violation.impact === 'serious' || violation.impact === 'critical'
+  );
+
+  console.log(
+    `A11Y ${filename}: violations=${results.violations.length}, serious_or_critical=${highImpact.length}`
+  );
+
+  for (const violation of highImpact) {
+    console.log(
+      `A11Y-DIAGNOSTIC ${filename}: ${violation.id} impact=${violation.impact} nodes=${violation.nodes.length} ${violation.helpUrl}`
+    );
+  }
+}
 
 /**
  * @param {import('@playwright/test').Page} page
@@ -28,6 +56,7 @@ async function capture(page, pathname, filename, readyText) {
   }
 
   await page.evaluate(() => document.fonts.ready);
+  await observeAccessibility(page, filename);
   await page.screenshot({
     path: `${OUTPUT_DIR}/${filename}`,
     fullPage: true,

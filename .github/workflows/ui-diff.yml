@@ -104,7 +104,7 @@ jobs:
 
           if ! (
             cd candidate/frontend
-            node tests/visual/capture.js
+            node tests/visual/capture.js 2>&1 | tee "$RUNNER_TEMP/ui-base-a11y.log"
           ); then
             mkdir -p artifacts/baseline
             cp -a candidate/frontend/.visual-output/. artifacts/baseline/ 2>/dev/null || true
@@ -167,7 +167,7 @@ jobs:
 
           if ! (
             cd candidate/frontend
-            node tests/visual/capture.js
+            node tests/visual/capture.js 2>&1 | tee "$RUNNER_TEMP/ui-candidate-a11y.log"
           ); then
             mkdir -p artifacts/candidate
             cp -a candidate/frontend/.visual-output/. artifacts/candidate/ 2>/dev/null || true
@@ -182,6 +182,18 @@ jobs:
         run: |
           bash candidate/scripts/ui-diff.sh artifacts/baseline artifacts/candidate artifacts/diff
           cat artifacts/diff/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compare accessibility findings
+        shell: bash
+        run: |
+          set +e
+          python3 candidate/scripts/a11y-diff.py \
+            "$RUNNER_TEMP/ui-base-a11y.log" \
+            "$RUNNER_TEMP/ui-candidate-a11y.log" \
+            artifacts/diff/a11y-summary.md
+          status=$?
+          cat artifacts/diff/a11y-summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Collect visual test logs
         if: always()
