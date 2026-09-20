@@ -21,14 +21,14 @@ export default defineConfig({
   reporter: [['line'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
   webServer: [
     {
-      command: 'python3 ../scripts/ui-fixture-server.py --port 18080',
+      command: 'exec python3 ../scripts/ui-fixture-server.py --port 18080',
       url: 'http://127.0.0.1:18080/healthz',
       reuseExistingServer: false,
       timeout: 30_000
     },
     {
       command:
-        'pnpm build && BACKEND_URL=http://127.0.0.1:18080 pnpm preview --host 127.0.0.1 --port 4173 --strictPort',
+        'pnpm build && exec env BACKEND_URL=http://127.0.0.1:18080 node ./node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4173 --strictPort',
       url: 'http://127.0.0.1:4173/memos',
       reuseExistingServer: false,
       timeout: 60_000
