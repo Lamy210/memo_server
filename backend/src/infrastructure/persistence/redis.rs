@@ -7,8 +7,11 @@ use tracing::error;
 
 use crate::{
     application::health::HealthProbe,
+    domain::memo::entity::Memo,
     error::{AppError, AppResult},
 };
+
+use super::ports::MemoCache;
 
 pub struct RedisCache {
     client: Client,
@@ -110,6 +113,30 @@ impl RedisCache {
                 error!("Failed to get Redis connection: {error}");
                 AppError::DatabaseError(error.to_string())
             })
+    }
+}
+
+#[async_trait]
+impl MemoCache for RedisCache {
+    async fn get_memo(&self, key: &str) -> AppResult<Option<Memo>> {
+        self.get::<Memo>(key).await
+    }
+
+    async fn set_memo(
+        &self,
+        key: &str,
+        memo: &Memo,
+        expiration: Option<Duration>,
+    ) -> AppResult<()> {
+        self.set(key, memo, expiration).await
+    }
+
+    async fn delete(&self, key: &str) -> AppResult<()> {
+        RedisCache::delete(self, key).await
+    }
+
+    async fn exists(&self, key: &str) -> AppResult<bool> {
+        RedisCache::exists(self, key).await
     }
 }
 
