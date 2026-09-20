@@ -486,5 +486,6 @@ Verified references as of 2026-09-21:
 - W3C Web Authentication Level 3 Recommendation, 2026-08-25: https://www.w3.org/TR/2026/REC-webauthn-3-20260825/
 - NIST FIPS 203 (ML-KEM): https://csrc.nist.gov/pubs/fips/203/final
 - NIST FIPS 204 (ML-DSA): https://csrc.nist.gov/pubs/fips/204/final
+- IETF RFC 10024, PQ/T hybrid key agreement for TLS 1.3 including X25519MLKEM768: https://www.rfc-editor.org/rfc/rfc10024.html
 - CRYPTREC 2026 update adding ML-KEM to the e-Government Recommended Ciphers List: https://www.cryptrec.go.jp/whatsnew.html
-- Cloudflare post-quantum origin TLS documentation: https://developers.cloudflare.com/ssl/post-quantum-cryptography/pqc-to-origin/
+- Cloudflare post-quantum origin TLS deployment documentation: https://developers.cloudflare.com/ssl/post-quantum-cryptography/pqc-to-origin/
