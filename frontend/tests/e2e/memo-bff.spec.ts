@@ -45,3 +45,25 @@ test('rejects a same-origin raw mutation that bypasses the shared API helper', a
 
   expect(status).toBe(403);
 });
+
+
+test('serves the frontend security header and CSP baseline', async ({ page }) => {
+  const response = await page.goto('/memos');
+  expect(response).not.toBeNull();
+
+  const headers = response ? await response.allHeaders() : {};
+  expect(headers['x-content-type-options']).toBe('nosniff');
+  expect(headers['x-frame-options']).toBe('DENY');
+  expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+  expect(headers['cross-origin-opener-policy']).toBe('same-origin');
+  expect(headers['cross-origin-resource-policy']).toBe('same-origin');
+  expect(headers['permissions-policy']).toContain('camera=()');
+
+  const csp = headers['content-security-policy'];
+  expect(csp).toBeDefined();
+  expect(csp).toContain("default-src 'self'");
+  expect(csp).toContain("script-src 'self'");
+  expect(csp).toContain("object-src 'none'");
+  expect(csp).toContain("frame-ancestors 'none'");
+  expect(csp).toContain("form-action 'self'");
+});
