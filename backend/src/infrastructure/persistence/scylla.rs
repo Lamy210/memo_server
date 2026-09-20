@@ -349,7 +349,7 @@ impl ScyllaDB {
     ) -> AppResult<ProjectionIntent> {
         let event = ProjectionIntent::new(user_id, memo_id, target);
         let bucket = projection_bucket(memo_id);
-        let target_version = projection_target_to_scylla(target);
+        let target_version = projection_target_to_scylla(target)?;
 
         self.session
             .execute_unpaged(
@@ -525,10 +525,13 @@ fn projection_bucket(memo_id: Uuid) -> i32 {
     (memo_id.as_u128() % PROJECTION_RETRY_BUCKETS as u128) as i32
 }
 
-fn projection_target_to_scylla(target: ProjectionTarget) -> i32 {
+fn projection_target_to_scylla(target: ProjectionTarget) -> AppResult<i32> {
     match target {
-        ProjectionTarget::Version(version) => version,
-        ProjectionTarget::Deleted => SCYLLA_PROJECTION_DELETE_TARGET,
+        ProjectionTarget::Version(version) if version > 0 => Ok(version),
+        ProjectionTarget::Version(version) => Err(AppError::DatabaseError(format!(
+            "Projection version must be positive, got {version}"
+        ))),
+        ProjectionTarget::Deleted => Ok(SCYLLA_PROJECTION_DELETE_TARGET),
     }
 }
 
@@ -568,6 +571,31 @@ mod tests {
 
         assert_eq!(first, second);
         assert!((0..PROJECTION_RETRY_BUCKETS).contains(&first));
+    }
+
+    #[test]
+    fn projection_target_encoding_is_explicit_and_validated() {
+        assert_eq!(
+            projection_target_to_scylla(ProjectionTarget::Version(3)).unwrap(),
+            3
+        );
+        assert_eq!(
+            projection_target_to_scylla(ProjectionTarget::Deleted).unwrap(),
+            SCYLLA_PROJECTION_DELETE_TARGET
+        );
+        assert!(projection_target_to_scylla(ProjectionTarget::Version(0)).is_err());
+        assert!(projection_target_to_scylla(ProjectionTarget::Version(-1)).is_err());
+
+        assert_eq!(
+            projection_target_from_scylla(3).unwrap(),
+            ProjectionTarget::Version(3)
+        );
+        assert_eq!(
+            projection_target_from_scylla(SCYLLA_PROJECTION_DELETE_TARGET).unwrap(),
+            ProjectionTarget::Deleted
+        );
+        assert!(projection_target_from_scylla(0).is_err());
+        assert!(projection_target_from_scylla(-2).is_err());
     }
 
     #[tokio::test]
