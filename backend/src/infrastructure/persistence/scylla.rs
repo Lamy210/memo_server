@@ -28,6 +28,8 @@ type MemoRow = (
 );
 type ProjectionIntentRow = (Uuid, Uuid, Uuid, i32);
 
+const PROJECTION_RETRY_BUCKETS: i32 = 16;
+
 pub struct ScyllaDB {
     session: Arc<Session>,
     prepared_statements: PreparedStatements,
@@ -345,12 +347,13 @@ impl ScyllaDB {
         target_version: i32,
     ) -> AppResult<ProjectionIntent> {
         let event = ProjectionIntent::new(user_id, memo_id, target_version);
+        let bucket = projection_bucket(memo_id);
 
         self.session
             .execute_unpaged(
                 &self.prepared_statements.enqueue_projection_intent,
                 (
-                    event.bucket,
+                    bucket,
                     event.event_id,
                     event.user_id,
                     event.memo_id,
@@ -367,7 +370,10 @@ impl ScyllaDB {
         Ok(event)
     }
 
-    pub async fn list_projection_intents(&self, bucket: i32) -> AppResult<Vec<ProjectionIntent>> {
+    async fn list_projection_intents_in_bucket(
+        &self,
+        bucket: i32,
+    ) -> AppResult<Vec<ProjectionIntent>> {
         let result = self
             .session
             .execute_unpaged(&self.prepared_statements.list_projection_intents, (bucket,))
@@ -392,7 +398,6 @@ impl ScyllaDB {
             .map(|row| {
                 row.map(
                     |(event_id, user_id, memo_id, target_version)| ProjectionIntent {
-                        bucket,
                         event_id,
                         user_id,
                         memo_id,
@@ -409,10 +414,11 @@ impl ScyllaDB {
     }
 
     pub async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+        let bucket = projection_bucket(event.memo_id);
         self.session
             .execute_unpaged(
                 &self.prepared_statements.acknowledge_projection_intent,
-                (event.bucket, event.event_id),
+                (bucket, event.event_id),
             )
             .await
             .map_err(|error| {
@@ -516,13 +522,21 @@ impl MemoAuthoritativeStore for ScyllaDB {
         ScyllaDB::enqueue_projection_intent(self, user_id, memo_id, target_version).await
     }
 
-    async fn list_projection_intents(&self, bucket: i32) -> AppResult<Vec<ProjectionIntent>> {
-        ScyllaDB::list_projection_intents(self, bucket).await
+    async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
+        let mut intents = Vec::new();
+        for bucket in 0..PROJECTION_RETRY_BUCKETS {
+            intents.extend(self.list_projection_intents_in_bucket(bucket).await?);
+        }
+        Ok(intents)
     }
 
     async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
         ScyllaDB::acknowledge_projection_intent(self, event).await
     }
+}
+
+fn projection_bucket(memo_id: Uuid) -> i32 {
+    (memo_id.as_u128() % PROJECTION_RETRY_BUCKETS as u128) as i32
 }
 
 #[async_trait]
