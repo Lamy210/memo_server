@@ -159,6 +159,8 @@ EncryptedMemoDocument {
 
 Semantic user content such as title, body, tags, folder names, attachment names, previews, summaries, and user-visible timestamps must not be introduced as plaintext storage fields by default.
 
+`owner_partition` is an internal authorization/partition identifier. The current JWT `sub` may be used directly only if the dedicated authentication service guarantees that it is an opaque memo principal identifier generated for this boundary and not an upstream identity-provider subject. If that guarantee does not hold, an explicit identity-mapping layer must translate the authentication subject before persistence.
+
 ## 6. Payload encryption
 
 HIGH and VAULT payloads use authenticated encryption.
