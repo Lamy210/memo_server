@@ -535,6 +535,17 @@ impl HealthProbe for ScyllaDB {
 mod tests {
     use super::*;
 
+    #[test]
+    fn projection_bucket_is_stable_and_bounded() {
+        let memo_id = Uuid::new_v4();
+
+        let first = projection_bucket(memo_id);
+        let second = projection_bucket(memo_id);
+
+        assert_eq!(first, second);
+        assert!((0..PROJECTION_RETRY_BUCKETS).contains(&first));
+    }
+
     #[tokio::test]
     #[ignore = "requires a local ScyllaDB instance"]
     async fn save_find_and_delete_round_trip() {
