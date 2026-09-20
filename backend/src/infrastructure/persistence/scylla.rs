@@ -14,6 +14,10 @@ use crate::{
     error::{AppError, AppResult},
 };
 
+use super::ports::{
+    MemoAuthoritativeStore, ProjectionIntent,
+};
+
 type MemoRow = (
     Uuid,
     String,
@@ -24,19 +28,7 @@ type MemoRow = (
     DateTime<Utc>,
     i32,
 );
-type ProjectionRetryRow = (Uuid, Uuid, Uuid, i32);
-
-pub const PROJECTION_RETRY_BUCKETS: i32 = 16;
-pub const PROJECTION_DELETE_TARGET: i32 = -1;
-
-#[derive(Debug, Clone)]
-pub struct ProjectionRetry {
-    pub bucket: i32,
-    pub event_id: Uuid,
-    pub user_id: Uuid,
-    pub memo_id: Uuid,
-    pub target_version: i32,
-}
+type ProjectionIntentRow = (Uuid, Uuid, Uuid, i32);
 
 pub struct ScyllaDB {
     session: Arc<Session>,
@@ -50,9 +42,9 @@ struct PreparedStatements {
     update_memo_if_version: PreparedStatement,
     delete_memo: PreparedStatement,
     exists: PreparedStatement,
-    enqueue_projection_retry: PreparedStatement,
-    list_projection_retries: PreparedStatement,
-    acknowledge_projection_retry: PreparedStatement,
+    enqueue_projection_intent: PreparedStatement,
+    list_projection_intents: PreparedStatement,
+    acknowledge_projection_intent: PreparedStatement,
 }
 
 impl ScyllaDB {
@@ -181,7 +173,7 @@ impl ScyllaDB {
             .map_err(|error| {
                 AppError::DatabaseError(format!("Failed to prepare exists: {error}"))
             })?;
-        let enqueue_projection_retry = session
+        let enqueue_projection_intent = session
             .prepare(
                 "INSERT INTO memo_app.projection_intents \
                  (bucket, event_id, user_id, memo_id, target_version) VALUES (?, ?, ?, ?, ?)",
@@ -189,10 +181,10 @@ impl ScyllaDB {
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to prepare enqueue_projection_retry: {error}"
+                    "Failed to prepare enqueue_projection_intent: {error}"
                 ))
             })?;
-        let list_projection_retries = session
+        let list_projection_intents = session
             .prepare(
                 "SELECT event_id, user_id, memo_id, target_version FROM memo_app.projection_intents \
                  WHERE bucket = ?",
@@ -200,15 +192,15 @@ impl ScyllaDB {
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to prepare list_projection_retries: {error}"
+                    "Failed to prepare list_projection_intents: {error}"
                 ))
             })?;
-        let acknowledge_projection_retry = session
+        let acknowledge_projection_intent = session
             .prepare("DELETE FROM memo_app.projection_intents WHERE bucket = ? AND event_id = ?")
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to prepare acknowledge_projection_retry: {error}"
+                    "Failed to prepare acknowledge_projection_intent: {error}"
                 ))
             })?;
 
@@ -219,9 +211,9 @@ impl ScyllaDB {
             update_memo_if_version,
             delete_memo,
             exists,
-            enqueue_projection_retry,
-            list_projection_retries,
-            acknowledge_projection_retry,
+            enqueue_projection_intent,
+            list_projection_intents,
+            acknowledge_projection_intent,
         })
     }
 
@@ -348,23 +340,17 @@ impl ScyllaDB {
         Ok(row.is_some())
     }
 
-    pub async fn enqueue_projection_retry(
+    pub async fn enqueue_projection_intent(
         &self,
         user_id: Uuid,
         memo_id: Uuid,
         target_version: i32,
-    ) -> AppResult<ProjectionRetry> {
-        let event = ProjectionRetry {
-            bucket: projection_retry_bucket(memo_id),
-            event_id: Uuid::new_v4(),
-            user_id,
-            memo_id,
-            target_version,
-        };
+    ) -> AppResult<ProjectionIntent> {
+        let event = ProjectionIntent::new(user_id, memo_id, target_version);
 
         self.session
             .execute_unpaged(
-                &self.prepared_statements.enqueue_projection_retry,
+                &self.prepared_statements.enqueue_projection_intent,
                 (
                     event.bucket,
                     event.event_id,
@@ -383,10 +369,10 @@ impl ScyllaDB {
         Ok(event)
     }
 
-    pub async fn list_projection_retries(&self, bucket: i32) -> AppResult<Vec<ProjectionRetry>> {
+    pub async fn list_projection_intents(&self, bucket: i32) -> AppResult<Vec<ProjectionIntent>> {
         let result = self
             .session
-            .execute_unpaged(&self.prepared_statements.list_projection_retries, (bucket,))
+            .execute_unpaged(&self.prepared_statements.list_projection_intents, (bucket,))
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
@@ -398,7 +384,7 @@ impl ScyllaDB {
                 "Failed to read projection reconciliation intents: {error}"
             ))
         })?;
-        let typed_rows = rows.rows::<ProjectionRetryRow>().map_err(|error| {
+        let typed_rows = rows.rows::<ProjectionIntentRow>().map_err(|error| {
             AppError::DatabaseError(format!(
                 "Failed to type-check projection reconciliation intents: {error}"
             ))
@@ -407,7 +393,7 @@ impl ScyllaDB {
         typed_rows
             .map(|row| {
                 row.map(
-                    |(event_id, user_id, memo_id, target_version)| ProjectionRetry {
+                    |(event_id, user_id, memo_id, target_version)| ProjectionIntent {
                         bucket,
                         event_id,
                         user_id,
@@ -424,10 +410,10 @@ impl ScyllaDB {
             .collect()
     }
 
-    pub async fn acknowledge_projection_retry(&self, event: &ProjectionRetry) -> AppResult<()> {
+    pub async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
         self.session
             .execute_unpaged(
-                &self.prepared_statements.acknowledge_projection_retry,
+                &self.prepared_statements.acknowledge_projection_intent,
                 (event.bucket, event.event_id),
             )
             .await
@@ -451,10 +437,6 @@ impl ScyllaDB {
         Ok(rows.rows_num() > 0)
     }
 
-    pub fn projection_retry_bucket(memo_id: Uuid) -> i32 {
-        projection_retry_bucket(memo_id)
-    }
-
     fn memo_from_row(row: MemoRow) -> Memo {
         let (id, title, content, tags, user_id, created_at, updated_at, version) = row;
         Memo {
@@ -470,8 +452,44 @@ impl ScyllaDB {
     }
 }
 
-fn projection_retry_bucket(memo_id: Uuid) -> i32 {
-    (memo_id.as_u128() % PROJECTION_RETRY_BUCKETS as u128) as i32
+#[async_trait]
+impl MemoAuthoritativeStore for ScyllaDB {
+    async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
+        ScyllaDB::find_by_id(self, user_id, id).await
+    }
+
+    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
+        ScyllaDB::find_all_by_user_id(self, user_id).await
+    }
+
+    async fn save(&self, memo: &Memo) -> AppResult<()> {
+        ScyllaDB::save(self, memo).await
+    }
+
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()> {
+        ScyllaDB::delete(self, user_id, id).await
+    }
+
+    async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
+        ScyllaDB::exists(self, user_id, id).await
+    }
+
+    async fn enqueue_projection_intent(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+        target_version: i32,
+    ) -> AppResult<ProjectionIntent> {
+        ScyllaDB::enqueue_projection_intent(self, user_id, memo_id, target_version).await
+    }
+
+    async fn list_projection_intents(&self, bucket: i32) -> AppResult<Vec<ProjectionIntent>> {
+        ScyllaDB::list_projection_intents(self, bucket).await
+    }
+
+    async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+        ScyllaDB::acknowledge_projection_intent(self, event).await
+    }
 }
 
 #[async_trait]
