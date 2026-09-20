@@ -6,7 +6,8 @@ import {
   buildBackendRequestHeaders,
   buildBackendUrl,
   buildFrontendResponseHeaders,
-  InvalidProxyPathError
+  InvalidProxyPathError,
+  isTrustedMemoProxyRequest
 } from '$lib/server/memoProxy';
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8080';
@@ -14,6 +15,11 @@ const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8080';
 const proxyRequest: RequestHandler = async ({ request, params, url, fetch, locals }) => {
   const backendUrl = env.BACKEND_URL?.trim() || DEFAULT_BACKEND_URL;
   const developmentUserId = dev ? env.DEVELOPMENT_USER_ID?.trim() || undefined : undefined;
+  const method = request.method.toUpperCase();
+
+  if (!isTrustedMemoProxyRequest(method, request.headers, url)) {
+    return Response.json({ message: 'Memo mutation request rejected' }, { status: 403 });
+  }
 
   let target: URL;
   try {
@@ -31,7 +37,6 @@ const proxyRequest: RequestHandler = async ({ request, params, url, fetch, local
     request.headers,
     dev ? { developmentUserId } : { bearerToken: locals.accessToken }
   );
-  const method = request.method.toUpperCase();
   const body =
     method === 'GET' || method === 'HEAD'
       ? undefined
