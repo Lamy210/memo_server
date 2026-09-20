@@ -57,9 +57,10 @@ impl Memo {
             && self.title.chars().count() <= MAX_MEMO_TITLE_CHARS
             && !self.content.trim().is_empty()
             && self.tags.len() <= MAX_MEMO_TAGS
-            && self.tags.iter().all(|tag| {
-                !tag.trim().is_empty() && tag.chars().count() <= MAX_MEMO_TAG_CHARS
-            })
+            && self
+                .tags
+                .iter()
+                .all(|tag| !tag.trim().is_empty() && tag.chars().count() <= MAX_MEMO_TAG_CHARS)
     }
 }
 
