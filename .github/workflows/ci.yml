@@ -84,6 +84,49 @@ jobs:
       - name: Build
         run: pnpm build
 
+  frontend-e2e:
+    name: Frontend browser E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Browser E2E
+        run: pnpm test:e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e-${{ github.run_id }}
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   containers:
     name: Container definitions
     runs-on: ubuntu-latest
@@ -105,6 +148,7 @@ jobs:
     needs:
       - backend
       - frontend
+      - frontend-e2e
       - containers
 
     steps:
