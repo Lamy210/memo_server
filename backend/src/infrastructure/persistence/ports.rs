@@ -40,10 +40,28 @@ pub fn projection_bucket(memo_id: Uuid) -> i32 {
 pub trait MemoAuthoritativeStore: Send + Sync {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>>;
     async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>>;
-    async fn save(&self, memo: &Memo) -> AppResult<()>;
-    async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()>;
+
+    /// Persist a memo mutation together with a durable projection intent.
+    ///
+    /// A successful return guarantees that both the primary mutation and its
+    /// projection intent are durable. Transaction-capable stores should commit
+    /// both records atomically.
+    async fn save_with_projection_intent(&self, memo: &Memo) -> AppResult<ProjectionIntent>;
+
+    /// Persist a memo deletion together with a durable projection intent.
+    ///
+    /// A successful return guarantees that the delete and its projection
+    /// intent are durable. Transaction-capable stores should commit both
+    /// records atomically.
+    async fn delete_with_projection_intent(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+    ) -> AppResult<ProjectionIntent>;
+
     async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool>;
 
+    /// Enqueue a corrective intent for an already-observed source state.
     async fn enqueue_projection_intent(
         &self,
         user_id: Uuid,
