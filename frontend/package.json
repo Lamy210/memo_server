@@ -15,11 +15,13 @@
     "lint": "eslint .",
     "test:unit": "vitest",
     "test:e2e": "playwright test",
-    "test": "pnpm test:unit -- --run"
+    "test": "pnpm test:unit -- --run",
+    "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@eslint/compat": "^1.2.3",
+    "@lhci/cli": "^0.15.1",
     "@playwright/test": "^1.45.3",
     "@sveltejs/adapter-node": "^5.2.9",
     "@sveltejs/kit": "^2.0.0",
