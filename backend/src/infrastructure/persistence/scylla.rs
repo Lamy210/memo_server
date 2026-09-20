@@ -481,7 +481,8 @@ impl MemoAuthoritativeStore for ScyllaDB {
         id: Uuid,
     ) -> AppResult<ProjectionIntent> {
         let event =
-            ScyllaDB::enqueue_projection_intent(self, user_id, id, PROJECTION_DELETE_TARGET).await?;
+            ScyllaDB::enqueue_projection_intent(self, user_id, id, PROJECTION_DELETE_TARGET)
+                .await?;
 
         ScyllaDB::delete(self, user_id, id).await?;
 
