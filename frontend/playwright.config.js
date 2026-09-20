@@ -18,20 +18,5 @@ export default defineConfig({
     timezoneId: 'Asia/Tokyo',
     viewport: { width: 1440, height: 1000 }
   },
-  reporter: [['line'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
-  webServer: [
-    {
-      command: 'exec python3 ../scripts/ui-fixture-server.py --port 18080',
-      url: 'http://127.0.0.1:18080/healthz',
-      reuseExistingServer: false,
-      timeout: 30_000
-    },
-    {
-      command:
-        'pnpm build && exec env BACKEND_URL=http://127.0.0.1:18080 node ./node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4173 --strictPort',
-      url: 'http://127.0.0.1:4173/memos',
-      reuseExistingServer: false,
-      timeout: 60_000
-    }
-  ]
+  reporter: [['line'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
 });
