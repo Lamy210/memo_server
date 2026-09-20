@@ -87,22 +87,9 @@ impl ProjectionReconciler {
         }
     }
 
-    pub async fn prepare(
-        &self,
-        user_id: Uuid,
-        memo_id: Uuid,
-        target_version: i32,
-    ) -> AppResult<ProjectionIntent> {
-        let event = self
-            .authoritative_store
-            .enqueue_projection_intent(user_id, memo_id, target_version)
-            .await?;
-        self.track_event(event.event_id, Instant::now());
-        Ok(event)
-    }
-
     pub async fn reconcile_now(&self, event: &ProjectionIntent) {
         let now = Instant::now();
+        self.track_event(event.event_id, now);
         match self.reconcile_event(event).await {
             Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
             Ok(ReconcileOutcome::WaitingForTarget) => {}
@@ -244,24 +231,6 @@ impl ProjectionReconciler {
             .acknowledge_projection_intent(event)
             .await?;
         Ok(ReconcileOutcome::Completed)
-    }
-
-    pub async fn cancel(&self, event: &ProjectionIntent) {
-        match self
-            .authoritative_store
-            .acknowledge_projection_intent(event)
-            .await
-        {
-            Ok(()) => self.clear_retry_state(event.event_id),
-            Err(error) => {
-                log::warn!(
-                    "Failed to cancel unused projection intent: event_id={} memo_id={} user_id={} error={error}",
-                    event.event_id,
-                    event.memo_id,
-                    event.user_id
-                );
-            }
-        }
     }
 
     pub fn stats(&self) -> ProjectionReconciliationStats {
