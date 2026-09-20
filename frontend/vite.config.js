@@ -11,6 +11,7 @@ export default defineConfig({
     include: ['marked', 'dompurify']
   },
   test: {
-    environment: 'jsdom'
+    environment: 'jsdom',
+    include: ['src/**/*.test.ts']
   }
 });
