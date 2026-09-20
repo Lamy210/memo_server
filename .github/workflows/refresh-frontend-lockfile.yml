@@ -1,0 +1,38 @@
+name: Refresh frontend lockfile artifact
+
+on:
+  push:
+    branches:
+      - test/frontend-quality-baseline
+
+permissions:
+  contents: read
+
+jobs:
+  refresh-lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+
+      - name: Resolve frontend lockfile
+        run: pnpm --dir frontend install --lockfile-only --no-frozen-lockfile
+
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-pnpm-lockfile
+          path: frontend/pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 1
