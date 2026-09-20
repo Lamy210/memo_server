@@ -135,7 +135,10 @@ impl ProjectionReconciler {
         let mut seen_event_ids = HashSet::new();
 
         for bucket in 0..PROJECTION_RETRY_BUCKETS {
-            let events = self.authoritative_store.list_projection_intents(bucket).await?;
+            let events = self
+                .authoritative_store
+                .list_projection_intents(bucket)
+                .await?;
             pending_intents = pending_intents.saturating_add(events.len() as u64);
 
             for event in events {
@@ -149,7 +152,9 @@ impl ProjectionReconciler {
                     Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
                     Ok(ReconcileOutcome::WaitingForTarget) => {
                         if self.is_stale_unreached(event.event_id, now) {
-                            self.authoritative_store.acknowledge_projection_intent(&event).await?;
+                            self.authoritative_store
+                                .acknowledge_projection_intent(&event)
+                                .await?;
                             self.clear_retry_state(event.event_id);
                             self.counters
                                 .stale_dropped_total
@@ -186,7 +191,10 @@ impl ProjectionReconciler {
     }
 
     async fn reconcile_event(&self, event: &ProjectionIntent) -> AppResult<ReconcileOutcome> {
-        let memo = self.authoritative_store.find_by_id(event.user_id, event.memo_id).await?;
+        let memo = self
+            .authoritative_store
+            .find_by_id(event.user_id, event.memo_id)
+            .await?;
 
         if !target_reached(event, memo.as_ref()) {
             return Ok(ReconcileOutcome::WaitingForTarget);
@@ -218,7 +226,10 @@ impl ProjectionReconciler {
             return Err(AppError::DatabaseError(failures.join("; ")));
         }
 
-        let current = self.authoritative_store.find_by_id(event.user_id, event.memo_id).await?;
+        let current = self
+            .authoritative_store
+            .find_by_id(event.user_id, event.memo_id)
+            .await?;
         if projection_state(memo.as_ref()) != projection_state(current.as_ref()) {
             let target_version = current
                 .as_ref()
@@ -229,12 +240,18 @@ impl ProjectionReconciler {
                 .await?;
         }
 
-        self.authoritative_store.acknowledge_projection_intent(event).await?;
+        self.authoritative_store
+            .acknowledge_projection_intent(event)
+            .await?;
         Ok(ReconcileOutcome::Completed)
     }
 
     pub async fn cancel(&self, event: &ProjectionIntent) {
-        match self.authoritative_store.acknowledge_projection_intent(event).await {
+        match self
+            .authoritative_store
+            .acknowledge_projection_intent(event)
+            .await
+        {
             Ok(()) => self.clear_retry_state(event.event_id),
             Err(error) => {
                 log::warn!(
