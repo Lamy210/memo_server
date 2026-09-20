@@ -286,7 +286,7 @@
           <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Preview</p>
           <h2 class="mt-1 font-semibold text-slate-900">Markdownプレビュー</h2>
         </div>
-        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500">Live</span>
+        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">Live</span>
       </div>
       {#if content.trim()}
         <article class="prose prose-slate max-w-none break-words prose-pre:overflow-auto">
