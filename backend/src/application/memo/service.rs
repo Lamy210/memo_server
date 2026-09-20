@@ -3,8 +3,6 @@ use std::{cmp::Reverse, sync::Arc};
 use uuid::Uuid;
 
 use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
-const MAX_SEARCH_QUERY_CHARS: usize = 512;
-
 use crate::{
     domain::memo::{
         entity::{Memo, MAX_MEMO_TAG_CHARS, MAX_MEMO_TAGS, MAX_MEMO_TITLE_CHARS},
@@ -12,6 +10,8 @@ use crate::{
     },
     error::{AppError, AppResult},
 };
+
+const MAX_SEARCH_QUERY_CHARS: usize = 512;
 
 pub struct MemoService {
     memo_repository: Arc<dyn MemoRepository>,
