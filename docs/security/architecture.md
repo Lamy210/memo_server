@@ -230,7 +230,9 @@ Vault Root Key
        +--> Search Key
 ```
 
-A passkey private key is an authentication credential and must not be treated as the memo encryption key. Passkey authentication by itself does not expose key material. If the WebAuthn Level 3 `prf` extension is used for VAULT key derivation, the client must capability-detect it and keep PRF outputs client-side; authenticators without PRF support use a separate device secret instead.
+A passkey private key is an authentication credential and must not be treated as the memo encryption key. Passkey authentication by itself does not expose key material. If the WebAuthn Level 3 `prf` extension is used for VAULT key derivation, the client must capability-detect it and keep PRF outputs client-side.
+
+A PRF output is associated with a WebAuthn credential and must not be assumed to be device-bound. Its assurance inherits the credential/authenticator and synchronization model. When VAULT requires an explicitly device-bound wrapper, use a separate device secret protected by the platform or hardware keystore rather than treating a synced-passkey PRF output as device-bound.
 
 ## 8. Multi-device VAULT
 
