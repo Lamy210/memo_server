@@ -183,25 +183,17 @@ jobs:
           bash candidate/scripts/ui-diff.sh artifacts/baseline artifacts/candidate artifacts/diff
           cat artifacts/diff/summary.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Summarize accessibility observations
-        if: always()
+      - name: Compare accessibility findings
         shell: bash
         run: |
-          {
-            echo
-            echo "## Accessibility observations"
-            if [[ -f "$RUNNER_TEMP/ui-candidate-a11y.log" ]]; then
-              if grep '^A11Y ' "$RUNNER_TEMP/ui-candidate-a11y.log" | sed 's/^A11Y /- /'; then
-                :
-              else
-                echo "- Candidate UI capture produced no axe summary."
-              fi
-            else
-              echo "- Candidate UI capture did not run."
-            fi
-            echo
-            echo "axe-core findings are informational while the initial accessibility baseline is being established."
-          } >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          python3 candidate/scripts/a11y-diff.py \
+            "$RUNNER_TEMP/ui-base-a11y.log" \
+            "$RUNNER_TEMP/ui-candidate-a11y.log" \
+            artifacts/diff/a11y-summary.md
+          status=$?
+          cat artifacts/diff/a11y-summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Collect visual test logs
         if: always()
