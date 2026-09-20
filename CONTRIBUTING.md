@@ -95,7 +95,7 @@ Svelte componentは `@testing-library/svelte` + Vitest + jsdomで、DOM実装詳
 
 PRでは `Lighthouse / Lighthouse baseline` workflow がproduction build/previewを固定fixture backendへ接続し、代表画面（一覧・新規・編集）を各3回計測します。median runの Performance / Accessibility / Best Practices / SEO scoreをjob summaryへ出し、HTML/JSON reportとmanifestを `lighthouse-pr-<number>` artifactへ14日間保存します。
 
-導入初期のcategory thresholdは `warn` とし、scoreそのものではPRをfailさせません。一方、依存解決・build・preview・Lighthouse collection・report生成が壊れた場合はworkflowをfailさせます。baselineが安定した後、performance budgetやcategory thresholdを段階的にblockingへ移行します。
+現在の安定baseline（代表3画面で各category 100）を基準に、Accessibilityは100、Best PracticesとSEOは95未満をblocking failureにします。PerformanceはCI runnerの実行ノイズを考慮し、90未満をwarningとして可視化します。依存解決・build・preview・Lighthouse collection・report生成が壊れた場合もworkflowをfailさせます。
 
 ## Tests
 

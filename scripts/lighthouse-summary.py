@@ -62,7 +62,7 @@ def main() -> int:
         [
             "",
             "Scores are representative (median) Lighthouse CI runs on a production preview.",
-            "Category thresholds are warnings while the initial baseline is being established; collection or report failures still fail CI.",
+            "Quality budgets: Performance <90 warns; Accessibility <100, Best Practices <95, or SEO <95 fail CI.",
         ]
     )
 
