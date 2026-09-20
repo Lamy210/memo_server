@@ -29,6 +29,8 @@ assets:
     target:
       encryption: AES-256-GCM
       key_size_bits: 256
+      nonce_size_bits: 96
+      tag_size_bits: 128
       key_scope: per_memo_version
       aad:
         - owner_partition
@@ -49,6 +51,8 @@ assets:
     target:
       encryption: AES-256-GCM
       key_size_bits: 256
+      nonce_size_bits: 96
+      tag_size_bits: 128
       key_scope: per_memo_version
       root_key: client_controlled_vrk
       server_plaintext_access: false
@@ -174,7 +178,7 @@ assets:
   - asset: pq_long_lived_signature
     classification: long_lived_trust
     target:
-      algorithm: ML-DSA
+      algorithm: ML-DSA-87
       primary_uses:
         - audit_checkpoint
         - backup_manifest
@@ -191,7 +195,7 @@ assets:
     target:
       hash: SHA-384
       previous_hash_binding: required
-      checkpoint_signature: ML-DSA
+      checkpoint_signature: ML-DSA-87
     current:
       state: not_implemented
     migration_status: planned
@@ -216,6 +220,8 @@ suites:
     implementation_status: PLANNED
     intended_state: target
     encryption: AES-256-GCM
+    nonce_size_bits: 96
+    tag_size_bits: 128
     kdf: HKDF-SHA-384
     mac: HMAC-SHA-384
     signature: null
@@ -286,7 +292,7 @@ suites:
     encryption: null
     kdf: null
     mac: null
-    signature: ML-DSA
+    signature: ML-DSA-87
     key_exchange: null
 
 standards:
@@ -294,6 +300,14 @@ standards:
     status: W3C Recommendation
     date: "2026-08-25"
     reference: "https://www.w3.org/TR/2026/REC-webauthn-3-20260825/"
+
+  - name: NIST SP 800-38D
+    primitive: AES-GCM
+    status: Final; revision in progress
+    profile:
+      nonce_size_bits: 96
+      tag_size_bits: 128
+    reference: "https://csrc.nist.gov/pubs/sp/800/38/d/final"
 
   - name: NIST FIPS 203
     primitive: ML-KEM
