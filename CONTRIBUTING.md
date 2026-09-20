@@ -72,6 +72,8 @@ pnpm check
 pnpm lint
 pnpm test:unit -- --run
 pnpm build
+pnpm exec playwright install chromium
+pnpm test:e2e
 ```
 
 `pnpm check` がSvelte/TypeScriptの主要な静的検証です。現在のESLintはJavaScript設定ファイルを対象とし、Svelte/TypeScriptの構文検証は `svelte-check` が担当します。
@@ -91,6 +93,8 @@ UIを変更するPRでは、通常のFrontend CIに加えてこのartifactを確
 同じcaptureでは `@axe-core/playwright` でWCAG 2.x系ルールを検査し、baseと候補画面のserious/critical違反を比較します。既存違反はbaselineとして許容しますが、新しいルールが出た場合、または同じルールで影響ノード数が増えた場合はUI Diffをfailさせます。違反が減る変更はそのまま通過します。
 
 Svelte componentは `@testing-library/svelte` + Vitest + jsdomで、DOM実装詳細ではなくrole/text/linkなど利用者から観測できる振る舞いを優先して検証します。
+
+Playwright browser E2Eは固定fixture backendとproduction previewを起動し、実ブラウザからmemo BFFを通る重要経路を検証します。現在は保存操作がsame-origin/CSRF marker境界を満たすことと、共通API helperを迂回したraw mutationが403になることをCIで固定します。失敗時のHTML report/trace/screenshotはCI artifactへ保存します。
 
 ### Lighthouse baseline
 
