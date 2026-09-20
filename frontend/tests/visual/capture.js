@@ -29,6 +29,12 @@ async function observeAccessibility(page, filename) {
     console.log(
       `A11Y-DIAGNOSTIC ${filename}: ${violation.id} impact=${violation.impact} nodes=${violation.nodes.length} ${violation.helpUrl}`
     );
+
+    for (const node of violation.nodes) {
+      console.log(
+        `A11Y-NODE ${filename}: ${violation.id} target=${JSON.stringify(node.target)}`
+      );
+    }
   }
 }
 

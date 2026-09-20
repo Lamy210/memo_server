@@ -172,7 +172,7 @@
     <div class="border-b border-slate-100 px-6 py-5 sm:px-8">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">
+          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
             {mode === 'create' ? 'New note' : 'Editor'}
           </p>
           <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-950">
@@ -192,7 +192,7 @@
             <span class="rounded-full bg-slate-100 px-3 py-1.5 text-slate-600">未保存</span>
           {/if}
           {#if mode === 'edit'}
-            <span class="text-slate-400">v{version}</span>
+            <span class="text-slate-500">v{version}</span>
           {/if}
         </div>
       </div>
@@ -212,21 +212,21 @@
           oninput={markDirty}
           maxlength="160"
           placeholder="例: リリース前チェックリスト"
-          class="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
+          class="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
         />
       </label>
 
       <label class="block">
         <span class="mb-2 flex items-center justify-between text-sm font-semibold text-slate-700">
           <span>本文</span>
-          <span class="font-normal text-slate-400">Markdown対応</span>
+          <span class="font-normal text-slate-500">Markdown対応</span>
         </span>
         <textarea
           bind:value={content}
           oninput={markDirty}
           rows="18"
           placeholder="考えたこと、TODO、コード断片などを自由に記録…"
-          class="min-h-[420px] w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 font-mono text-sm leading-7 text-slate-900 outline-none transition placeholder:font-sans placeholder:text-slate-400 focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
+          class="min-h-[420px] w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 font-mono text-sm leading-7 text-slate-900 outline-none transition placeholder:font-sans placeholder:text-slate-500 focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
         ></textarea>
       </label>
 
@@ -236,9 +236,9 @@
           bind:value={tagsText}
           oninput={markDirty}
           placeholder="rust, architecture, todo"
-          class="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
+          class="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
         />
-        <span class="mt-2 block text-xs text-slate-400">カンマ区切り、最大10個</span>
+        <span class="mt-2 block text-xs text-slate-500">カンマ区切り、最大10個</span>
       </label>
 
       {#if errorMessage}
@@ -273,7 +273,7 @@
         <button
           type="submit"
           disabled={!canSave}
-          class="rounded-xl bg-sky-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          class="rounded-xl bg-sky-700 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-600"
         >{saving ? '保存中…' : '保存'} <span class="ml-1 text-sky-100">⌘S</span></button>
       </div>
     </form>
@@ -283,17 +283,17 @@
     <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
       <div class="mb-5 flex items-center justify-between">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Preview</p>
+          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Preview</p>
           <h2 class="mt-1 font-semibold text-slate-900">Markdownプレビュー</h2>
         </div>
-        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500">Live</span>
+        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">Live</span>
       </div>
       {#if content.trim()}
         <article class="prose prose-slate max-w-none break-words prose-pre:overflow-auto">
           {@html previewHtml}
         </article>
       {:else}
-        <div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-12 text-center text-sm text-slate-400">
+        <div class="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-5 py-12 text-center text-sm text-slate-500">
           本文を入力するとここにプレビューされます。
         </div>
       {/if}

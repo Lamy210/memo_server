@@ -14,7 +14,7 @@
   <header class="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur">
     <div class="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
       <a href="/memos" class="flex items-center gap-3 font-semibold tracking-tight text-slate-950">
-        <span class="grid h-9 w-9 place-items-center rounded-xl bg-sky-600 text-lg text-white shadow-sm">❄</span>
+        <span class="grid h-9 w-9 place-items-center rounded-xl bg-sky-700 text-lg text-white shadow-sm">❄</span>
         <span>Schnee Memo</span>
       </a>
 
@@ -28,7 +28,7 @@
         >検索</a>
         <a
           href="/memos/new"
-          class="ml-1 rounded-xl bg-sky-600 px-3.5 py-2 text-white shadow-sm transition hover:bg-sky-700"
+          class="ml-1 rounded-xl bg-sky-700 px-3.5 py-2 text-white shadow-sm transition hover:bg-sky-800"
         >新規作成</a>
       </nav>
     </div>

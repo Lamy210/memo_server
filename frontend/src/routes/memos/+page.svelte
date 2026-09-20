@@ -32,13 +32,13 @@
 <section>
   <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
     <div>
-      <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">Workspace</p>
+      <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Workspace</p>
       <h1 class="mt-2 text-3xl font-bold tracking-tight text-slate-950">メモ</h1>
       <p class="mt-2 text-sm leading-6 text-slate-500">アイデア、設計、TODOをひとつの場所に。</p>
     </div>
     <a
       href="/memos/new"
-      class="inline-flex items-center justify-center rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700"
+      class="inline-flex items-center justify-center rounded-xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-800"
     >+ 新しいメモ</a>
   </div>
 
@@ -53,7 +53,7 @@
       bind:value={query}
       aria-label="メモを検索"
       placeholder="タイトル・本文を検索…"
-      class="min-w-0 flex-1 rounded-xl border-0 bg-transparent px-3 py-2 text-sm text-slate-950 outline-none placeholder:text-slate-400"
+      class="min-w-0 flex-1 rounded-xl border-0 bg-transparent px-3 py-2 text-sm text-slate-950 outline-none placeholder:text-slate-500"
     />
     <button
       type="submit"
@@ -86,7 +86,7 @@
       <p class="mt-2 text-sm text-slate-500">タイトルと本文だけで始められます。</p>
       <a
         href="/memos/new"
-        class="mt-6 inline-flex rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-700"
+        class="mt-6 inline-flex rounded-xl bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-800"
       >新しいメモを作成</a>
     </div>
   {:else}

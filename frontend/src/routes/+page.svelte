@@ -12,7 +12,7 @@
     <div class="mt-8 flex flex-wrap gap-3">
       <a
         href="/memos"
-        class="rounded-xl bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700"
+        class="rounded-xl bg-sky-700 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-800"
       >メモを開く</a>
       <a
         href="/memos/new"
