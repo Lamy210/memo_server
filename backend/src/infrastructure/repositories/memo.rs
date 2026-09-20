@@ -7,9 +7,7 @@ use crate::{
     domain::memo::{entity::Memo, repository::MemoRepository},
     error::AppResult,
     infrastructure::{
-        persistence::ports::{
-            MemoAuthoritativeStore, MemoCache, MemoSearchProjection, PROJECTION_DELETE_TARGET,
-        },
+        persistence::ports::{MemoAuthoritativeStore, MemoCache, MemoSearchProjection},
         reconciliation::ProjectionReconciler,
     },
 };
@@ -79,30 +77,18 @@ impl MemoRepository for MemoRepositoryImpl {
 
     async fn save(&self, memo: &Memo) -> AppResult<()> {
         let intent = self
-            .reconciler
-            .prepare(memo.user_id, memo.id, memo.version)
+            .authoritative_store
+            .save_with_projection_intent(memo)
             .await?;
-
-        if let Err(error) = self.authoritative_store.save(memo).await {
-            self.reconciler.cancel(&intent).await;
-            return Err(error);
-        }
-
         self.reconciler.reconcile_now(&intent).await;
         Ok(())
     }
 
     async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()> {
         let intent = self
-            .reconciler
-            .prepare(user_id, id, PROJECTION_DELETE_TARGET)
+            .authoritative_store
+            .delete_with_projection_intent(user_id, id)
             .await?;
-
-        if let Err(error) = self.authoritative_store.delete(user_id, id).await {
-            self.reconciler.cancel(&intent).await;
-            return Err(error);
-        }
-
         self.reconciler.reconcile_now(&intent).await;
         Ok(())
     }
