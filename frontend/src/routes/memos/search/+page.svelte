@@ -54,7 +54,7 @@
 
 <section>
   <div>
-    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-600">Search</p>
+    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Search</p>
     <h1 class="mt-2 text-3xl font-bold tracking-tight text-slate-950">メモを検索</h1>
     <p class="mt-2 text-sm text-slate-500">本文・タイトルとタグを組み合わせて探せます。</p>
   </div>
