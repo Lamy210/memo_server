@@ -58,7 +58,7 @@ assets:
     migration_status: planned
     owner: vault-crypto
 
-  - asset: high_dek_derivation
+  - asset: high_dek_generation
     classification: key_management
     profile: HIGH
     target:
@@ -125,6 +125,7 @@ assets:
       suite_id: AUTH-1
     current:
       algorithm: RS256
+      suite_id: AUTH-RS256-LEGACY
       state: active_legacy
     migration_status: planned
     owner: memo-auth
@@ -239,6 +240,18 @@ suites:
     mac: HMAC-SHA-384
     signature: null
     key_exchange: null
+
+  - suite_id: AUTH-RS256-LEGACY
+    lifecycle: ACTIVE
+    implementation_status: DEPLOYED
+    intended_state: legacy_current
+    encryption: null
+    kdf: null
+    mac: null
+    signature: RS256
+    key_exchange: null
+    notes:
+      - "Current memo_server JWT verification contract. Retire after the auth service and resource server complete the ES384 migration."
 
   - suite_id: AUTH-1
     lifecycle: ACTIVE
