@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
 use crate::{
     domain::memo::{
-        entity::{Memo, MAX_MEMO_TAG_CHARS, MAX_MEMO_TAGS, MAX_MEMO_TITLE_CHARS},
+        entity::{Memo, MAX_MEMO_TAGS, MAX_MEMO_TAG_CHARS, MAX_MEMO_TITLE_CHARS},
         repository::MemoRepository,
     },
     error::{AppError, AppResult},
