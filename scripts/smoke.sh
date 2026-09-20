@@ -78,6 +78,46 @@ frontend_proxy_memo="$(curl -fsS \
   "http://localhost:3001/api/v1/memos/$memo_id")"
 jq -e --arg id "$memo_id" '.id == $id' <<<"$frontend_proxy_memo" >/dev/null
 
+cross_site_mutation_status="$(curl -sS \
+  -H 'Origin: https://attacker.example' \
+  -H 'X-Schnee-Memo-Request: 1' \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"blocked cross-site write","content":"must not reach memo_server","tags":["csrf"]}' \
+  -o /tmp/memo-bff-cross-site.json \
+  -w '%{http_code}' \
+  http://localhost:3001/api/v1/memos)"
+if [[ "$cross_site_mutation_status" != "403" ]]; then
+  echo "Expected cross-site BFF mutation to return 403, got $cross_site_mutation_status" >&2
+  cat /tmp/memo-bff-cross-site.json >&2 || true
+  exit 1
+fi
+
+missing_marker_status="$(curl -sS \
+  -H 'Origin: http://localhost:3001' \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"blocked unmarked write","content":"must not reach memo_server","tags":["csrf"]}' \
+  -o /tmp/memo-bff-missing-marker.json \
+  -w '%{http_code}' \
+  http://localhost:3001/api/v1/memos)"
+if [[ "$missing_marker_status" != "403" ]]; then
+  echo "Expected unmarked BFF mutation to return 403, got $missing_marker_status" >&2
+  cat /tmp/memo-bff-missing-marker.json >&2 || true
+  exit 1
+fi
+
+bff_created="$(curl -fsS \
+  -H 'Origin: http://localhost:3001' \
+  -H 'X-Schnee-Memo-Request: 1' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer browser-controlled-token' \
+  -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
+  -d '{"title":"BFF CSRF smoke memo","content":"same-origin marked mutation","tags":["ci","csrf"]}' \
+  http://localhost:3001/api/v1/memos)"
+bff_memo_id="$(jq -er '.id' <<<"$bff_created")"
+memo_curl -fsS "http://localhost:8083/api/v1/memos/$bff_memo_id" \
+  | jq -e --arg id "$bff_memo_id" '.id == $id' >/dev/null
+memo_curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$bff_memo_id" >/dev/null
+
 other_user_status="$(curl -sS \
   -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
   -o /tmp/memo-other-user.json \

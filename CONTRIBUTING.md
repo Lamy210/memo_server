@@ -57,6 +57,7 @@ cargo test
 - 1つのSvelteコンポーネント内でlegacy syntaxとrunes syntaxを混在させないでください。
 - 新規コードはSvelte 5で明示的かつ一貫した書き方を優先します。
 - loading / empty / error / conflict の状態をUI上で区別してください。
+- memo API のPOST/PUT/PATCH/DELETEは共通API helperを通し、BFF mutation markerとsame-origin検証を迂回しないでください。
 - destructive actionには確認操作を設けます。
 - server side renderingが必要になるまで、現在のMVPはブラウザから同一origin `/api` を利用します。
 

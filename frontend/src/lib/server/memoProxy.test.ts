@@ -4,7 +4,8 @@ import {
   buildBackendRequestHeaders,
   buildBackendUrl,
   buildFrontendResponseHeaders,
-  InvalidProxyPathError
+  InvalidProxyPathError,
+  isTrustedMemoProxyRequest
 } from './memoProxy';
 
 describe('buildBackendRequestHeaders', () => {
@@ -15,7 +16,8 @@ describe('buildBackendRequestHeaders', () => {
       Connection: 'keep-alive',
       Cookie: 'session=browser-secret',
       'Content-Type': 'application/json',
-      'X-Development-User-Id': '87654321-4321-4321-4321-210987654321'
+      'X-Development-User-Id': '87654321-4321-4321-4321-210987654321',
+      'X-Schnee-Memo-Request': '1'
     });
 
     const headers = buildBackendRequestHeaders(source, {
@@ -30,6 +32,7 @@ describe('buildBackendRequestHeaders', () => {
     expect(headers.get('x-development-user-id')).toBe(
       '12345678-1234-1234-1234-123456789012'
     );
+    expect(headers.get('x-schnee-memo-request')).toBeNull();
   });
 
   it('prefers a server-provided bearer token over development identity', () => {
@@ -92,5 +95,75 @@ describe('buildFrontendResponseHeaders', () => {
     expect(headers.get('set-cookie')).toBeNull();
     expect(headers.get('transfer-encoding')).toBeNull();
     expect(headers.get('content-type')).toBe('application/json');
+  });
+});
+
+
+describe('isTrustedMemoProxyRequest', () => {
+  const requestUrl = new URL('https://memo.example.com/api/v1/memos');
+
+  it('allows safe methods without CSRF metadata', () => {
+    expect(isTrustedMemoProxyRequest('GET', new Headers(), requestUrl)).toBe(true);
+    expect(isTrustedMemoProxyRequest('HEAD', new Headers(), requestUrl)).toBe(true);
+  });
+
+  it('allows same-origin mutations with the BFF marker', () => {
+    const headers = new Headers({
+      Origin: 'https://memo.example.com',
+      'X-Schnee-Memo-Request': '1'
+    });
+
+    expect(isTrustedMemoProxyRequest('POST', headers, requestUrl)).toBe(true);
+  });
+
+  it('rejects mutations without the BFF marker', () => {
+    const headers = new Headers({ Origin: 'https://memo.example.com' });
+    expect(isTrustedMemoProxyRequest('PATCH', headers, requestUrl)).toBe(false);
+  });
+
+  it('rejects missing, opaque, invalid, and cross-site origins', () => {
+    expect(
+      isTrustedMemoProxyRequest(
+        'DELETE',
+        new Headers({ 'X-Schnee-Memo-Request': '1' }),
+        requestUrl
+      )
+    ).toBe(false);
+
+    expect(
+      isTrustedMemoProxyRequest(
+        'DELETE',
+        new Headers({ Origin: 'null', 'X-Schnee-Memo-Request': '1' }),
+        requestUrl
+      )
+    ).toBe(false);
+
+    expect(
+      isTrustedMemoProxyRequest(
+        'DELETE',
+        new Headers({ Origin: 'not a url', 'X-Schnee-Memo-Request': '1' }),
+        requestUrl
+      )
+    ).toBe(false);
+
+    expect(
+      isTrustedMemoProxyRequest(
+        'DELETE',
+        new Headers({
+          Origin: 'https://attacker.example',
+          'X-Schnee-Memo-Request': '1'
+        }),
+        requestUrl
+      )
+    ).toBe(false);
+  });
+
+  it('requires the serialized origin rather than an origin with a path', () => {
+    const headers = new Headers({
+      Origin: 'https://memo.example.com/path',
+      'X-Schnee-Memo-Request': '1'
+    });
+
+    expect(isTrustedMemoProxyRequest('PUT', headers, requestUrl)).toBe(false);
   });
 });

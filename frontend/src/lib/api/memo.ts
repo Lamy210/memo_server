@@ -1,3 +1,5 @@
+import { buildMemoRequestInit } from '$lib/security/memoBff';
+
 import type {
   CreateMemoInput,
   Memo,
@@ -29,7 +31,7 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetch(url, buildMemoRequestInit(init));
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`;
     try {
