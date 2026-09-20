@@ -5,7 +5,14 @@
   import { marked } from 'marked';
 
   import { SaveRevisionTracker } from '@/lib/autosave';
-  import { ApiError, createMemo, deleteMemo, updateMemo } from '@/lib/api/memo';
+  import {
+    ApiError,
+    createMemo,
+    deleteMemo,
+    getApiErrorMessage,
+    isUnauthorizedApiError,
+    updateMemo
+  } from '@/lib/api/memo';
   import type { Memo } from '@/lib/api/types';
 
   export let mode: 'create' | 'edit';
@@ -22,6 +29,7 @@
   let status: 'saved' | 'dirty' | 'saving' | 'conflict' | 'error' =
     mode === 'edit' ? 'saved' : 'dirty';
   let errorMessage = '';
+  let authRequired = false;
   let saveTimeout: ReturnType<typeof setTimeout> | undefined;
 
   $: tags = tagsText
@@ -34,7 +42,7 @@
 
   function scheduleAutosave(): void {
     if (saveTimeout) clearTimeout(saveTimeout);
-    if (mode !== 'edit') return;
+    if (mode !== 'edit' || authRequired) return;
 
     saveTimeout = setTimeout(() => {
       saveTimeout = undefined;
@@ -44,6 +52,11 @@
 
   function markDirty(): void {
     revisions.markDirty();
+    if (authRequired) {
+      status = 'error';
+      return;
+    }
+
     status = 'dirty';
     errorMessage = '';
     scheduleAutosave();
@@ -69,6 +82,7 @@
           content,
           tags
         });
+        authRequired = false;
         status = 'saved';
         await goto(`/memos/${created.id}/edit`, { replaceState: true });
         return;
@@ -83,6 +97,7 @@
       });
       memo = updated;
       version = updated.version;
+      authRequired = false;
 
       if (revisions.isCurrent(revisionBeingSaved)) {
         status = 'saved';
@@ -91,12 +106,20 @@
         scheduleAutosave();
       }
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
+      if (isUnauthorizedApiError(error)) {
+        authRequired = true;
+        if (saveTimeout) {
+          clearTimeout(saveTimeout);
+          saveTimeout = undefined;
+        }
+        status = 'error';
+        errorMessage = getApiErrorMessage(error, '保存に失敗しました');
+      } else if (error instanceof ApiError && error.status === 409) {
         status = 'conflict';
         errorMessage = '別の更新が先に保存されています。再読み込みして内容を確認してください。';
       } else {
         status = 'error';
-        errorMessage = error instanceof Error ? error.message : '保存に失敗しました';
+        errorMessage = getApiErrorMessage(error, '保存に失敗しました');
       }
     } finally {
       saving = false;
@@ -111,10 +134,18 @@
     errorMessage = '';
     try {
       await deleteMemo(memo.id);
+      authRequired = false;
       await goto('/memos');
     } catch (error) {
+      if (isUnauthorizedApiError(error)) {
+        authRequired = true;
+        if (saveTimeout) {
+          clearTimeout(saveTimeout);
+          saveTimeout = undefined;
+        }
+      }
       status = 'error';
-      errorMessage = error instanceof Error ? error.message : '削除に失敗しました';
+      errorMessage = getApiErrorMessage(error, '削除に失敗しました');
       deleting = false;
     }
   }
@@ -211,8 +242,16 @@
       </label>
 
       {#if errorMessage}
-        <div class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {errorMessage}
+        <div
+          class="rounded-2xl border px-4 py-3 text-sm {authRequired
+            ? 'border-amber-200 bg-amber-50 text-amber-800'
+            : 'border-rose-200 bg-rose-50 text-rose-700'}"
+          role="alert"
+        >
+          {#if authRequired}
+            <p class="font-semibold">認証が必要です。自動保存を停止しました。</p>
+          {/if}
+          <p class={authRequired ? 'mt-1' : ''}>{errorMessage}</p>
         </div>
       {/if}
 
