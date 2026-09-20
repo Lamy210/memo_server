@@ -1,0 +1,49 @@
+name: Generate Playwright lockfile
+
+on:
+  push:
+    branches:
+      - deps/playwright-1.63
+
+permissions:
+  contents: write
+
+jobs:
+  update-lockfile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: deps/playwright-1.63
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.9 --activate
+
+      - name: Update Playwright lockfile
+        run: pnpm --dir frontend add --save-dev @playwright/test@1.63.0 --lockfile-only
+
+      - name: Commit generated dependency metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package.json frontend/pnpm-lock.yaml
+          if git diff --cached --quiet; then
+            echo "No dependency metadata changes"
+            exit 0
+          fi
+          git commit -m "deps: update Playwright to 1.63.0"
+          git push origin HEAD:deps/playwright-1.63
