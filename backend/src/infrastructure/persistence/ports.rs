@@ -8,12 +8,10 @@ use crate::{
     error::AppResult,
 };
 
-pub const PROJECTION_RETRY_BUCKETS: i32 = 16;
 pub const PROJECTION_DELETE_TARGET: i32 = -1;
 
 #[derive(Debug, Clone)]
 pub struct ProjectionIntent {
-    pub bucket: i32,
     pub event_id: Uuid,
     pub user_id: Uuid,
     pub memo_id: Uuid,
@@ -23,17 +21,12 @@ pub struct ProjectionIntent {
 impl ProjectionIntent {
     pub fn new(user_id: Uuid, memo_id: Uuid, target_version: i32) -> Self {
         Self {
-            bucket: projection_bucket(memo_id),
             event_id: Uuid::new_v4(),
             user_id,
             memo_id,
             target_version,
         }
     }
-}
-
-pub fn projection_bucket(memo_id: Uuid) -> i32 {
-    (memo_id.as_u128() % PROJECTION_RETRY_BUCKETS as u128) as i32
 }
 
 #[async_trait]
@@ -69,7 +62,7 @@ pub trait MemoAuthoritativeStore: Send + Sync {
         target_version: i32,
     ) -> AppResult<ProjectionIntent>;
 
-    async fn list_projection_intents(&self, bucket: i32) -> AppResult<Vec<ProjectionIntent>>;
+    async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>>;
 
     async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()>;
 }
@@ -102,13 +95,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn projection_intent_bucket_is_stable_and_bounded() {
+    fn projection_intents_receive_unique_event_ids() {
+        let user_id = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
 
-        let first = ProjectionIntent::new(Uuid::new_v4(), memo_id, 1);
-        let second = ProjectionIntent::new(Uuid::new_v4(), memo_id, 2);
+        let first = ProjectionIntent::new(user_id, memo_id, 1);
+        let second = ProjectionIntent::new(user_id, memo_id, 2);
 
-        assert_eq!(first.bucket, second.bucket);
-        assert!((0..PROJECTION_RETRY_BUCKETS).contains(&first.bucket));
+        assert_ne!(first.event_id, second.event_id);
+        assert_eq!(first.memo_id, memo_id);
+        assert_eq!(second.target_version, 2);
     }
 }
