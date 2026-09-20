@@ -121,6 +121,8 @@ The frontend uses a SvelteKit server-side proxy as the memo API BFF boundary. Br
 - local development: private `DEVELOPMENT_USER_ID`, only when the SvelteKit server is running in development mode
 - production: a short-lived access token resolved by the future server-side authentication/session hook and exposed as `App.Locals.accessToken`
 
+The frontend also emits a browser hardening baseline from SvelteKit itself. The production response includes a Content Security Policy that limits scripts, connections, forms, framing, objects, fonts, images, manifests, and workers to expected same-origin sources. Inline style attributes remain temporarily allowed because the current SvelteKit app template uses `style="display: contents"`; scripts do not receive `unsafe-inline`. A server hook also enforces `nosniff`, frame denial, strict referrer behavior, restrictive permissions policy, COOP/CORP, and cross-domain policy headers.
+
 The BFF also rejects unsafe memo mutations unless both conditions hold:
 
 - the browser request carries the frontend-controlled `X-Schnee-Memo-Request: 1` marker
