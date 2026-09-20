@@ -61,9 +61,11 @@ If an operational timestamp is required outside ciphertext, it must be explicitl
 
 ## 4. Identity metadata
 
-External authentication subjects must not become durable memo ownership identifiers.
+Upstream identity-provider subjects must not become durable memo ownership identifiers.
 
-Required boundary:
+The dedicated authentication service may place its own opaque memo principal identifier in JWT `sub`. In that case, `sub` may be used as `owner_partition` directly only when the auth contract guarantees that the value is randomly generated/internal, stable for the memo authorization boundary, and does not expose or reuse an upstream provider subject.
+
+Otherwise the required boundary is:
 
 ```text
 authentication subject
