@@ -8,23 +8,27 @@ use crate::{
     error::AppResult,
 };
 
-pub const PROJECTION_DELETE_TARGET: i32 = -1;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionTarget {
+    Version(i32),
+    Deleted,
+}
 
 #[derive(Debug, Clone)]
 pub struct ProjectionIntent {
     pub event_id: Uuid,
     pub user_id: Uuid,
     pub memo_id: Uuid,
-    pub target_version: i32,
+    pub target: ProjectionTarget,
 }
 
 impl ProjectionIntent {
-    pub fn new(user_id: Uuid, memo_id: Uuid, target_version: i32) -> Self {
+    pub fn new(user_id: Uuid, memo_id: Uuid, target: ProjectionTarget) -> Self {
         Self {
             event_id: Uuid::new_v4(),
             user_id,
             memo_id,
-            target_version,
+            target,
         }
     }
 }
@@ -59,7 +63,7 @@ pub trait MemoAuthoritativeStore: Send + Sync {
         &self,
         user_id: Uuid,
         memo_id: Uuid,
-        target_version: i32,
+        target: ProjectionTarget,
     ) -> AppResult<ProjectionIntent>;
 
     async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>>;
@@ -99,11 +103,12 @@ mod tests {
         let user_id = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
 
-        let first = ProjectionIntent::new(user_id, memo_id, 1);
-        let second = ProjectionIntent::new(user_id, memo_id, 2);
+        let first = ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(1));
+        let second = ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Deleted);
 
         assert_ne!(first.event_id, second.event_id);
         assert_eq!(first.memo_id, memo_id);
-        assert_eq!(second.target_version, 2);
+        assert_eq!(first.target, ProjectionTarget::Version(1));
+        assert_eq!(second.target, ProjectionTarget::Deleted);
     }
 }
