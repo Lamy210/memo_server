@@ -104,7 +104,7 @@ jobs:
 
           if ! (
             cd candidate/frontend
-            node tests/visual/capture.js
+            node tests/visual/capture.js 2>&1 | tee "$RUNNER_TEMP/ui-base-a11y.log"
           ); then
             mkdir -p artifacts/baseline
             cp -a candidate/frontend/.visual-output/. artifacts/baseline/ 2>/dev/null || true
@@ -167,7 +167,7 @@ jobs:
 
           if ! (
             cd candidate/frontend
-            node tests/visual/capture.js
+            node tests/visual/capture.js 2>&1 | tee "$RUNNER_TEMP/ui-candidate-a11y.log"
           ); then
             mkdir -p artifacts/candidate
             cp -a candidate/frontend/.visual-output/. artifacts/candidate/ 2>/dev/null || true
@@ -182,6 +182,26 @@ jobs:
         run: |
           bash candidate/scripts/ui-diff.sh artifacts/baseline artifacts/candidate artifacts/diff
           cat artifacts/diff/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize accessibility observations
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo
+            echo "## Accessibility observations"
+            if [[ -f "$RUNNER_TEMP/ui-candidate-a11y.log" ]]; then
+              if grep '^A11Y ' "$RUNNER_TEMP/ui-candidate-a11y.log" | sed 's/^A11Y /- /'; then
+                :
+              else
+                echo "- Candidate UI capture produced no axe summary."
+              fi
+            else
+              echo "- Candidate UI capture did not run."
+            fi
+            echo
+            echo "axe-core findings are informational while the initial accessibility baseline is being established."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect visual test logs
         if: always()
