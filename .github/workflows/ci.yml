@@ -114,7 +114,57 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Browser E2E
-        run: pnpm test:e2e
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pnpm build
+
+          python3 ../scripts/ui-fixture-server.py --port 18080 >"$RUNNER_TEMP/e2e-fixture.log" 2>&1 &
+          fixture_pid=$!
+
+          BACKEND_URL=http://127.0.0.1:18080 \
+            pnpm preview --host 127.0.0.1 --port 4173 --strictPort >"$RUNNER_TEMP/e2e-preview.log" 2>&1 &
+          server_pid=$!
+
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            kill "$fixture_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          fixture_ready=0
+          frontend_ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then
+              fixture_ready=1
+            fi
+            if curl -fsS http://127.0.0.1:4173/memos >/dev/null; then
+              frontend_ready=1
+            fi
+            if [[ "$fixture_ready" -eq 1 && "$frontend_ready" -eq 1 ]]; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$fixture_ready" -ne 1 || "$frontend_ready" -ne 1 ]]; then
+            cat "$RUNNER_TEMP/e2e-fixture.log" >&2 || true
+            cat "$RUNNER_TEMP/e2e-preview.log" >&2 || true
+            exit 1
+          fi
+
+          curl -fsS http://127.0.0.1:4173/api/v1/memos \
+            | python3 -c 'import json, sys; data=json.load(sys.stdin); assert len(data) == 3'
+
+          pnpm test:e2e
+
+      - name: Collect browser E2E logs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p test-results/server-logs
+          cp "$RUNNER_TEMP"/e2e-*.log test-results/server-logs/ 2>/dev/null || true
 
       - name: Upload Playwright report
         if: always()
