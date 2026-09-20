@@ -12,10 +12,9 @@ use uuid::Uuid;
 
 use crate::{
     error::{AppError, AppResult},
-    infrastructure::persistence::{
-        elasticsearch::ElasticsearchClient,
-        redis::RedisCache,
-        scylla::{ProjectionRetry, ScyllaDB, PROJECTION_DELETE_TARGET, PROJECTION_RETRY_BUCKETS},
+    infrastructure::persistence::ports::{
+        MemoAuthoritativeStore, MemoCache, MemoSearchProjection, ProjectionIntent,
+        PROJECTION_DELETE_TARGET, PROJECTION_RETRY_BUCKETS,
     },
 };
 
@@ -66,23 +65,23 @@ enum ReconcileOutcome {
 }
 
 pub struct ProjectionReconciler {
-    scylla: Arc<ScyllaDB>,
-    redis: Arc<RedisCache>,
-    elasticsearch: Arc<ElasticsearchClient>,
+    authoritative_store: Arc<dyn MemoAuthoritativeStore>,
+    cache: Arc<dyn MemoCache>,
+    search_projection: Arc<dyn MemoSearchProjection>,
     retry_states: Mutex<HashMap<Uuid, RetryState>>,
     counters: ReconciliationCounters,
 }
 
 impl ProjectionReconciler {
     pub fn new(
-        scylla: Arc<ScyllaDB>,
-        redis: Arc<RedisCache>,
-        elasticsearch: Arc<ElasticsearchClient>,
+        authoritative_store: Arc<dyn MemoAuthoritativeStore>,
+        cache: Arc<dyn MemoCache>,
+        search_projection: Arc<dyn MemoSearchProjection>,
     ) -> Self {
         Self {
-            scylla,
-            redis,
-            elasticsearch,
+            authoritative_store,
+            cache,
+            search_projection,
             retry_states: Mutex::new(HashMap::new()),
             counters: ReconciliationCounters::default(),
         }
@@ -93,16 +92,16 @@ impl ProjectionReconciler {
         user_id: Uuid,
         memo_id: Uuid,
         target_version: i32,
-    ) -> AppResult<ProjectionRetry> {
+    ) -> AppResult<ProjectionIntent> {
         let event = self
             .scylla
-            .enqueue_projection_retry(user_id, memo_id, target_version)
+            .enqueue_projection_intent(user_id, memo_id, target_version)
             .await?;
         self.track_event(event.event_id, Instant::now());
         Ok(event)
     }
 
-    pub async fn reconcile_now(&self, event: &ProjectionRetry) {
+    pub async fn reconcile_now(&self, event: &ProjectionIntent) {
         let now = Instant::now();
         match self.reconcile_event(event).await {
             Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
@@ -136,7 +135,7 @@ impl ProjectionReconciler {
         let mut seen_event_ids = HashSet::new();
 
         for bucket in 0..PROJECTION_RETRY_BUCKETS {
-            let events = self.scylla.list_projection_retries(bucket).await?;
+            let events = self.authoritative_store.list_projection_intents(bucket).await?;
             pending_intents = pending_intents.saturating_add(events.len() as u64);
 
             for event in events {
@@ -150,7 +149,7 @@ impl ProjectionReconciler {
                     Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
                     Ok(ReconcileOutcome::WaitingForTarget) => {
                         if self.is_stale_unreached(event.event_id, now) {
-                            self.scylla.acknowledge_projection_retry(&event).await?;
+                            self.authoritative_store.acknowledge_projection_intent(&event).await?;
                             self.clear_retry_state(event.event_id);
                             self.counters
                                 .stale_dropped_total
@@ -186,8 +185,8 @@ impl ProjectionReconciler {
         Ok(())
     }
 
-    async fn reconcile_event(&self, event: &ProjectionRetry) -> AppResult<ReconcileOutcome> {
-        let memo = self.scylla.find_by_id(event.user_id, event.memo_id).await?;
+    async fn reconcile_event(&self, event: &ProjectionIntent) -> AppResult<ReconcileOutcome> {
+        let memo = self.authoritative_store.find_by_id(event.user_id, event.memo_id).await?;
 
         if !target_reached(event, memo.as_ref()) {
             return Ok(ReconcileOutcome::WaitingForTarget);
@@ -198,19 +197,19 @@ impl ProjectionReconciler {
 
         match memo.as_ref() {
             Some(memo) => {
-                if let Err(error) = self.elasticsearch.index_memo(memo).await {
-                    failures.push(format!("elasticsearch={error}"));
+                if let Err(error) = self.search_projection.index_memo(memo).await {
+                    failures.push(format!("search_projection={error}"));
                 }
-                if let Err(error) = self.redis.set(&cache_key, memo, Some(CACHE_TTL)).await {
-                    failures.push(format!("redis={error}"));
+                if let Err(error) = self.cache.set_memo(&cache_key, memo, Some(CACHE_TTL)).await {
+                    failures.push(format!("cache={error}"));
                 }
             }
             None => {
-                if let Err(error) = self.elasticsearch.delete_memo(event.memo_id).await {
-                    failures.push(format!("elasticsearch={error}"));
+                if let Err(error) = self.search_projection.delete_memo(event.memo_id).await {
+                    failures.push(format!("search_projection={error}"));
                 }
-                if let Err(error) = self.redis.delete(&cache_key).await {
-                    failures.push(format!("redis={error}"));
+                if let Err(error) = self.cache.delete(&cache_key).await {
+                    failures.push(format!("cache={error}"));
                 }
             }
         }
@@ -219,23 +218,23 @@ impl ProjectionReconciler {
             return Err(AppError::DatabaseError(failures.join("; ")));
         }
 
-        let current = self.scylla.find_by_id(event.user_id, event.memo_id).await?;
+        let current = self.authoritative_store.find_by_id(event.user_id, event.memo_id).await?;
         if projection_state(memo.as_ref()) != projection_state(current.as_ref()) {
             let target_version = current
                 .as_ref()
                 .map(|memo| memo.version)
                 .unwrap_or(PROJECTION_DELETE_TARGET);
-            self.scylla
-                .enqueue_projection_retry(event.user_id, event.memo_id, target_version)
+            self.authoritative_store
+                .enqueue_projection_intent(event.user_id, event.memo_id, target_version)
                 .await?;
         }
 
-        self.scylla.acknowledge_projection_retry(event).await?;
+        self.authoritative_store.acknowledge_projection_intent(event).await?;
         Ok(ReconcileOutcome::Completed)
     }
 
-    pub async fn cancel(&self, event: &ProjectionRetry) {
-        match self.scylla.acknowledge_projection_retry(event).await {
+    pub async fn cancel(&self, event: &ProjectionIntent) {
+        match self.authoritative_store.acknowledge_projection_intent(event).await {
             Ok(()) => self.clear_retry_state(event.event_id),
             Err(error) => {
                 log::warn!(
@@ -353,7 +352,7 @@ fn projection_state(memo: Option<&crate::domain::memo::entity::Memo>) -> Option<
 }
 
 fn target_reached(
-    event: &ProjectionRetry,
+    event: &ProjectionIntent,
     memo: Option<&crate::domain::memo::entity::Memo>,
 ) -> bool {
     if event.target_version == PROJECTION_DELETE_TARGET {
@@ -371,14 +370,8 @@ fn cache_key(user_id: Uuid, memo_id: Uuid) -> String {
 mod tests {
     use super::*;
 
-    fn retry(user_id: Uuid, memo_id: Uuid, target_version: i32) -> ProjectionRetry {
-        ProjectionRetry {
-            bucket: ScyllaDB::projection_retry_bucket(memo_id),
-            event_id: Uuid::new_v4(),
-            user_id,
-            memo_id,
-            target_version,
-        }
+    fn retry(user_id: Uuid, memo_id: Uuid, target_version: i32) -> ProjectionIntent {
+        ProjectionIntent::new(user_id, memo_id, target_version)
     }
 
     #[test]
