@@ -58,7 +58,11 @@ impl MemoRepository for MemoRepositoryImpl {
         }
 
         if let Some(memo) = self.authoritative_store.find_by_id(user_id, id).await? {
-            if let Err(error) = self.cache.set_memo(&cache_key, &memo, Some(CACHE_TTL)).await {
+            if let Err(error) = self
+                .cache
+                .set_memo(&cache_key, &memo, Some(CACHE_TTL))
+                .await
+            {
                 log::warn!(
                     "Cache fill failed after authoritative store read: memo_id={id} user_id={user_id} error={error}"
                 );
