@@ -14,7 +14,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::{MemoAuthoritativeStore, ProjectionIntent, PROJECTION_DELETE_TARGET};
+use super::ports::{MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget};
 
 type MemoRow = (
     Uuid,
@@ -29,6 +29,7 @@ type MemoRow = (
 type ProjectionIntentRow = (Uuid, Uuid, Uuid, i32);
 
 const PROJECTION_RETRY_BUCKETS: i32 = 16;
+const SCYLLA_PROJECTION_DELETE_TARGET: i32 = -1;
 
 pub struct ScyllaDB {
     session: Arc<Session>,
@@ -344,10 +345,11 @@ impl ScyllaDB {
         &self,
         user_id: Uuid,
         memo_id: Uuid,
-        target_version: i32,
+        target: ProjectionTarget,
     ) -> AppResult<ProjectionIntent> {
-        let event = ProjectionIntent::new(user_id, memo_id, target_version);
+        let event = ProjectionIntent::new(user_id, memo_id, target);
         let bucket = projection_bucket(memo_id);
+        let target_version = projection_target_to_scylla(target);
 
         self.session
             .execute_unpaged(
@@ -357,7 +359,7 @@ impl ScyllaDB {
                     event.event_id,
                     event.user_id,
                     event.memo_id,
-                    event.target_version,
+                    target_version,
                 ),
             )
             .await
@@ -396,18 +398,17 @@ impl ScyllaDB {
 
         typed_rows
             .map(|row| {
-                row.map(
-                    |(event_id, user_id, memo_id, target_version)| ProjectionIntent {
-                        event_id,
-                        user_id,
-                        memo_id,
-                        target_version,
-                    },
-                )
-                .map_err(|error| {
+                let (event_id, user_id, memo_id, target_version) = row.map_err(|error| {
                     AppError::DatabaseError(format!(
                         "Failed to deserialize projection reconciliation intent: {error}"
                     ))
+                })?;
+                let target = projection_target_from_scylla(target_version)?;
+                Ok(ProjectionIntent {
+                    event_id,
+                    user_id,
+                    memo_id,
+                    target,
                 })
             })
             .collect()
@@ -467,8 +468,13 @@ impl MemoAuthoritativeStore for ScyllaDB {
     }
 
     async fn save_with_projection_intent(&self, memo: &Memo) -> AppResult<ProjectionIntent> {
-        let event =
-            ScyllaDB::enqueue_projection_intent(self, memo.user_id, memo.id, memo.version).await?;
+        let event = ScyllaDB::enqueue_projection_intent(
+            self,
+            memo.user_id,
+            memo.id,
+            ProjectionTarget::Version(memo.version),
+        )
+        .await?;
 
         ScyllaDB::save(self, memo).await?;
 
@@ -481,7 +487,7 @@ impl MemoAuthoritativeStore for ScyllaDB {
         id: Uuid,
     ) -> AppResult<ProjectionIntent> {
         let event =
-            ScyllaDB::enqueue_projection_intent(self, user_id, id, PROJECTION_DELETE_TARGET)
+            ScyllaDB::enqueue_projection_intent(self, user_id, id, ProjectionTarget::Deleted)
                 .await?;
 
         ScyllaDB::delete(self, user_id, id).await?;
@@ -497,9 +503,9 @@ impl MemoAuthoritativeStore for ScyllaDB {
         &self,
         user_id: Uuid,
         memo_id: Uuid,
-        target_version: i32,
+        target: ProjectionTarget,
     ) -> AppResult<ProjectionIntent> {
-        ScyllaDB::enqueue_projection_intent(self, user_id, memo_id, target_version).await
+        ScyllaDB::enqueue_projection_intent(self, user_id, memo_id, target).await
     }
 
     async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
@@ -517,6 +523,23 @@ impl MemoAuthoritativeStore for ScyllaDB {
 
 fn projection_bucket(memo_id: Uuid) -> i32 {
     (memo_id.as_u128() % PROJECTION_RETRY_BUCKETS as u128) as i32
+}
+
+fn projection_target_to_scylla(target: ProjectionTarget) -> i32 {
+    match target {
+        ProjectionTarget::Version(version) => version,
+        ProjectionTarget::Deleted => SCYLLA_PROJECTION_DELETE_TARGET,
+    }
+}
+
+fn projection_target_from_scylla(value: i32) -> AppResult<ProjectionTarget> {
+    match value {
+        SCYLLA_PROJECTION_DELETE_TARGET => Ok(ProjectionTarget::Deleted),
+        version if version > 0 => Ok(ProjectionTarget::Version(version)),
+        _ => Err(AppError::DatabaseError(format!(
+            "Invalid projection target version stored in Scylla: {value}"
+        ))),
+    }
 }
 
 #[async_trait]
