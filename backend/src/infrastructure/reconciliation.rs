@@ -14,7 +14,7 @@ use crate::{
     error::{AppError, AppResult},
     infrastructure::persistence::ports::{
         MemoAuthoritativeStore, MemoCache, MemoSearchProjection, ProjectionIntent,
-        PROJECTION_DELETE_TARGET,
+        ProjectionTarget,
     },
 };
 
@@ -96,11 +96,11 @@ impl ProjectionReconciler {
             Err(error) => {
                 let retry_after = self.defer_after_failure(event.event_id, now);
                 log::warn!(
-                    "Projection reconciliation deferred: event_id={} memo_id={} user_id={} target_version={} retry_after_seconds={} error={error}",
+                    "Projection reconciliation deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
                     event.event_id,
                     event.memo_id,
                     event.user_id,
-                    event.target_version,
+                    event.target,
                     retry_after.as_secs()
                 );
             }
@@ -141,22 +141,22 @@ impl ProjectionReconciler {
                             .stale_dropped_total
                             .fetch_add(1, Ordering::Relaxed);
                         log::warn!(
-                            "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target_version={}",
+                            "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
                             event.event_id,
                             event.memo_id,
                             event.user_id,
-                            event.target_version
+                            event.target
                         );
                     }
                 }
                 Err(error) => {
                     let retry_after = self.defer_after_failure(event.event_id, now);
                     log::warn!(
-                        "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target_version={} retry_after_seconds={} error={error}",
+                        "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
                         event.event_id,
                         event.memo_id,
                         event.user_id,
-                        event.target_version,
+                        event.target,
                         retry_after.as_secs()
                     );
                 }
@@ -211,12 +211,12 @@ impl ProjectionReconciler {
             .find_by_id(event.user_id, event.memo_id)
             .await?;
         if projection_state(memo.as_ref()) != projection_state(current.as_ref()) {
-            let target_version = current
+            let target = current
                 .as_ref()
-                .map(|memo| memo.version)
-                .unwrap_or(PROJECTION_DELETE_TARGET);
+                .map(|memo| ProjectionTarget::Version(memo.version))
+                .unwrap_or(ProjectionTarget::Deleted);
             self.authoritative_store
-                .enqueue_projection_intent(event.user_id, event.memo_id, target_version)
+                .enqueue_projection_intent(event.user_id, event.memo_id, target)
                 .await?;
         }
 
@@ -334,11 +334,10 @@ fn target_reached(
     event: &ProjectionIntent,
     memo: Option<&crate::domain::memo::entity::Memo>,
 ) -> bool {
-    if event.target_version == PROJECTION_DELETE_TARGET {
-        return memo.is_none();
+    match event.target {
+        ProjectionTarget::Version(version) => memo.is_some_and(|memo| memo.version >= version),
+        ProjectionTarget::Deleted => memo.is_none(),
     }
-
-    memo.is_some_and(|memo| memo.version >= event.target_version)
 }
 
 fn cache_key(user_id: Uuid, memo_id: Uuid) -> String {
@@ -349,15 +348,15 @@ fn cache_key(user_id: Uuid, memo_id: Uuid) -> String {
 mod tests {
     use super::*;
 
-    fn retry(user_id: Uuid, memo_id: Uuid, target_version: i32) -> ProjectionIntent {
-        ProjectionIntent::new(user_id, memo_id, target_version)
+    fn retry(user_id: Uuid, memo_id: Uuid, target: ProjectionTarget) -> ProjectionIntent {
+        ProjectionIntent::new(user_id, memo_id, target)
     }
 
     #[test]
     fn present_target_waits_until_scylla_reaches_expected_version() {
         let user_id = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
-        let event = retry(user_id, memo_id, 2);
+        let event = retry(user_id, memo_id, ProjectionTarget::Version(2));
         let mut memo = crate::domain::memo::entity::Memo::new(
             "title".into(),
             "content".into(),
@@ -380,7 +379,7 @@ mod tests {
     fn delete_target_waits_until_scylla_row_is_absent() {
         let user_id = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
-        let event = retry(user_id, memo_id, PROJECTION_DELETE_TARGET);
+        let event = retry(user_id, memo_id, ProjectionTarget::Deleted);
         let mut memo = crate::domain::memo::entity::Memo::new(
             "title".into(),
             "content".into(),
