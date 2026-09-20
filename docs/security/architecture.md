@@ -213,9 +213,12 @@ Long-lived root key material must not be stored in application configuration or 
 Conceptual hierarchy:
 
 ```text
-Passkey / Device
+Device-bound secret source
        |
-Device secret or device-bound secret material
+       +--> WebAuthn PRF output, when explicitly supported
+       |    by the selected credential/authenticator
+       |
+       +--> independent device secret otherwise
        |
 HKDF-SHA-384
        |
@@ -227,7 +230,7 @@ Vault Root Key
        +--> Search Key
 ```
 
-A passkey private key is an authentication credential and must not be treated as the memo encryption key.
+A passkey private key is an authentication credential and must not be treated as the memo encryption key. Passkey authentication by itself does not expose key material. If the WebAuthn Level 3 `prf` extension is used for VAULT key derivation, the client must capability-detect it and keep PRF outputs client-side; authenticators without PRF support use a separate device secret instead.
 
 ## 8. Multi-device VAULT
 
