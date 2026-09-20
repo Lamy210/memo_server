@@ -22,7 +22,7 @@
     "@axe-core/playwright": "^4.13.0",
     "@eslint/compat": "^1.2.3",
     "@lhci/cli": "^0.15.1",
-    "@playwright/test": "^1.45.3",
+    "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-node": "^5.2.9",
     "@sveltejs/kit": "^2.0.0",
     "@sveltejs/vite-plugin-svelte": "^4.0.0",
