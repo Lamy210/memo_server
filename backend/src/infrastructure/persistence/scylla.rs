@@ -14,7 +14,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::{MemoAuthoritativeStore, ProjectionIntent};
+use super::ports::{MemoAuthoritativeStore, ProjectionIntent, PROJECTION_DELETE_TARGET};
 
 type MemoRow = (
     Uuid,
@@ -491,8 +491,7 @@ impl MemoAuthoritativeStore for ScyllaDB {
         id: Uuid,
     ) -> AppResult<ProjectionIntent> {
         let event =
-            ScyllaDB::enqueue_projection_intent(self, user_id, id, super::ports::PROJECTION_DELETE_TARGET)
-                .await?;
+            ScyllaDB::enqueue_projection_intent(self, user_id, id, PROJECTION_DELETE_TARGET).await?;
 
         if let Err(error) = ScyllaDB::delete(self, user_id, id).await {
             if let Err(cleanup_error) = ScyllaDB::acknowledge_projection_intent(self, &event).await {
