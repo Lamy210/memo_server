@@ -14,9 +14,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::{
-    MemoAuthoritativeStore, ProjectionIntent,
-};
+use super::ports::{MemoAuthoritativeStore, ProjectionIntent};
 
 type MemoRow = (
     Uuid,
