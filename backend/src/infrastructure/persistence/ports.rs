@@ -4,10 +4,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    domain::memo::{
-        entity::Memo,
-        repository::MemoSearchPage,
-    },
+    domain::memo::{entity::Memo, repository::MemoSearchPage},
     error::AppResult,
 };
 
@@ -62,12 +59,8 @@ pub trait MemoAuthoritativeStore: Send + Sync {
 #[async_trait]
 pub trait MemoCache: Send + Sync {
     async fn get_memo(&self, key: &str) -> AppResult<Option<Memo>>;
-    async fn set_memo(
-        &self,
-        key: &str,
-        memo: &Memo,
-        expiration: Option<Duration>,
-    ) -> AppResult<()>;
+    async fn set_memo(&self, key: &str, memo: &Memo, expiration: Option<Duration>)
+        -> AppResult<()>;
     async fn delete(&self, key: &str) -> AppResult<()>;
     async fn exists(&self, key: &str) -> AppResult<bool>;
 }
