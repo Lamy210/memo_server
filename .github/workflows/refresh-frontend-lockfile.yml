@@ -1,4 +1,4 @@
-name: Refresh frontend lockfile artifact
+name: Refresh frontend lockfile
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - test/frontend-quality-baseline
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   refresh-lockfile:
@@ -29,10 +29,17 @@ jobs:
       - name: Resolve frontend lockfile
         run: pnpm --dir frontend install --lockfile-only --no-frozen-lockfile
 
-      - name: Upload generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-pnpm-lockfile
-          path: frontend/pnpm-lock.yaml
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit generated lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add frontend/pnpm-lock.yaml
+          if git diff --cached --quiet; then
+            echo "Lockfile is already current."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: refresh frontend pnpm lockfile"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
