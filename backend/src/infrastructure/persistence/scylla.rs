@@ -460,12 +460,47 @@ impl MemoAuthoritativeStore for ScyllaDB {
         ScyllaDB::find_all_by_user_id(self, user_id).await
     }
 
-    async fn save(&self, memo: &Memo) -> AppResult<()> {
-        ScyllaDB::save(self, memo).await
+    async fn save_with_projection_intent(&self, memo: &Memo) -> AppResult<ProjectionIntent> {
+        let event =
+            ScyllaDB::enqueue_projection_intent(self, memo.user_id, memo.id, memo.version).await?;
+
+        if let Err(error) = ScyllaDB::save(self, memo).await {
+            if let Err(cleanup_error) = ScyllaDB::acknowledge_projection_intent(self, &event).await {
+                log::warn!(
+                    "Failed to clean up projection intent after Scylla save failure: event_id={} memo_id={} user_id={} error={cleanup_error}",
+                    event.event_id,
+                    event.memo_id,
+                    event.user_id
+                );
+            }
+            return Err(error);
+        }
+
+        Ok(event)
     }
 
-    async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()> {
-        ScyllaDB::delete(self, user_id, id).await
+    async fn delete_with_projection_intent(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+    ) -> AppResult<ProjectionIntent> {
+        let event =
+            ScyllaDB::enqueue_projection_intent(self, user_id, id, super::ports::PROJECTION_DELETE_TARGET)
+                .await?;
+
+        if let Err(error) = ScyllaDB::delete(self, user_id, id).await {
+            if let Err(cleanup_error) = ScyllaDB::acknowledge_projection_intent(self, &event).await {
+                log::warn!(
+                    "Failed to clean up projection intent after Scylla delete failure: event_id={} memo_id={} user_id={} error={cleanup_error}",
+                    event.event_id,
+                    event.memo_id,
+                    event.user_id
+                );
+            }
+            return Err(error);
+        }
+
+        Ok(event)
     }
 
     async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
