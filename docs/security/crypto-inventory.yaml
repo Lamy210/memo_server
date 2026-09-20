@@ -235,6 +235,8 @@ suites:
     implementation_status: PLANNED
     intended_state: target
     encryption: AES-256-GCM
+    nonce_size_bits: 96
+    tag_size_bits: 128
     kdf: HKDF-SHA-384
     mac: HMAC-SHA-384
     signature: null
