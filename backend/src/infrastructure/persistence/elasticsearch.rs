@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use crate::application::health::HealthProbe;
 use crate::domain::memo::{entity::Memo, repository::MemoSearchPage};
 use crate::error::{AppError, AppResult};
+
+use super::ports::MemoSearchProjection;
 use elasticsearch::{
     http::transport::Transport, params::Refresh, DeleteByQueryParts, Elasticsearch, IndexParts,
     SearchParts,
@@ -291,6 +293,28 @@ impl ElasticsearchClient {
             .map_err(|e| AppError::DatabaseError(format!("Health check failed: {}", e)))?;
 
         Ok(response.status_code().is_success())
+    }
+}
+
+#[async_trait]
+impl MemoSearchProjection for ElasticsearchClient {
+    async fn index_memo(&self, memo: &Memo) -> AppResult<()> {
+        ElasticsearchClient::index_memo(self, memo).await
+    }
+
+    async fn search_memos(
+        &self,
+        query: &str,
+        tag: Option<String>,
+        user_id: Uuid,
+        page: usize,
+        limit: usize,
+    ) -> AppResult<MemoSearchPage> {
+        ElasticsearchClient::search_memos(self, query, tag, user_id, page, limit).await
+    }
+
+    async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
+        ElasticsearchClient::delete_memo(self, id).await
     }
 }
 
