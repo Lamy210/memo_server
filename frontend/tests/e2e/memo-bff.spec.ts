@@ -18,8 +18,9 @@ test('creates a memo through the protected browser BFF', async ({ page }) => {
 
   const [request, response] = await Promise.all([requestPromise, responsePromise]);
   expect(response.status()).toBe(201);
-  expect(request.headers()['x-schnee-memo-request']).toBe('1');
-  expect(request.headers().origin).toBe('http://127.0.0.1:4173');
+  const requestHeaders = await request.allHeaders();
+  expect(requestHeaders['x-schnee-memo-request']).toBe('1');
+  expect(requestHeaders.origin).toBe('http://127.0.0.1:4173');
 
   await expect(page).toHaveURL(/\/memos\/018f0c7a-8b7d-7f25-b239-36e6d9f9b001\/edit$/);
   await expect(page.getByRole('heading', { name: 'メモを編集' })).toBeVisible();
