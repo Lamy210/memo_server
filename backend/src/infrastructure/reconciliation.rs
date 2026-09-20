@@ -94,7 +94,7 @@ impl ProjectionReconciler {
         target_version: i32,
     ) -> AppResult<ProjectionIntent> {
         let event = self
-            .scylla
+            .authoritative_store
             .enqueue_projection_intent(user_id, memo_id, target_version)
             .await?;
         self.track_event(event.event_id, Instant::now());
