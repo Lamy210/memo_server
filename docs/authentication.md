@@ -119,6 +119,13 @@ The frontend uses a SvelteKit server-side proxy as the memo API BFF boundary. Br
 - local development: private `DEVELOPMENT_USER_ID`, only when the SvelteKit server is running in development mode
 - production: a short-lived access token resolved by the future server-side authentication/session hook and exposed as `App.Locals.accessToken`
 
+The BFF also rejects unsafe memo mutations unless both conditions hold:
+
+- the browser request carries the frontend-controlled `X-Schnee-Memo-Request: 1` marker
+- the HTTP `Origin` exactly matches the SvelteKit request origin
+
+The marker is stripped before forwarding to memo_server. Cross-site forms cannot add the custom header, while cross-origin JavaScript requires CORS preflight and still fails the exact-origin check. Production reverse proxies must configure SvelteKit's canonical request origin correctly so `event.url.origin` reflects the public application origin.
+
 The login/session/refresh implementation that populates this production server context remains part of the dedicated authentication-service integration tracked by #10 and #13.
 
 ## Local development
