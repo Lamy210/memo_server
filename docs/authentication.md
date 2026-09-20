@@ -114,6 +114,8 @@ The production frontend integration should prefer:
 - validated return/callback targets
 - explicit logout and session invalidation
 
+Return targets are treated as untrusted input. The shared frontend resolver only accepts an internal absolute-path reference beginning with a single `/`, rejects scheme-relative URLs, backslashes, control characters, oversized values, and any parsed target whose origin escapes the application. Accepted values are canonicalized before use; invalid values fall back to `/memos`. The future login/callback implementation must use this resolver rather than redirecting directly to a query-string value.
+
 The frontend uses a SvelteKit server-side proxy as the memo API BFF boundary. Browser-supplied `Authorization`, `X-Development-User-Id`, and Cookie headers are not forwarded directly to memo_server. The proxy only adds authentication from server-controlled context:
 
 - local development: private `DEVELOPMENT_USER_ID`, only when the SvelteKit server is running in development mode
