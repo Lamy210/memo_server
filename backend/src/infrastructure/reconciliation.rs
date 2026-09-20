@@ -14,7 +14,7 @@ use crate::{
     error::{AppError, AppResult},
     infrastructure::persistence::ports::{
         MemoAuthoritativeStore, MemoCache, MemoSearchProjection, ProjectionIntent,
-        PROJECTION_DELETE_TARGET, PROJECTION_RETRY_BUCKETS,
+        PROJECTION_DELETE_TARGET,
     },
 };
 
@@ -118,54 +118,47 @@ impl ProjectionReconciler {
     }
 
     async fn run_once(&self) -> AppResult<()> {
-        let mut pending_intents = 0_u64;
+        let events = self.authoritative_store.list_projection_intents().await?;
+        let pending_intents = events.len() as u64;
         let mut seen_event_ids = HashSet::new();
 
-        for bucket in 0..PROJECTION_RETRY_BUCKETS {
-            let events = self
-                .authoritative_store
-                .list_projection_intents(bucket)
-                .await?;
-            pending_intents = pending_intents.saturating_add(events.len() as u64);
+        for event in events {
+            seen_event_ids.insert(event.event_id);
+            let now = Instant::now();
+            if !self.is_due(event.event_id, now) {
+                continue;
+            }
 
-            for event in events {
-                seen_event_ids.insert(event.event_id);
-                let now = Instant::now();
-                if !self.is_due(event.event_id, now) {
-                    continue;
-                }
-
-                match self.reconcile_event(&event).await {
-                    Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
-                    Ok(ReconcileOutcome::WaitingForTarget) => {
-                        if self.is_stale_unreached(event.event_id, now) {
-                            self.authoritative_store
-                                .acknowledge_projection_intent(&event)
-                                .await?;
-                            self.clear_retry_state(event.event_id);
-                            self.counters
-                                .stale_dropped_total
-                                .fetch_add(1, Ordering::Relaxed);
-                            log::warn!(
-                                "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target_version={}",
-                                event.event_id,
-                                event.memo_id,
-                                event.user_id,
-                                event.target_version
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        let retry_after = self.defer_after_failure(event.event_id, now);
+            match self.reconcile_event(&event).await {
+                Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
+                Ok(ReconcileOutcome::WaitingForTarget) => {
+                    if self.is_stale_unreached(event.event_id, now) {
+                        self.authoritative_store
+                            .acknowledge_projection_intent(&event)
+                            .await?;
+                        self.clear_retry_state(event.event_id);
+                        self.counters
+                            .stale_dropped_total
+                            .fetch_add(1, Ordering::Relaxed);
                         log::warn!(
-                            "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target_version={} retry_after_seconds={} error={error}",
+                            "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target_version={}",
                             event.event_id,
                             event.memo_id,
                             event.user_id,
-                            event.target_version,
-                            retry_after.as_secs()
+                            event.target_version
                         );
                     }
+                }
+                Err(error) => {
+                    let retry_after = self.defer_after_failure(event.event_id, now);
+                    log::warn!(
+                        "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target_version={} retry_after_seconds={} error={error}",
+                        event.event_id,
+                        event.memo_id,
+                        event.user_id,
+                        event.target_version,
+                        retry_after.as_secs()
+                    );
                 }
             }
         }
