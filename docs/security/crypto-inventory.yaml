@@ -76,9 +76,10 @@ assets:
     target:
       kdf: HKDF-SHA-384
       source:
-        - webauthn_prf_when_supported
-        - independent_device_secret_fallback
+        - webauthn_prf_credential_bound_when_supported
+        - independent_device_secret_for_device_bound_wrapper
       webauthn_prf_capability_detection: required
+      webauthn_prf_device_binding_assumption: forbidden
       prf_output_server_exposure: forbidden
       domain_separation: required
       passkey_private_key_as_content_key: forbidden
