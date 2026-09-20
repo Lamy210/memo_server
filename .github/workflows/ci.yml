@@ -113,6 +113,9 @@ jobs:
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Discover browser E2E tests
+        run: pnpm exec playwright test --list
+
       - name: Browser E2E
         shell: bash
         run: |
