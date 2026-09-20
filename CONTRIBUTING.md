@@ -91,6 +91,12 @@ UIを変更するPRでは、通常のFrontend CIに加えてこのartifactを確
 
 Svelte componentは `@testing-library/svelte` + Vitest + jsdomで、DOM実装詳細ではなくrole/text/linkなど利用者から観測できる振る舞いを優先して検証します。
 
+### Lighthouse baseline
+
+PRでは `Lighthouse / Lighthouse baseline` workflow がproduction build/previewを固定fixture backendへ接続し、代表画面（一覧・新規・編集）を各3回計測します。median runの Performance / Accessibility / Best Practices / SEO scoreをjob summaryへ出し、HTML/JSON reportとmanifestを `lighthouse-pr-<number>` artifactへ14日間保存します。
+
+導入初期のcategory thresholdは `warn` とし、scoreそのものではPRをfailさせません。一方、依存解決・build・preview・Lighthouse collection・report生成が壊れた場合はworkflowをfailさせます。baselineが安定した後、performance budgetやcategory thresholdを段階的にblockingへ移行します。
+
 ## Tests
 
 - bugfixでは、可能な限り不具合を再現するテストを先に追加します。
