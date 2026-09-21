@@ -7,7 +7,7 @@ on:
       - ".github/workflows/cargo-lock-refresh.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate:
@@ -25,10 +25,19 @@ jobs:
         working-directory: backend
         run: cargo check
 
-      - name: Upload Cargo.lock
-        uses: actions/upload-artifact@v7
-        with:
-          name: mongodb-cargo-lock-${{ github.run_id }}
-          path: backend/Cargo.lock
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit Cargo.lock
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/Cargo.lock
+
+          if git diff --cached --quiet; then
+            echo "Cargo.lock is already up to date"
+            exit 0
+          fi
+
+          git commit -m "build: refresh Cargo.lock for MongoDB driver"
+          git push origin HEAD:feat/mongodb-foundation
