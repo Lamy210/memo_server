@@ -6,6 +6,7 @@ use thiserror::Error;
 const DEFAULT_SCYLLA_URI: &str = "127.0.0.1:9042";
 const DEFAULT_REDIS_URI: &str = "redis://127.0.0.1:6379";
 const DEFAULT_ELASTICSEARCH_URI: &str = "http://127.0.0.1:9200";
+const DEFAULT_MANTICORE_URI: &str = "http://127.0.0.1:9308";
 const DEFAULT_PORT: u16 = 8080;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,11 +19,18 @@ pub enum AuthConfig {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchBackend {
+    Elasticsearch,
+    Manticore,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub scylla_uri: String,
     pub redis_uri: String,
-    pub elasticsearch_uri: String,
+    pub search_backend: SearchBackend,
+    pub search_uri: String,
     pub port: u16,
     pub auth: AuthConfig,
 }
@@ -31,6 +39,8 @@ pub struct AppConfig {
 pub enum ConfigError {
     #[error("PORT must be a valid u16, got `{0}`")]
     InvalidPort(String),
+    #[error("SEARCH_BACKEND must be `elasticsearch` or `manticore`, got `{0}`")]
+    InvalidSearchBackend(String),
     #[error("AUTH_MODE is required; use `development` or `jwt`")]
     MissingAuthMode,
     #[error("AUTH_MODE must be `development` or `jwt`, got `{0}`")]
@@ -59,10 +69,26 @@ impl AppConfig {
             .get("REDIS_URL")
             .cloned()
             .unwrap_or_else(|| DEFAULT_REDIS_URI.to_string());
-        let elasticsearch_uri = vars
-            .get("ELASTICSEARCH_URL")
-            .cloned()
-            .unwrap_or_else(|| DEFAULT_ELASTICSEARCH_URI.to_string());
+        let search_backend = match vars
+            .get("SEARCH_BACKEND")
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref()
+        {
+            None | Some("elasticsearch") => SearchBackend::Elasticsearch,
+            Some("manticore") => SearchBackend::Manticore,
+            Some(value) => return Err(ConfigError::InvalidSearchBackend(value.to_string())),
+        };
+
+        let search_uri = match search_backend {
+            SearchBackend::Elasticsearch => vars
+                .get("ELASTICSEARCH_URL")
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_ELASTICSEARCH_URI.to_string()),
+            SearchBackend::Manticore => vars
+                .get("MANTICORE_URL")
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_MANTICORE_URI.to_string()),
+        };
 
         let port = match vars.get("PORT") {
             Some(value) => value
@@ -89,7 +115,8 @@ impl AppConfig {
         Ok(Self {
             scylla_uri,
             redis_uri,
-            elasticsearch_uri,
+            search_backend,
+            search_uri,
             port,
             auth,
         })
