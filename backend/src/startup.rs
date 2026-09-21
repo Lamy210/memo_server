@@ -10,10 +10,8 @@ use crate::{
     application::{health::HealthService, memo::service::MemoService},
     config::AppConfig,
     infrastructure::{
-        auth::AuthService,
-        persistence::{elasticsearch::ElasticsearchClient, redis::RedisCache, scylla::ScyllaDB},
-        reconciliation::ProjectionReconciler,
-        repositories::memo::MemoRepositoryImpl,
+        auth::AuthService, persistence::stack::PersistenceStack,
+        reconciliation::ProjectionReconciler, repositories::memo::MemoRepositoryImpl,
     },
     interfaces::routes::configure_routes,
 };
@@ -27,35 +25,24 @@ pub struct Application {
 
 impl Application {
     pub async fn build(config: AppConfig) -> io::Result<Self> {
-        let scylla = Arc::new(
-            ScyllaDB::new(&config.scylla_uri)
-                .await
-                .map_err(|error| io::Error::other(error.to_string()))?,
-        );
-        let redis = Arc::new(
-            RedisCache::new(&config.redis_uri)
-                .map_err(|error| io::Error::other(error.to_string()))?,
-        );
-        let elasticsearch = Arc::new(
-            ElasticsearchClient::new(&config.elasticsearch_uri)
-                .await
-                .map_err(|error| io::Error::other(error.to_string()))?,
-        );
+        let persistence = PersistenceStack::build(&config)
+            .await
+            .map_err(|error| io::Error::other(error.to_string()))?;
 
         let health_service = Data::new(HealthService::new(
-            scylla.clone(),
-            redis.clone(),
-            elasticsearch.clone(),
+            persistence.authoritative_health.clone(),
+            persistence.cache_health.clone(),
+            persistence.search_health.clone(),
         ));
         let projection_reconciler = Arc::new(ProjectionReconciler::new(
-            scylla.clone(),
-            redis.clone(),
-            elasticsearch.clone(),
+            persistence.authoritative_store.clone(),
+            persistence.cache.clone(),
+            persistence.search_projection.clone(),
         ));
         let memo_repository = Arc::new(MemoRepositoryImpl::new(
-            scylla,
-            redis,
-            elasticsearch,
+            persistence.authoritative_store,
+            persistence.cache,
+            persistence.search_projection,
             projection_reconciler.clone(),
         ));
         let _projection_reconciler_task = tokio::spawn(projection_reconciler.run());
