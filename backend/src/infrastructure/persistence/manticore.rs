@@ -1,7 +1,6 @@
 use std::fmt::Write as _;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
@@ -13,10 +12,10 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::MemoSearchProjection;
+use super::ports::{MemoSearchHitPage, MemoSearchProjection};
 
 const TABLE_NAME: &str = "memos";
-const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos (id uuid, title text, content text, tag_tokens text indexed, tags_json text stored, user_id string, created_at bigint, updated_at bigint, version int) dict='keywords_32k'";
+const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos (id uuid, title text indexed, content text indexed, tag_tokens text indexed, user_id string, updated_at bigint, version int) dict='keywords_32k'";
 
 pub struct ManticoreClient {
     client: Client,
@@ -117,9 +116,6 @@ impl ManticoreClient {
     pub async fn index_memo(&self, memo: &Memo) -> AppResult<()> {
         self.ensure_table().await?;
 
-        let tags_json = serde_json::to_string(&memo.tags).map_err(|error| {
-            AppError::DatabaseError(format!("Failed to serialize memo tags: {error}"))
-        })?;
         let body = json!({
             "table": TABLE_NAME,
             "id": memo.id.to_string(),
@@ -127,9 +123,7 @@ impl ManticoreClient {
                 "title": memo.title,
                 "content": memo.content,
                 "tag_tokens": encode_tag_tokens(&memo.tags),
-                "tags_json": tags_json,
                 "user_id": memo.user_id.to_string(),
-                "created_at": memo.created_at.timestamp_millis(),
                 "updated_at": memo.updated_at.timestamp_millis(),
                 "version": memo.version
             }
@@ -139,14 +133,14 @@ impl ManticoreClient {
         Ok(())
     }
 
-    pub async fn search_memos(
+    pub async fn search_memo_ids(
         &self,
         query: &str,
         tag: Option<String>,
         user_id: Uuid,
         page: usize,
         limit: usize,
-    ) -> AppResult<MemoSearchPage> {
+    ) -> AppResult<MemoSearchHitPage> {
         self.ensure_table().await?;
 
         let mut must = vec![json!({
@@ -182,15 +176,6 @@ impl ManticoreClient {
                     "must": must
                 }
             },
-            "_source": [
-                "title",
-                "content",
-                "tags_json",
-                "user_id",
-                "created_at",
-                "updated_at",
-                "version"
-            ],
             "sort": [
                 { "updated_at": "desc" }
             ],
@@ -221,12 +206,27 @@ impl ManticoreClient {
         let hits = search_result["hits"]["hits"].as_array().ok_or_else(|| {
             AppError::DatabaseError("Invalid Manticore search response format".to_string())
         })?;
-        let items = hits
+        let memo_ids = hits
             .iter()
-            .map(parse_memo_hit)
+            .map(|hit| {
+                hit["_id"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        AppError::DatabaseError(
+                            "Manticore search hit is missing UUID _id".to_string(),
+                        )
+                    })
+                    .and_then(|value| {
+                        Uuid::parse_str(value).map_err(|error| {
+                            AppError::DatabaseError(format!(
+                                "Invalid memo UUID in Manticore response: {error}"
+                            ))
+                        })
+                    })
+            })
             .collect::<AppResult<Vec<_>>>()?;
 
-        Ok(MemoSearchPage { items, total })
+        Ok(MemoSearchHitPage { memo_ids, total })
     }
 
     pub async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
@@ -253,80 +253,6 @@ impl ManticoreClient {
 
         Ok(response.status().is_success())
     }
-}
-
-fn parse_memo_hit(hit: &Value) -> AppResult<Memo> {
-    let source = hit["_source"].as_object().ok_or_else(|| {
-        AppError::DatabaseError("Manticore hit is missing _source".to_string())
-    })?;
-
-    let id = hit["_id"]
-        .as_str()
-        .ok_or_else(|| AppError::DatabaseError("Manticore hit is missing UUID _id".to_string()))
-        .and_then(|value| {
-            Uuid::parse_str(value).map_err(|error| {
-                AppError::DatabaseError(format!("Invalid memo UUID in Manticore response: {error}"))
-            })
-        })?;
-    let user_id = source
-        .get("user_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::DatabaseError("Manticore hit is missing user_id".to_string()))
-        .and_then(|value| {
-            Uuid::parse_str(value).map_err(|error| {
-                AppError::DatabaseError(format!("Invalid user UUID in Manticore response: {error}"))
-            })
-        })?;
-    let tags = source
-        .get("tags_json")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::DatabaseError("Manticore hit is missing tags_json".to_string()))
-        .and_then(|value| {
-            serde_json::from_str::<Vec<String>>(value).map_err(|error| {
-                AppError::DatabaseError(format!("Invalid tags JSON in Manticore response: {error}"))
-            })
-        })?;
-
-    let created_at = timestamp_from_source(source.get("created_at"), "created_at")?;
-    let updated_at = timestamp_from_source(source.get("updated_at"), "updated_at")?;
-    let version = source
-        .get("version")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| AppError::DatabaseError("Manticore hit is missing version".to_string()))
-        .and_then(|value| {
-            i32::try_from(value).map_err(|_| {
-                AppError::DatabaseError("Manticore memo version exceeds i32 range".to_string())
-            })
-        })?;
-
-    Ok(Memo {
-        id,
-        title: source
-            .get("title")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::DatabaseError("Manticore hit is missing title".to_string()))?
-            .to_string(),
-        content: source
-            .get("content")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::DatabaseError("Manticore hit is missing content".to_string()))?
-            .to_string(),
-        tags,
-        user_id,
-        created_at,
-        updated_at,
-        version,
-    })
-}
-
-fn timestamp_from_source(value: Option<&Value>, field: &str) -> AppResult<DateTime<Utc>> {
-    let milliseconds = value
-        .and_then(Value::as_i64)
-        .ok_or_else(|| AppError::DatabaseError(format!("Manticore hit is missing {field}")))?;
-
-    DateTime::<Utc>::from_timestamp_millis(milliseconds).ok_or_else(|| {
-        AppError::DatabaseError(format!("Invalid {field} timestamp in Manticore response"))
-    })
 }
 
 fn escape_match_query(query: &str) -> String {
@@ -365,7 +291,7 @@ impl MemoSearchProjection for ManticoreClient {
         ManticoreClient::index_memo(self, memo).await
     }
 
-    async fn search_memos(
+    async fn search_memo_ids(
         &self,
         query: &str,
         tag: Option<String>,
