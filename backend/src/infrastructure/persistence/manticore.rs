@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde_json::{json, Value};
+use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 use crate::{
@@ -20,19 +21,27 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos (id uuid, title
 pub struct ManticoreClient {
     client: Client,
     base_url: String,
+    initialized: OnceCell<()>,
 }
 
 impl ManticoreClient {
-    pub async fn new(uri: &str) -> AppResult<Self> {
+    pub fn new(uri: &str) -> AppResult<Self> {
         let client = Client::builder().build().map_err(|error| {
             AppError::DatabaseError(format!("Failed to create Manticore HTTP client: {error}"))
         })?;
-        let client = Self {
+
+        Ok(Self {
             client,
             base_url: uri.trim_end_matches('/').to_string(),
-        };
-        client.initialize_table().await?;
-        Ok(client)
+            initialized: OnceCell::new(),
+        })
+    }
+
+    async fn ensure_table(&self) -> AppResult<()> {
+        self.initialized
+            .get_or_try_init(|| async { self.initialize_table().await })
+            .await
+            .map(|_| ())
     }
 
     async fn initialize_table(&self) -> AppResult<()> {
@@ -106,6 +115,8 @@ impl ManticoreClient {
     }
 
     pub async fn index_memo(&self, memo: &Memo) -> AppResult<()> {
+        self.ensure_table().await?;
+
         let tags_json = serde_json::to_string(&memo.tags).map_err(|error| {
             AppError::DatabaseError(format!("Failed to serialize memo tags: {error}"))
         })?;
@@ -136,6 +147,8 @@ impl ManticoreClient {
         page: usize,
         limit: usize,
     ) -> AppResult<MemoSearchPage> {
+        self.ensure_table().await?;
+
         let mut must = vec![json!({
             "equals": {
                 "user_id": user_id.to_string()
@@ -217,6 +230,8 @@ impl ManticoreClient {
     }
 
     pub async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
+        self.ensure_table().await?;
+
         let body = json!({
             "table": TABLE_NAME,
             "id": id.to_string()
