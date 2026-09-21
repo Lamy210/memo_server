@@ -17,7 +17,6 @@ fn uses_service_defaults_in_explicit_development_mode() {
     assert_eq!(config.auth, AuthConfig::Development);
 }
 
-
 #[test]
 fn supports_explicit_manticore_search_backend() {
     let config = AppConfig::from_vars([
