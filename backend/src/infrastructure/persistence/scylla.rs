@@ -467,6 +467,16 @@ impl MemoAuthoritativeStore for ScyllaDB {
         ScyllaDB::find_all_by_user_id(self, user_id).await
     }
 
+    async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>> {
+        let mut memos = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(memo) = ScyllaDB::find_by_id(self, user_id, *id).await? {
+                memos.push(memo);
+            }
+        }
+        Ok(memos)
+    }
+
     async fn save_with_projection_intent(&self, memo: &Memo) -> AppResult<ProjectionIntent> {
         let event = ScyllaDB::enqueue_projection_intent(
             self,
