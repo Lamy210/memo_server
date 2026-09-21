@@ -26,11 +26,11 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
   fi
 
   if [[ "$attempt" -eq "$attempts" ]]; then
-    echo "command failed after $attempt attempts: $*" >&2
+    echo "command failed after $attempt attempts" >&2
     exit 1
   fi
 
   retry_delay=$((attempt * base_delay_seconds))
-  echo "command failed on attempt $attempt/$attempts; retrying in ${retry_delay}s: $*" >&2
+  echo "command failed on attempt $attempt/$attempts; retrying in ${retry_delay}s" >&2
   sleep "$retry_delay"
 done
