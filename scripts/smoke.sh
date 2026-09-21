@@ -34,7 +34,7 @@ wait_for_url() {
 if ! docker compose up -d --build; then
   echo "Docker Compose startup failed" >&2
   docker compose ps >&2 || true
-  docker compose logs --no-color --tail=300 scylla backend elasticsearch valkey frontend >&2 || true
+  docker compose logs --no-color --tail=300 scylla backend manticore valkey frontend >&2 || true
   exit 1
 fi
 
@@ -220,19 +220,14 @@ jq -e --arg id "$memo_id" '.id == $id and .title == "Smoke memo updated"' <<<"$u
 search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=updated&tag=smoke&page=1&limit=20')"
 jq -e --arg id "$memo_id" '.items | any(.id == $id)' <<<"$search" >/dev/null
 
-bulk_file="$(mktemp)"
 for index in $(seq 1 105); do
   pagination_id="$(printf '00000000-0000-4000-8000-%012d' "$index")"
-  printf '{"index":{"_index":"memos","_id":"%s"}}\n' "$pagination_id" >>"$bulk_file"
-  printf '{"id":"%s","title":"pagination-probe %d","content":"pagination-probe","tags":["pagination"],"user_id":"12345678-1234-1234-1234-123456789012","created_at":"2026-09-18T00:00:00Z","updated_at":"2026-09-18T00:00:00Z","version":1}\n' "$pagination_id" "$index" >>"$bulk_file"
+  curl -fsS \
+    -H 'Content-Type: application/json' \
+    -d "{\"table\":\"memos\",\"id\":\"$pagination_id\",\"doc\":{\"title\":\"pagination-probe $index\",\"content\":\"pagination-probe\",\"tag_tokens\":\"706167696e6174696f6e\",\"tags_json\":\"[\\\"pagination\\\"]\",\"user_id\":\"12345678-1234-1234-1234-123456789012\",\"created_at\":1789689600000,\"updated_at\":1789689600000,\"version\":1}}" \
+    http://localhost:9308/replace \
+    | jq -e '.result == "created" or .result == "updated"' >/dev/null
 done
-
-curl -fsS \
-  -H 'Content-Type: application/x-ndjson' \
-  --data-binary @"$bulk_file" \
-  'http://localhost:9200/_bulk?refresh=true' \
-  | jq -e '.errors == false' >/dev/null
-rm -f "$bulk_file"
 
 pagination_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=pagination-probe&page=6&limit=20')"
 jq -e '.total == 105 and .page == 6 and .total_pages == 6 and (.items | length) == 5' <<<"$pagination_search" >/dev/null
@@ -286,7 +281,7 @@ resilience_created="$(memo_curl -fsS \
   http://localhost:8083/api/v1/memos)"
 resilience_id="$(jq -er '.id' <<<"$resilience_created")"
 
-docker compose stop valkey elasticsearch >/dev/null
+docker compose stop valkey manticore >/dev/null
 
 degraded_ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
 jq -e '
@@ -321,7 +316,7 @@ jq -e '
   and .checks.elasticsearch == "down"
 ' <<<"$restart_degraded" >/dev/null
 
-docker compose start valkey elasticsearch >/dev/null
+docker compose start valkey manticore >/dev/null
 
 recovery_ready=0
 for _ in $(seq 1 60); do
@@ -351,7 +346,7 @@ for _ in $(seq 1 60); do
 done
 if [[ "$projection_recovered" -ne 1 ]]; then
   echo "Projection reconciliation did not recover create/delete changes after secondary stores returned" >&2
-  docker compose logs --no-color --tail=200 backend elasticsearch valkey >&2 || true
+  docker compose logs --no-color --tail=200 backend manticore valkey >&2 || true
   exit 1
 fi
 
