@@ -14,6 +14,8 @@ use crate::{
     error::{AppError, AppResult},
 };
 
+use super::ports::{MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget};
+
 type MemoRow = (
     Uuid,
     String,
@@ -24,19 +26,10 @@ type MemoRow = (
     DateTime<Utc>,
     i32,
 );
-type ProjectionRetryRow = (Uuid, Uuid, Uuid, i32);
+type ProjectionIntentRow = (Uuid, Uuid, Uuid, i32);
 
-pub const PROJECTION_RETRY_BUCKETS: i32 = 16;
-pub const PROJECTION_DELETE_TARGET: i32 = -1;
-
-#[derive(Debug, Clone)]
-pub struct ProjectionRetry {
-    pub bucket: i32,
-    pub event_id: Uuid,
-    pub user_id: Uuid,
-    pub memo_id: Uuid,
-    pub target_version: i32,
-}
+const PROJECTION_RETRY_BUCKETS: i32 = 16;
+const SCYLLA_PROJECTION_DELETE_TARGET: i32 = -1;
 
 pub struct ScyllaDB {
     session: Arc<Session>,
@@ -50,9 +43,9 @@ struct PreparedStatements {
     update_memo_if_version: PreparedStatement,
     delete_memo: PreparedStatement,
     exists: PreparedStatement,
-    enqueue_projection_retry: PreparedStatement,
-    list_projection_retries: PreparedStatement,
-    acknowledge_projection_retry: PreparedStatement,
+    enqueue_projection_intent: PreparedStatement,
+    list_projection_intents: PreparedStatement,
+    acknowledge_projection_intent: PreparedStatement,
 }
 
 impl ScyllaDB {
@@ -181,7 +174,7 @@ impl ScyllaDB {
             .map_err(|error| {
                 AppError::DatabaseError(format!("Failed to prepare exists: {error}"))
             })?;
-        let enqueue_projection_retry = session
+        let enqueue_projection_intent = session
             .prepare(
                 "INSERT INTO memo_app.projection_intents \
                  (bucket, event_id, user_id, memo_id, target_version) VALUES (?, ?, ?, ?, ?)",
@@ -189,10 +182,10 @@ impl ScyllaDB {
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to prepare enqueue_projection_retry: {error}"
+                    "Failed to prepare enqueue_projection_intent: {error}"
                 ))
             })?;
-        let list_projection_retries = session
+        let list_projection_intents = session
             .prepare(
                 "SELECT event_id, user_id, memo_id, target_version FROM memo_app.projection_intents \
                  WHERE bucket = ?",
@@ -200,15 +193,15 @@ impl ScyllaDB {
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to prepare list_projection_retries: {error}"
+                    "Failed to prepare list_projection_intents: {error}"
                 ))
             })?;
-        let acknowledge_projection_retry = session
+        let acknowledge_projection_intent = session
             .prepare("DELETE FROM memo_app.projection_intents WHERE bucket = ? AND event_id = ?")
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
-                    "Failed to prepare acknowledge_projection_retry: {error}"
+                    "Failed to prepare acknowledge_projection_intent: {error}"
                 ))
             })?;
 
@@ -219,9 +212,9 @@ impl ScyllaDB {
             update_memo_if_version,
             delete_memo,
             exists,
-            enqueue_projection_retry,
-            list_projection_retries,
-            acknowledge_projection_retry,
+            enqueue_projection_intent,
+            list_projection_intents,
+            acknowledge_projection_intent,
         })
     }
 
@@ -348,29 +341,25 @@ impl ScyllaDB {
         Ok(row.is_some())
     }
 
-    pub async fn enqueue_projection_retry(
+    pub async fn enqueue_projection_intent(
         &self,
         user_id: Uuid,
         memo_id: Uuid,
-        target_version: i32,
-    ) -> AppResult<ProjectionRetry> {
-        let event = ProjectionRetry {
-            bucket: projection_retry_bucket(memo_id),
-            event_id: Uuid::new_v4(),
-            user_id,
-            memo_id,
-            target_version,
-        };
+        target: ProjectionTarget,
+    ) -> AppResult<ProjectionIntent> {
+        let event = ProjectionIntent::new(user_id, memo_id, target);
+        let bucket = projection_bucket(memo_id);
+        let target_version = projection_target_to_scylla(target)?;
 
         self.session
             .execute_unpaged(
-                &self.prepared_statements.enqueue_projection_retry,
+                &self.prepared_statements.enqueue_projection_intent,
                 (
-                    event.bucket,
+                    bucket,
                     event.event_id,
                     event.user_id,
                     event.memo_id,
-                    event.target_version,
+                    target_version,
                 ),
             )
             .await
@@ -383,10 +372,13 @@ impl ScyllaDB {
         Ok(event)
     }
 
-    pub async fn list_projection_retries(&self, bucket: i32) -> AppResult<Vec<ProjectionRetry>> {
+    async fn list_projection_intents_in_bucket(
+        &self,
+        bucket: i32,
+    ) -> AppResult<Vec<ProjectionIntent>> {
         let result = self
             .session
-            .execute_unpaged(&self.prepared_statements.list_projection_retries, (bucket,))
+            .execute_unpaged(&self.prepared_statements.list_projection_intents, (bucket,))
             .await
             .map_err(|error| {
                 AppError::DatabaseError(format!(
@@ -398,7 +390,7 @@ impl ScyllaDB {
                 "Failed to read projection reconciliation intents: {error}"
             ))
         })?;
-        let typed_rows = rows.rows::<ProjectionRetryRow>().map_err(|error| {
+        let typed_rows = rows.rows::<ProjectionIntentRow>().map_err(|error| {
             AppError::DatabaseError(format!(
                 "Failed to type-check projection reconciliation intents: {error}"
             ))
@@ -406,29 +398,28 @@ impl ScyllaDB {
 
         typed_rows
             .map(|row| {
-                row.map(
-                    |(event_id, user_id, memo_id, target_version)| ProjectionRetry {
-                        bucket,
-                        event_id,
-                        user_id,
-                        memo_id,
-                        target_version,
-                    },
-                )
-                .map_err(|error| {
+                let (event_id, user_id, memo_id, target_version) = row.map_err(|error| {
                     AppError::DatabaseError(format!(
                         "Failed to deserialize projection reconciliation intent: {error}"
                     ))
+                })?;
+                let target = projection_target_from_scylla(target_version)?;
+                Ok(ProjectionIntent {
+                    event_id,
+                    user_id,
+                    memo_id,
+                    target,
                 })
             })
             .collect()
     }
 
-    pub async fn acknowledge_projection_retry(&self, event: &ProjectionRetry) -> AppResult<()> {
+    pub async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+        let bucket = projection_bucket(event.memo_id);
         self.session
             .execute_unpaged(
-                &self.prepared_statements.acknowledge_projection_retry,
-                (event.bucket, event.event_id),
+                &self.prepared_statements.acknowledge_projection_intent,
+                (bucket, event.event_id),
             )
             .await
             .map_err(|error| {
@@ -451,10 +442,6 @@ impl ScyllaDB {
         Ok(rows.rows_num() > 0)
     }
 
-    pub fn projection_retry_bucket(memo_id: Uuid) -> i32 {
-        projection_retry_bucket(memo_id)
-    }
-
     fn memo_from_row(row: MemoRow) -> Memo {
         let (id, title, content, tags, user_id, created_at, updated_at, version) = row;
         Memo {
@@ -470,8 +457,92 @@ impl ScyllaDB {
     }
 }
 
-fn projection_retry_bucket(memo_id: Uuid) -> i32 {
+#[async_trait]
+impl MemoAuthoritativeStore for ScyllaDB {
+    async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
+        ScyllaDB::find_by_id(self, user_id, id).await
+    }
+
+    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
+        ScyllaDB::find_all_by_user_id(self, user_id).await
+    }
+
+    async fn save_with_projection_intent(&self, memo: &Memo) -> AppResult<ProjectionIntent> {
+        let event = ScyllaDB::enqueue_projection_intent(
+            self,
+            memo.user_id,
+            memo.id,
+            ProjectionTarget::Version(memo.version),
+        )
+        .await?;
+
+        ScyllaDB::save(self, memo).await?;
+
+        Ok(event)
+    }
+
+    async fn delete_with_projection_intent(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+    ) -> AppResult<ProjectionIntent> {
+        let event =
+            ScyllaDB::enqueue_projection_intent(self, user_id, id, ProjectionTarget::Deleted)
+                .await?;
+
+        ScyllaDB::delete(self, user_id, id).await?;
+
+        Ok(event)
+    }
+
+    async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
+        ScyllaDB::exists(self, user_id, id).await
+    }
+
+    async fn enqueue_projection_intent(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+        target: ProjectionTarget,
+    ) -> AppResult<ProjectionIntent> {
+        ScyllaDB::enqueue_projection_intent(self, user_id, memo_id, target).await
+    }
+
+    async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
+        let mut intents = Vec::new();
+        for bucket in 0..PROJECTION_RETRY_BUCKETS {
+            intents.extend(self.list_projection_intents_in_bucket(bucket).await?);
+        }
+        Ok(intents)
+    }
+
+    async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+        ScyllaDB::acknowledge_projection_intent(self, event).await
+    }
+}
+
+fn projection_bucket(memo_id: Uuid) -> i32 {
     (memo_id.as_u128() % PROJECTION_RETRY_BUCKETS as u128) as i32
+}
+
+fn projection_target_to_scylla(target: ProjectionTarget) -> AppResult<i32> {
+    match target {
+        ProjectionTarget::Version(version) if version > 0 => Ok(version),
+        ProjectionTarget::Version(version) => Err(AppError::DatabaseError(format!(
+            "Projection version must be positive, got {version}"
+        ))),
+        ProjectionTarget::Deleted => Ok(SCYLLA_PROJECTION_DELETE_TARGET),
+    }
+}
+
+fn projection_target_from_scylla(value: i32) -> AppResult<ProjectionTarget> {
+    match value {
+        SCYLLA_PROJECTION_DELETE_TARGET => Ok(ProjectionTarget::Deleted),
+        version if version > 0 => Ok(ProjectionTarget::Version(version)),
+        _ => Err(AppError::DatabaseError(format!(
+            "Invalid projection target version stored in Scylla: {value}"
+        ))),
+    }
 }
 
 #[async_trait]
@@ -490,6 +561,42 @@ impl HealthProbe for ScyllaDB {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projection_bucket_is_stable_and_bounded() {
+        let memo_id = Uuid::new_v4();
+
+        let first = projection_bucket(memo_id);
+        let second = projection_bucket(memo_id);
+
+        assert_eq!(first, second);
+        assert!((0..PROJECTION_RETRY_BUCKETS).contains(&first));
+    }
+
+    #[test]
+    fn projection_target_encoding_is_explicit_and_validated() {
+        assert_eq!(
+            projection_target_to_scylla(ProjectionTarget::Version(3)).unwrap(),
+            3
+        );
+        assert_eq!(
+            projection_target_to_scylla(ProjectionTarget::Deleted).unwrap(),
+            SCYLLA_PROJECTION_DELETE_TARGET
+        );
+        assert!(projection_target_to_scylla(ProjectionTarget::Version(0)).is_err());
+        assert!(projection_target_to_scylla(ProjectionTarget::Version(-1)).is_err());
+
+        assert_eq!(
+            projection_target_from_scylla(3).unwrap(),
+            ProjectionTarget::Version(3)
+        );
+        assert_eq!(
+            projection_target_from_scylla(SCYLLA_PROJECTION_DELETE_TARGET).unwrap(),
+            ProjectionTarget::Deleted
+        );
+        assert!(projection_target_from_scylla(0).is_err());
+        assert!(projection_target_from_scylla(-2).is_err());
+    }
 
     #[tokio::test]
     #[ignore = "requires a local ScyllaDB instance"]
