@@ -4,9 +4,14 @@ use uuid::Uuid;
 
 use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
 use crate::{
-    domain::memo::{entity::Memo, repository::MemoRepository},
+    domain::memo::{
+        entity::{Memo, MAX_MEMO_TAGS, MAX_MEMO_TAG_CHARS, MAX_MEMO_TITLE_CHARS},
+        repository::MemoRepository,
+    },
     error::{AppError, AppResult},
 };
+
+const MAX_SEARCH_QUERY_CHARS: usize = 512;
 
 pub struct MemoService {
     memo_repository: Arc<dyn MemoRepository>,
@@ -83,6 +88,20 @@ impl MemoService {
         page: usize,
         limit: usize,
     ) -> AppResult<SearchResponse> {
+        if query.chars().count() > MAX_SEARCH_QUERY_CHARS {
+            return Err(AppError::ValidationError(format!(
+                "Search query must not exceed {MAX_SEARCH_QUERY_CHARS} characters"
+            )));
+        }
+        if tag
+            .as_ref()
+            .is_some_and(|tag| tag.chars().count() > MAX_MEMO_TAG_CHARS)
+        {
+            return Err(AppError::ValidationError(format!(
+                "Search tag must not exceed {MAX_MEMO_TAG_CHARS} characters"
+            )));
+        }
+
         let page = page.max(1);
         let limit = limit.clamp(1, 100);
         let search_page = self
@@ -109,7 +128,9 @@ impl MemoService {
             Ok(())
         } else {
             Err(AppError::ValidationError(
-                "Title and content are required; tags must be non-empty and limited to 10".into(),
+                format!(
+                    "Title and content are required; title must not exceed {MAX_MEMO_TITLE_CHARS} characters; tags must be non-empty, limited to {MAX_MEMO_TAGS}, and each tag must not exceed {MAX_MEMO_TAG_CHARS} characters"
+                ),
             ))
         }
     }

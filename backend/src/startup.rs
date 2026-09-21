@@ -1,6 +1,10 @@
 use std::{io, sync::Arc};
 
-use actix_web::{middleware, web::Data, App, HttpServer};
+use actix_web::{
+    middleware,
+    web::{self, Data},
+    App, HttpServer,
+};
 
 use crate::{
     application::{health::HealthService, memo::service::MemoService},
@@ -13,6 +17,8 @@ use crate::{
     },
     interfaces::routes::configure_routes,
 };
+
+const MAX_JSON_PAYLOAD_BYTES: usize = 512 * 1024;
 
 pub struct Application {
     port: u16,
@@ -64,6 +70,7 @@ impl Application {
                 .app_data(memo_service.clone())
                 .app_data(health_service.clone())
                 .app_data(auth_service.clone())
+                .app_data(web::JsonConfig::default().limit(MAX_JSON_PAYLOAD_BYTES))
                 .configure(configure_routes)
         })
         .bind(("0.0.0.0", port))?

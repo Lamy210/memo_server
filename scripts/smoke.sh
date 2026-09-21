@@ -62,6 +62,45 @@ if [[ "$unauthenticated_status" != "401" ]]; then
   exit 1
 fi
 
+long_title="$(python3 -c 'print("t" * 161)')"
+long_title_status="$(memo_curl -sS \
+  -H 'Content-Type: application/json' \
+  -d "{\"title\":\"$long_title\",\"content\":\"title limit probe\",\"tags\":[\"ci\"]}" \
+  -o /tmp/memo-long-title.json \
+  -w '%{http_code}' \
+  http://localhost:8083/api/v1/memos)"
+if [[ "$long_title_status" != "422" ]]; then
+  echo "Expected a 161-character title to return 422, got $long_title_status" >&2
+  cat /tmp/memo-long-title.json >&2 || true
+  exit 1
+fi
+
+long_search_query="$(python3 -c 'print("q" * 513)')"
+long_search_status="$(memo_curl -sS \
+  -o /tmp/memo-long-search.json \
+  -w '%{http_code}' \
+  "http://localhost:8083/api/v1/memos/search?query=$long_search_query")"
+if [[ "$long_search_status" != "422" ]]; then
+  echo "Expected a 513-character search query to return 422, got $long_search_status" >&2
+  cat /tmp/memo-long-search.json >&2 || true
+  exit 1
+fi
+
+oversized_payload="$(mktemp)"
+python3 -c 'import json,sys; json.dump({"title":"payload limit probe","content":"x"*(520*1024),"tags":["ci"]},sys.stdout)' >"$oversized_payload"
+oversized_status="$(memo_curl -sS \
+  -H 'Content-Type: application/json' \
+  --data-binary @"$oversized_payload" \
+  -o /tmp/memo-oversized.json \
+  -w '%{http_code}' \
+  http://localhost:8083/api/v1/memos)"
+rm -f "$oversized_payload"
+if [[ "$oversized_status" != "413" ]]; then
+  echo "Expected JSON above 512 KiB to return 413, got $oversized_status" >&2
+  cat /tmp/memo-oversized.json >&2 || true
+  exit 1
+fi
+
 created="$(memo_curl -fsS \
   -H 'Content-Type: application/json' \
   -d '{"title":"Smoke memo","content":"created by the compose smoke test","tags":["ci","smoke"]}' \
