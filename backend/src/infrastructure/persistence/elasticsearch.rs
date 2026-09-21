@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 
 use crate::application::health::HealthProbe;
-use crate::domain::memo::{entity::Memo, repository::MemoSearchPage};
+use crate::domain::memo::entity::Memo;
 use crate::error::{AppError, AppResult};
 
-use super::ports::MemoSearchProjection;
+use super::ports::{MemoSearchHitPage, MemoSearchProjection};
 use elasticsearch::{
     http::transport::Transport, params::Refresh, DeleteByQueryParts, Elasticsearch, IndexParts,
     SearchParts,
@@ -123,14 +123,14 @@ impl ElasticsearchClient {
         Ok(())
     }
 
-    pub async fn search_memos(
+    pub async fn search_memo_ids(
         &self,
         query: &str,
         tag: Option<String>,
         user_id: Uuid,
         page: usize,
         limit: usize,
-    ) -> AppResult<MemoSearchPage> {
+    ) -> AppResult<MemoSearchHitPage> {
         self.ensure_index().await?;
 
         let mut should_clauses: Vec<Value> = vec![];
@@ -173,6 +173,7 @@ impl ElasticsearchClient {
             "from": offset,
             "size": limit,
             "track_total_hits": true,
+            "_source": false,
             "query": {
                 "bool": {
                     "must": must_clauses,
@@ -215,42 +216,27 @@ impl ElasticsearchClient {
             .as_array()
             .ok_or_else(|| AppError::DatabaseError("Invalid search response format".to_string()))?;
 
-        let memos = hits
+        let memo_ids = hits
             .iter()
-            .filter_map(|hit| {
-                let source = hit["_source"].as_object()?;
-                let id = Uuid::parse_str(source["id"].as_str()?).ok()?;
-                let user_id = Uuid::parse_str(source["user_id"].as_str()?).ok()?;
-
-                Some(Memo {
-                    id,
-                    title: source["title"].as_str()?.to_string(),
-                    content: source["content"].as_str()?.to_string(),
-                    tags: source["tags"]
-                        .as_array()?
-                        .iter()
-                        .filter_map(|t| t.as_str().map(String::from))
-                        .collect(),
-                    user_id,
-                    created_at: chrono::DateTime::parse_from_rfc3339(
-                        source["created_at"].as_str()?,
-                    )
-                    .ok()?
-                    .with_timezone(&chrono::Utc),
-                    updated_at: chrono::DateTime::parse_from_rfc3339(
-                        source["updated_at"].as_str()?,
-                    )
-                    .ok()?
-                    .with_timezone(&chrono::Utc),
-                    version: source["version"].as_i64()? as i32,
-                })
+            .map(|hit| {
+                hit["_id"]
+                    .as_str()
+                    .ok_or_else(|| {
+                        AppError::DatabaseError(
+                            "Elasticsearch search hit is missing _id".to_string(),
+                        )
+                    })
+                    .and_then(|value| {
+                        Uuid::parse_str(value).map_err(|error| {
+                            AppError::DatabaseError(format!(
+                                "Invalid memo UUID in Elasticsearch response: {error}"
+                            ))
+                        })
+                    })
             })
-            .collect();
+            .collect::<AppResult<Vec<_>>>()?;
 
-        Ok(MemoSearchPage {
-            items: memos,
-            total,
-        })
+        Ok(MemoSearchHitPage { memo_ids, total })
     }
 
     pub async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
@@ -302,15 +288,15 @@ impl MemoSearchProjection for ElasticsearchClient {
         ElasticsearchClient::index_memo(self, memo).await
     }
 
-    async fn search_memos(
+    async fn search_memo_ids(
         &self,
         query: &str,
         tag: Option<String>,
         user_id: Uuid,
         page: usize,
         limit: usize,
-    ) -> AppResult<MemoSearchPage> {
-        ElasticsearchClient::search_memos(self, query, tag, user_id, page, limit).await
+    ) -> AppResult<MemoSearchHitPage> {
+        ElasticsearchClient::search_memo_ids(self, query, tag, user_id, page, limit).await
     }
 
     async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
