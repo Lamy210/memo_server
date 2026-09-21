@@ -6,10 +6,8 @@ use crate::{
     application::{health::HealthService, memo::service::MemoService},
     config::AppConfig,
     infrastructure::{
-        auth::AuthService,
-        persistence::stack::PersistenceStack,
-        reconciliation::ProjectionReconciler,
-        repositories::memo::MemoRepositoryImpl,
+        auth::AuthService, persistence::stack::PersistenceStack,
+        reconciliation::ProjectionReconciler, repositories::memo::MemoRepositoryImpl,
     },
     interfaces::routes::configure_routes,
 };
