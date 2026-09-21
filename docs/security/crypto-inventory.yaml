@@ -108,9 +108,11 @@ assets:
       - access_pattern
       - query_pattern
     current:
-      state: plaintext_search_projection
-      server_index: Elasticsearch
-    migration_status: planned
+      state: plaintext_search_projection_migration
+      server_index: Manticore
+      legacy_server_index: Elasticsearch
+      selection: SEARCH_BACKEND
+    migration_status: in_progress
     owner: memo-search
 
   - asset: vault_search
