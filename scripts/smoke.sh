@@ -224,7 +224,7 @@ for index in $(seq 1 105); do
   pagination_id="$(printf '00000000-0000-4000-8000-%012d' "$index")"
   curl -fsS \
     -H 'Content-Type: application/json' \
-    -d "{\"table\":\"memos\",\"id\":\"$pagination_id\",\"doc\":{\"title\":\"pagination-probe $index\",\"content\":\"pagination-probe\",\"tag_tokens\":\"706167696e6174696f6e\",\"tags_json\":\"[\\\"pagination\\\"]\",\"user_id\":\"12345678-1234-1234-1234-123456789012\",\"created_at\":1789689600000,\"updated_at\":1789689600000,\"version\":1}}" \
+    -d "{\"table\":\"memos\",\"id\":\"$pagination_id\",\"doc\":{\"title\":\"pagination-probe $index\",\"content\":\"pagination-probe\",\"tag_tokens\":\"706167696e6174696f6e\",\"user_id\":\"12345678-1234-1234-1234-123456789012\",\"updated_at\":1789689600000,\"version\":1}}" \
     http://localhost:9308/replace \
     | jq -e '.result == "created" or .result == "updated"' >/dev/null
 done
