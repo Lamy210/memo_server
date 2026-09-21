@@ -16,7 +16,7 @@ use crate::{
 use super::ports::MemoSearchProjection;
 
 const TABLE_NAME: &str = "memos";
-const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos (id uuid, title text, content text, tag_tokens text indexed, tags_json string, user_id string, created_at bigint, updated_at bigint, version int) dict='keywords_32k'";
+const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos (id uuid, title text, content text, tag_tokens text indexed, tags_json text stored, user_id string, created_at bigint, updated_at bigint, version int) dict='keywords_32k'";
 
 pub struct ManticoreClient {
     client: Client,
@@ -409,6 +409,15 @@ mod tests {
             encode_tag_tokens(&["bug".into(), "high priority".into()]),
             "627567 68696768207072696f72697479"
         );
+    }
+
+    #[test]
+    fn maximum_unicode_tag_token_exceeds_regular_limit_but_fits_keywords_32k() {
+        let token = encode_tag_token(&"🧊".repeat(64));
+
+        assert_eq!(token.len(), 512);
+        assert!(token.len() > 42);
+        assert!(token.len() < 32 * 1024);
     }
 
     #[test]
