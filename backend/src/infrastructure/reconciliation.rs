@@ -13,8 +13,7 @@ use uuid::Uuid;
 use crate::{
     error::{AppError, AppResult},
     infrastructure::persistence::ports::{
-        MemoAuthoritativeStore, MemoCache, MemoSearchProjection, ProjectionIntent,
-        ProjectionTarget,
+        MemoAuthoritativeStore, MemoCache, MemoSearchProjection, ProjectionIntent, ProjectionTarget,
     },
 };
 
