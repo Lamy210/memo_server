@@ -3,4 +3,4 @@ pub mod elasticsearch;
 pub mod ports;
 pub mod redis;
 pub mod scylla;
-pub mod stack;
+pub(crate) mod stack;
