@@ -37,7 +37,7 @@ impl PersistenceStack {
                 (client.clone(), client)
             }
             SearchBackend::Manticore => {
-                let client = Arc::new(ManticoreClient::new(&config.search_uri).await?);
+                let client = Arc::new(ManticoreClient::new(&config.search_uri)?);
                 (client.clone(), client)
             }
         };
