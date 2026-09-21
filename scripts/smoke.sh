@@ -34,13 +34,15 @@ wait_for_url() {
 if ! docker compose up -d --build; then
   echo "Docker Compose startup failed" >&2
   docker compose ps >&2 || true
-  docker compose logs --no-color --tail=300 scylla backend elasticsearch redis frontend >&2 || true
+  docker compose logs --no-color --tail=300 scylla backend elasticsearch valkey frontend >&2 || true
   exit 1
 fi
 
 wait_for_url "http://localhost:8083/api/v1/health" 120 5
 wait_for_url "http://localhost:3001/memos" 60 3
 wait_for_url "http://localhost:3001/api/v1/health" 30 2
+
+docker compose exec -T valkey valkey-cli INFO server | tr -d '\r' | grep -Eq '^valkey_version:9\.1\.2$'
 
 curl -fsS "http://localhost:8083/api/v1/health/live" \
   | jq -e '.status == "ok"' >/dev/null
@@ -284,7 +286,7 @@ resilience_created="$(memo_curl -fsS \
   http://localhost:8083/api/v1/memos)"
 resilience_id="$(jq -er '.id' <<<"$resilience_created")"
 
-docker compose stop redis elasticsearch >/dev/null
+docker compose stop valkey elasticsearch >/dev/null
 
 degraded_ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
 jq -e '
@@ -319,7 +321,7 @@ jq -e '
   and .checks.elasticsearch == "down"
 ' <<<"$restart_degraded" >/dev/null
 
-docker compose start redis elasticsearch >/dev/null
+docker compose start valkey elasticsearch >/dev/null
 
 recovery_ready=0
 for _ in $(seq 1 60); do
@@ -349,7 +351,7 @@ for _ in $(seq 1 60); do
 done
 if [[ "$projection_recovered" -ne 1 ]]; then
   echo "Projection reconciliation did not recover create/delete changes after secondary stores returned" >&2
-  docker compose logs --no-color --tail=200 backend elasticsearch redis >&2 || true
+  docker compose logs --no-color --tail=200 backend elasticsearch valkey >&2 || true
   exit 1
 fi
 

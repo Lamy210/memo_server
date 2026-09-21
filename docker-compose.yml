@@ -34,7 +34,7 @@ services:
     environment:
       RUST_LOG: info
       SCYLLA_URI: scylla:9042
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://valkey:6379
       ELASTICSEARCH_URL: http://elasticsearch:9200
       PORT: "8080"
       AUTH_MODE: development
@@ -42,7 +42,7 @@ services:
     depends_on:
       scylla:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
@@ -71,15 +71,13 @@ services:
     networks:
       - memo-network
 
-  redis:
-    image: redis:7.2-alpine
+  valkey:
+    image: valkey/valkey:9.1.2-alpine
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -123,7 +121,6 @@ volumes:
   backend_cache:
   cargo_registry:
   scylla_data:
-  redis_data:
   elasticsearch_data:
 
 networks:

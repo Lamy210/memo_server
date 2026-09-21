@@ -19,7 +19,7 @@ The current application on `main` uses:
 - Rust / Actix Web backend
 - SvelteKit 2 / Svelte 5 frontend
 - ScyllaDB as the authoritative memo store
-- Redis as a disposable cache
+- Valkey 9.1 as a disposable cache (runtime cutover complete; ciphertext-only cache representation remains part of the HIGH encryption migration)
 - Elasticsearch as a rebuildable search projection
 - an independent JWT issuing authentication service boundary
 
