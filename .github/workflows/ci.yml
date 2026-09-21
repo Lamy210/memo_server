@@ -26,7 +26,25 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libssl-dev protobuf-compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3; do
+            if sudo apt-get update; then
+              break
+            fi
+
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "apt-get update failed after $attempt attempts" >&2
+              exit 1
+            fi
+
+            echo "apt-get update failed on attempt $attempt; retrying" >&2
+            sleep $((attempt * 5))
+          done
+
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev protobuf-compiler
         working-directory: .
 
       - name: Configure Rust toolchain
