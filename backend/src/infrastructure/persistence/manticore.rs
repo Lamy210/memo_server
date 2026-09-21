@@ -31,11 +31,11 @@ impl ManticoreClient {
             client,
             base_url: uri.trim_end_matches('/').to_string(),
         };
-        client.ensure_table().await?;
+        client.initialize_table().await?;
         Ok(client)
     }
 
-    async fn ensure_table(&self) -> AppResult<()> {
+    async fn initialize_table(&self) -> AppResult<()> {
         let response = self
             .client
             .post(format!("{}/sql?mode=raw", self.base_url))
@@ -64,6 +64,7 @@ impl ManticoreClient {
                 "Invalid Manticore table initialization response format".to_string(),
             )
         })?;
+
         if let Some(error) = result_sets
             .iter()
             .filter_map(|result_set| result_set.get("error").and_then(Value::as_str))
@@ -98,13 +99,13 @@ impl ManticoreClient {
         }
 
         response.json::<Value>().await.map_err(|error| {
-            AppError::DatabaseError(format!("Failed to parse Manticore {endpoint} response: {error}"))
+            AppError::DatabaseError(format!(
+                "Failed to parse Manticore {endpoint} response: {error}"
+            ))
         })
     }
 
     pub async fn index_memo(&self, memo: &Memo) -> AppResult<()> {
-        self.ensure_table().await?;
-
         let tags_json = serde_json::to_string(&memo.tags).map_err(|error| {
             AppError::DatabaseError(format!("Failed to serialize memo tags: {error}"))
         })?;
@@ -135,8 +136,6 @@ impl ManticoreClient {
         page: usize,
         limit: usize,
     ) -> AppResult<MemoSearchPage> {
-        self.ensure_table().await?;
-
         let mut must = vec![json!({
             "equals": {
                 "user_id": user_id.to_string()
@@ -209,7 +208,6 @@ impl ManticoreClient {
         let hits = search_result["hits"]["hits"].as_array().ok_or_else(|| {
             AppError::DatabaseError("Invalid Manticore search response format".to_string())
         })?;
-
         let items = hits
             .iter()
             .map(parse_memo_hit)
@@ -219,7 +217,6 @@ impl ManticoreClient {
     }
 
     pub async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
-        self.ensure_table().await?;
         let body = json!({
             "table": TABLE_NAME,
             "id": id.to_string()
@@ -238,6 +235,7 @@ impl ManticoreClient {
             .map_err(|error| {
                 AppError::DatabaseError(format!("Manticore health check failed: {error}"))
             })?;
+
         Ok(response.status().is_success())
     }
 }
@@ -307,9 +305,9 @@ fn parse_memo_hit(hit: &Value) -> AppResult<Memo> {
 }
 
 fn timestamp_from_source(value: Option<&Value>, field: &str) -> AppResult<DateTime<Utc>> {
-    let milliseconds = value.and_then(Value::as_i64).ok_or_else(|| {
-        AppError::DatabaseError(format!("Manticore hit is missing {field}"))
-    })?;
+    let milliseconds = value
+        .and_then(Value::as_i64)
+        .ok_or_else(|| AppError::DatabaseError(format!("Manticore hit is missing {field}")))?;
 
     DateTime::<Utc>::from_timestamp_millis(milliseconds).ok_or_else(|| {
         AppError::DatabaseError(format!("Invalid {field} timestamp in Manticore response"))
@@ -317,82 +315,9 @@ fn timestamp_from_source(value: Option<&Value>, field: &str) -> AppResult<DateTi
 }
 
 fn escape_match_query(query: &str) -> String {
-    const SPECIAL: &[char] = &['!', '"', '
-    tags.iter()
-        .map(|tag| encode_tag_token(tag))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn encode_tag_token(tag: &str) -> String {
-    let mut encoded = String::with_capacity(tag.len().saturating_mul(2));
-    for byte in tag.as_bytes() {
-        let _ = write!(&mut encoded, "{byte:02x}");
-    }
-    encoded
-}
-
-#[async_trait]
-impl MemoSearchProjection for ManticoreClient {
-    async fn index_memo(&self, memo: &Memo) -> AppResult<()> {
-        ManticoreClient::index_memo(self, memo).await
-    }
-
-    async fn search_memos(
-        &self,
-        query: &str,
-        tag: Option<String>,
-        user_id: Uuid,
-        page: usize,
-        limit: usize,
-    ) -> AppResult<MemoSearchPage> {
-        ManticoreClient::search_memos(self, query, tag, user_id, page, limit).await
-    }
-
-    async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
-        ManticoreClient::delete_memo(self, id).await
-    }
-}
-
-#[async_trait]
-impl HealthProbe for ManticoreClient {
-    async fn check(&self) -> bool {
-        match self.health_check().await {
-            Ok(healthy) => healthy,
-            Err(error) => {
-                log::warn!("Manticore health check failed: {error}");
-                false
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tag_tokens_are_unambiguous_ascii_words() {
-        let one = encode_tag_token("a b");
-        let two = encode_tag_token("ab");
-
-        assert_ne!(one, two);
-        assert!(one.chars().all(|character| character.is_ascii_hexdigit()));
-        assert_eq!(
-            encode_tag_tokens(&["bug".into(), "high priority".into()]),
-            "627567 68696768207072696f72697479"
-        );
-    }
-
-    #[test]
-    fn match_query_operators_are_escaped() {
-        assert_eq!(
-            escape_match_query(r#"hello | @title "memo" -draft \\ archive"#),
-            r#"hello \| \@title \"memo\" \-draft \\\\ archive"#
-        );
-    }
-}
-, '\'', '(', ')', '-', '/', '<', '@', '\\', '^', '|', '~'];
+    const SPECIAL: &[char] = &[
+        '!', '"', '$', '\'', '(', ')', '-', '/', '<', '@', '\\', '^', '|', '~',
+    ];
 
     let mut escaped = String::with_capacity(query.len());
     for character in query.chars() {
@@ -465,6 +390,17 @@ mod tests {
 
         assert_ne!(one, two);
         assert!(one.chars().all(|character| character.is_ascii_hexdigit()));
-        assert_eq!(encode_tag_tokens(&["bug".into(), "high priority".into()]), "627567 68696768207072696f72697479");
+        assert_eq!(
+            encode_tag_tokens(&["bug".into(), "high priority".into()]),
+            "627567 68696768207072696f72697479"
+        );
+    }
+
+    #[test]
+    fn match_query_operators_are_escaped() {
+        assert_eq!(
+            escape_match_query(r#"hello | @title "memo" -draft \ archive"#),
+            r#"hello \| \@title \"memo\" \-draft \\ archive"#
+        );
     }
 }
