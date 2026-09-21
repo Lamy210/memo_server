@@ -38,7 +38,7 @@ jobs:
       - name: Enable pnpm
         run: |
           corepack enable
-          corepack prepare pnpm@9.15.9 --activate
+          bash candidate/scripts/ci-retry.sh 3 5 corepack prepare pnpm@9.15.9 --activate
 
       - name: Install frontend dependencies
         run: |
@@ -49,7 +49,7 @@ jobs:
         run: |
           cd candidate/frontend
           pnpm exec playwright install --with-deps chromium
-          sudo apt-get update
+          bash ../scripts/ci-retry.sh 3 5 sudo apt-get update
           sudo apt-get install -y --no-install-recommends imagemagick
 
       - name: Capture base UI
