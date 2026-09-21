@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    application::health::HealthProbe,
-    config::AppConfig,
-    error::AppResult,
-};
+use crate::{application::health::HealthProbe, config::AppConfig, error::AppResult};
 
 use super::{
     elasticsearch::ElasticsearchClient,
@@ -26,8 +22,7 @@ impl PersistenceStack {
     pub(crate) async fn build(config: &AppConfig) -> AppResult<Self> {
         let scylla = Arc::new(ScyllaDB::new(&config.scylla_uri).await?);
         let redis = Arc::new(RedisCache::new(&config.redis_uri)?);
-        let elasticsearch =
-            Arc::new(ElasticsearchClient::new(&config.elasticsearch_uri).await?);
+        let elasticsearch = Arc::new(ElasticsearchClient::new(&config.elasticsearch_uri).await?);
 
         let authoritative_store: Arc<dyn MemoAuthoritativeStore> = scylla.clone();
         let cache: Arc<dyn MemoCache> = redis.clone();
