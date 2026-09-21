@@ -15,8 +15,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout branch head
         uses: actions/checkout@v7
+        with:
+          ref: feat/mongodb-foundation
 
       - name: Configure Rust toolchain
         run: rustup show
