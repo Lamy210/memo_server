@@ -7,11 +7,11 @@ Rust/Actix Web + SvelteKit で構成したメモアプリケーションです�
 - Frontend: SvelteKit 2 / Svelte 5 / TypeScript / Tailwind CSS
 - Backend: Rust / Actix Web
 - Primary store: ScyllaDB
-- Cache: Redis
+- Cache: Valkey 9.1
 - Search index: Elasticsearch
 - Local orchestration: Docker Compose
 
-ScyllaDB をメモ本体の永続化先とし、Redis はキャッシュ、Elasticsearch は検索用インデックスとして利用します。
+ScyllaDB をメモ本体の永続化先とし、Valkey はキャッシュ、Elasticsearch は検索用インデックスとして利用します。Rust側はRESP互換のため既存の `redis` crateをクライアント実装として継続利用します。
 
 > [!NOTE]
 > メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、SvelteKit server proxy が private env `DEVELOPMENT_USER_ID` から `X-Development-User-Id` を付与します。ブラウザ側JSは認証headerを生成しません。本番では独立した認証サービスを運用し、`AUTH_MODE=jwt` でそのサービスが発行するaccess tokenを検証します。
@@ -31,7 +31,7 @@ docker compose up --build
 - Backend readiness: http://localhost:8083/api/v1/health/ready
 - Elasticsearch: http://localhost:9200
 - ScyllaDB: localhost:9042
-- Redis: localhost:6379
+- Valkey: localhost:6379
 
 Kibana も必要な場合は `observability` profile を有効にします。
 
@@ -101,19 +101,19 @@ curl -H 'Authorization: Bearer <access-token>' \
 
 `/health/ready` は依存サービスを最大2秒で並行probeし、次の状態を返します。
 
-| State | HTTP | ScyllaDB | Redis / Elasticsearch | Meaning |
+| State | HTTP | ScyllaDB | Valkey / Elasticsearch | Meaning |
 | --- | ---: | --- | --- | --- |
 | `ready` | 200 | healthy | healthy | 全機能を利用可能 |
 | `degraded` | 200 | healthy | 1つ以上down | CRUDは利用可能。cache/search projectionは縮退 |
 | `unavailable` | 503 | down | any | authoritative storeへ安全にアクセスできないためreadyではない |
 
-ScyllaDBがauthoritative storeです。Redisはcache、Elasticsearchは再構築可能なsearch projectionとして扱うため、secondary store障害だけではcore CRUDのreadinessを落としません。
+ScyllaDBがauthoritative storeです。Valkeyはcache、Elasticsearchは再構築可能なsearch projectionとして扱うため、secondary store障害だけではcore CRUDのreadinessを落としません。Valkeyはdisposable cacheとしてRDB/AOFを無効化しています。readiness JSONの `.checks.redis` は後方互換のため現時点では名称を維持しています。
 
 ### Projection reconciliation
 
-メモの作成・更新・削除では、Redis/Elasticsearchへ反映するためのdurable projection intentをScyllaDBへprimary mutationより先に一意eventとして保存します。保存時は対象のmemo version、削除時はdelete targetを持ちます。primary mutation自体が失敗した場合、そのmutation専用eventだけをcleanupするため、並行mutationのintentを上書きしません。
+メモの作成・更新・削除では、Valkey/Elasticsearchへ反映するためのdurable projection intentをScyllaDBへprimary mutationより先に一意eventとして保存します。保存時は対象のmemo version、削除時はdelete targetを持ちます。primary mutation自体が失敗した場合、そのmutation専用eventだけをcleanupするため、並行mutationのintentを上書きしません。
 
-通常はprimary mutation直後に同期を試みます。RedisまたはElasticsearchが利用できない場合でもprimary CRUDは成功し、intentはScyllaDBに残ります。background reconcilerが約2秒間隔で再試行し、backend再起動後も未処理intentを再開します。
+通常はprimary mutation直後に同期を試みます。ValkeyまたはElasticsearchが利用できない場合でもprimary CRUDは成功し、intentはScyllaDBに残ります。background reconcilerが約2秒間隔で再試行し、backend再起動後も未処理intentを再開します。
 
 reconcilerは現在のScyllaDB状態をsource of truthとして同期します。保存intentはScyllaDBがtarget version以上へ到達するまで、削除intentは行が消えるまでackしません。各intentは一意eventなのでworker同士が別mutationのintentを削除しません。secondaryへ書いた直後にScyllaDBを再確認し、同期中にsource stateが変わっていればcorrective intentを先に追加してから古いeventをackするため、stale workerによる書き戻しも最終的に再収束します。
 
@@ -160,7 +160,7 @@ Backend が利用する主な環境変数:
 | Variable | Development default |
 | --- | --- |
 | `SCYLLA_URI` | `127.0.0.1:9042` |
-| `REDIS_URL` | `redis://127.0.0.1:6379` |
+| `REDIS_URL` | `redis://127.0.0.1:6379`（Valkey接続先。互換env名を維持） |
 | `ELASTICSEARCH_URL` | `http://127.0.0.1:9200` |
 | `PORT` | `8080` |
 | `AUTH_MODE` | 必須。Composeでは `development` |
