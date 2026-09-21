@@ -8,10 +8,10 @@ Rust/Actix Web + SvelteKit で構成したメモアプリケーションです�
 - Backend: Rust / Actix Web
 - Primary store: ScyllaDB
 - Cache: Valkey 9.1
-- Search index: Elasticsearch
+- Search index: Manticore Search 29.9.0 (Compose default; Elasticsearch remains a migration fallback)
 - Local orchestration: Docker Compose
 
-ScyllaDB をメモ本体の永続化先とし、Valkey はキャッシュ、Elasticsearch は検索用インデックスとして利用します。Rust側はRESP互換のため既存の `redis` crateをクライアント実装として継続利用します。
+ScyllaDB をメモ本体の永続化先とし、Valkey はキャッシュ、Manticore Search は再構築可能な検索projectionとして利用します。Rust側のValkey接続はRESP互換のため既存の `redis` crateを継続利用します。検索は移行期間中のみ `SEARCH_BACKEND=elasticsearch|manticore` で切替可能です。
 
 > [!NOTE]
 > メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、SvelteKit server proxy が private env `DEVELOPMENT_USER_ID` から `X-Development-User-Id` を付与します。ブラウザ側JSは認証headerを生成しません。本番では独立した認証サービスを運用し、`AUTH_MODE=jwt` でそのサービスが発行するaccess tokenを検証します。
@@ -29,17 +29,9 @@ docker compose up --build
 - Frontend: http://localhost:3001
 - Backend liveness: http://localhost:8083/api/v1/health/live
 - Backend readiness: http://localhost:8083/api/v1/health/ready
-- Elasticsearch: http://localhost:9200
+- Manticore HTTP: http://localhost:9308
 - ScyllaDB: localhost:9042
 - Valkey: localhost:6379
-
-Kibana も必要な場合は `observability` profile を有効にします。
-
-```bash
-docker compose --profile observability up --build
-```
-
-Kibana は http://localhost:5601 です。
 
 停止:
 
@@ -101,19 +93,19 @@ curl -H 'Authorization: Bearer <access-token>' \
 
 `/health/ready` は依存サービスを最大2秒で並行probeし、次の状態を返します。
 
-| State | HTTP | ScyllaDB | Valkey / Elasticsearch | Meaning |
+| State | HTTP | ScyllaDB | Valkey / Search projection | Meaning |
 | --- | ---: | --- | --- | --- |
 | `ready` | 200 | healthy | healthy | 全機能を利用可能 |
 | `degraded` | 200 | healthy | 1つ以上down | CRUDは利用可能。cache/search projectionは縮退 |
 | `unavailable` | 503 | down | any | authoritative storeへ安全にアクセスできないためreadyではない |
 
-ScyllaDBがauthoritative storeです。Valkeyはcache、Elasticsearchは再構築可能なsearch projectionとして扱うため、secondary store障害だけではcore CRUDのreadinessを落としません。Valkeyはdisposable cacheとしてRDB/AOFを無効化しています。readiness JSONの `.checks.redis` は後方互換のため現時点では名称を維持しています。
+ScyllaDBがauthoritative storeです。Valkeyはcache、Manticoreは再構築可能なsearch projectionとして扱うため、secondary store障害だけではcore CRUDのreadinessを落としません。Valkeyはdisposable cacheとしてRDB/AOFを無効化しています。readiness JSONの `.checks.redis` / `.checks.elasticsearch` は既存監視との後方互換のため現時点では名称を維持しています。
 
 ### Projection reconciliation
 
-メモの作成・更新・削除では、Valkey/Elasticsearchへ反映するためのdurable projection intentをScyllaDBへprimary mutationより先に一意eventとして保存します。保存時は対象のmemo version、削除時はdelete targetを持ちます。primary mutationでクライアント側にエラーが返ってもserver-side commit済みの可能性があるためintentは即時削除せず保持し、reconcilerがauthoritative stateを確認します。targetへ到達しないintentはgrace period後にstaleとして破棄します。
+メモの作成・更新・削除では、Valkey/Manticoreへ反映するためのdurable projection intentをScyllaDBへprimary mutationより先に一意eventとして保存します。保存時は対象のmemo version、削除時はdelete targetを持ちます。primary mutationでクライアント側にエラーが返ってもserver-side commit済みの可能性があるためintentは即時削除せず保持し、reconcilerがauthoritative stateを確認します。targetへ到達しないintentはgrace period後にstaleとして破棄します。
 
-通常はprimary mutation直後に同期を試みます。ValkeyまたはElasticsearchが利用できない場合でもprimary CRUDは成功し、intentはScyllaDBに残ります。background reconcilerが約2秒間隔で再試行し、backend再起動後も未処理intentを再開します。
+通常はprimary mutation直後に同期を試みます。ValkeyまたはManticoreが利用できない場合でもprimary CRUDは成功し、intentはScyllaDBに残ります。background reconcilerが約2秒間隔で再試行し、backend再起動後も未処理intentを再開します。
 
 reconcilerは現在のScyllaDB状態をsource of truthとして同期します。保存intentはScyllaDBがtarget version以上へ到達するまで、削除intentは行が消えるまでackしません。各intentは一意eventなのでworker同士が別mutationのintentを削除しません。secondaryへ書いた直後にScyllaDBを再確認し、同期中にsource stateが変わっていればcorrective intentを先に追加してから古いeventをackするため、stale workerによる書き戻しも最終的に再収束します。
 
@@ -161,7 +153,9 @@ Backend が利用する主な環境変数:
 | --- | --- |
 | `SCYLLA_URI` | `127.0.0.1:9042` |
 | `REDIS_URL` | `redis://127.0.0.1:6379`（Valkey接続先。互換env名を維持） |
-| `ELASTICSEARCH_URL` | `http://127.0.0.1:9200` |
+| `SEARCH_BACKEND` | `elasticsearch`（既存環境互換。Composeでは `manticore`） |
+| `MANTICORE_URL` | `http://127.0.0.1:9308` |
+| `ELASTICSEARCH_URL` | `http://127.0.0.1:9200`（migration fallbackのみ） |
 | `PORT` | `8080` |
 | `AUTH_MODE` | 必須。Composeでは `development` |
 | `AUTH_ISSUER` | `AUTH_MODE=jwt` のとき必須 |
