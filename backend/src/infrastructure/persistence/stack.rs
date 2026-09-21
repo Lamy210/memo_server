@@ -1,9 +1,14 @@
 use std::sync::Arc;
 
-use crate::{application::health::HealthProbe, config::AppConfig, error::AppResult};
+use crate::{
+    application::health::HealthProbe,
+    config::{AppConfig, SearchBackend},
+    error::AppResult,
+};
 
 use super::{
     elasticsearch::ElasticsearchClient,
+    manticore::ManticoreClient,
     ports::{MemoAuthoritativeStore, MemoCache, MemoSearchProjection},
     redis::RedisCache,
     scylla::ScyllaDB,
@@ -22,15 +27,26 @@ impl PersistenceStack {
     pub(crate) async fn build(config: &AppConfig) -> AppResult<Self> {
         let scylla = Arc::new(ScyllaDB::new(&config.scylla_uri).await?);
         let redis = Arc::new(RedisCache::new(&config.redis_uri)?);
-        let elasticsearch = Arc::new(ElasticsearchClient::new(&config.elasticsearch_uri).await?);
+
+        let (search_projection, search_health): (
+            Arc<dyn MemoSearchProjection>,
+            Arc<dyn HealthProbe>,
+        ) = match config.search_backend {
+            SearchBackend::Elasticsearch => {
+                let client = Arc::new(ElasticsearchClient::new(&config.search_uri).await?);
+                (client.clone(), client)
+            }
+            SearchBackend::Manticore => {
+                let client = Arc::new(ManticoreClient::new(&config.search_uri).await?);
+                (client.clone(), client)
+            }
+        };
 
         let authoritative_store: Arc<dyn MemoAuthoritativeStore> = scylla.clone();
         let cache: Arc<dyn MemoCache> = redis.clone();
-        let search_projection: Arc<dyn MemoSearchProjection> = elasticsearch.clone();
 
         let authoritative_health: Arc<dyn HealthProbe> = scylla;
         let cache_health: Arc<dyn HealthProbe> = redis;
-        let search_health: Arc<dyn HealthProbe> = elasticsearch;
 
         Ok(Self {
             authoritative_store,
