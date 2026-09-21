@@ -13,17 +13,17 @@ use super::{
     scylla::ScyllaDB,
 };
 
-pub struct PersistenceStack {
-    pub authoritative_store: Arc<dyn MemoAuthoritativeStore>,
-    pub cache: Arc<dyn MemoCache>,
-    pub search_projection: Arc<dyn MemoSearchProjection>,
-    pub authoritative_health: Arc<dyn HealthProbe>,
-    pub cache_health: Arc<dyn HealthProbe>,
-    pub search_health: Arc<dyn HealthProbe>,
+pub(crate) struct PersistenceStack {
+    pub(crate) authoritative_store: Arc<dyn MemoAuthoritativeStore>,
+    pub(crate) cache: Arc<dyn MemoCache>,
+    pub(crate) search_projection: Arc<dyn MemoSearchProjection>,
+    pub(crate) authoritative_health: Arc<dyn HealthProbe>,
+    pub(crate) cache_health: Arc<dyn HealthProbe>,
+    pub(crate) search_health: Arc<dyn HealthProbe>,
 }
 
 impl PersistenceStack {
-    pub async fn build(config: &AppConfig) -> AppResult<Self> {
+    pub(crate) async fn build(config: &AppConfig) -> AppResult<Self> {
         let scylla = Arc::new(ScyllaDB::new(&config.scylla_uri).await?);
         let redis = Arc::new(RedisCache::new(&config.redis_uri)?);
         let elasticsearch =
