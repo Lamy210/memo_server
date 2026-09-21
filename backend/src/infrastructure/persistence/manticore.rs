@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     application::health::HealthProbe,
-    domain::memo::{entity::Memo, repository::MemoSearchPage},
+    domain::memo::entity::Memo,
     error::{AppError, AppResult},
 };
 
@@ -298,8 +298,8 @@ impl MemoSearchProjection for ManticoreClient {
         user_id: Uuid,
         page: usize,
         limit: usize,
-    ) -> AppResult<MemoSearchPage> {
-        ManticoreClient::search_memos(self, query, tag, user_id, page, limit).await
+    ) -> AppResult<MemoSearchHitPage> {
+        ManticoreClient::search_memo_ids(self, query, tag, user_id, page, limit).await
     }
 
     async fn delete_memo(&self, id: Uuid) -> AppResult<()> {
