@@ -90,7 +90,9 @@ impl ScyllaDB {
                 AppError::DatabaseError(format!("Failed to page ScyllaDB memos: {error}"))
             })?;
         let mut rows = pager.rows_stream::<MemoRow>().map_err(|error| {
-            AppError::DatabaseError(format!("Failed to type-check paged ScyllaDB memos: {error}"))
+            AppError::DatabaseError(format!(
+                "Failed to type-check paged ScyllaDB memos: {error}"
+            ))
         })?;
 
         let mut visited = 0usize;
