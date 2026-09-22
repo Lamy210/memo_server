@@ -264,10 +264,7 @@ impl MongoDbAuthoritativeStore {
     /// MongoDB transaction so rebuildable secondary stores can converge after
     /// cutover. Existing identical documents are treated as idempotent reruns;
     /// differing documents are never overwritten.
-    pub async fn import_memo_for_migration(
-        &self,
-        memo: &Memo,
-    ) -> AppResult<MigrationImportResult> {
+    pub async fn import_memo_for_migration(&self, memo: &Memo) -> AppResult<MigrationImportResult> {
         let document = MemoDocument::from(memo);
 
         if let Some(existing) = self
@@ -726,11 +723,7 @@ mod tests {
             store.import_memo_for_migration(&migrated).await.unwrap(),
             MigrationImportResult::Inserted
         );
-        let imported = store
-            .find_by_id(owner, migrated.id)
-            .await
-            .unwrap()
-            .unwrap();
+        let imported = store.find_by_id(owner, migrated.id).await.unwrap().unwrap();
         assert_eq!(imported.id, migrated.id);
         assert_eq!(imported.version, migrated.version);
         assert_eq!(imported.created_at, migrated.created_at);
