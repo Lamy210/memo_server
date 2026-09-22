@@ -1,7 +1,24 @@
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    domain::memo::entity::Memo,
+    error::{AppError, AppResult},
+};
+
+#[async_trait]
+pub trait HighMemoCryptography: Send + Sync {
+    /// Protect one logical memo version using the active HIGH suite.
+    ///
+    /// Implementations own payload serialization, fresh per-version DEK
+    /// generation, AEAD, and key wrapping. Callers decide when protection is
+    /// required but do not depend on a KMS or cipher implementation.
+    async fn encrypt_memo(&self, memo: &Memo) -> AppResult<HighEncryptedMemoEnvelope>;
+
+    /// Recover one HIGH memo after validating its suite/schema/AAD contract.
+    async fn decrypt_memo(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo>;
+}
 
 pub const MEMO_HIGH_SUITE_ID: &str = "MEMO-HIGH-1";
 pub const MEMO_HIGH_SCHEMA_VERSION: u32 = 1;
