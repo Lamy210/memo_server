@@ -590,7 +590,11 @@ mod tests {
             .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
 
         let cleanup_client = Client::with_uri_str(&uri).await.unwrap();
-        cleanup_client.database(TEST_DATABASE_NAME).drop().await.unwrap();
+        cleanup_client
+            .database(TEST_DATABASE_NAME)
+            .drop()
+            .await
+            .unwrap();
 
         let store = MongoDbAuthoritativeStore::new(&uri, TEST_DATABASE_NAME)
             .await
@@ -677,7 +681,11 @@ mod tests {
         ));
         assert!(store.list_projection_intents().await.unwrap().is_empty());
 
-        cleanup_client.database(TEST_DATABASE_NAME).drop().await.unwrap();
+        cleanup_client
+            .database(TEST_DATABASE_NAME)
+            .drop()
+            .await
+            .unwrap();
     }
 
     #[test]
