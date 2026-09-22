@@ -9,7 +9,7 @@ This runbook moves existing memo rows from the legacy ScyllaDB authoritative sto
 - memo ID
 - owner/user ID
 - title/content/tags
-- created/updated timestamps
+- created/updated timestamps at the stores' millisecond precision
 - optimistic-concurrency version
 
 Every newly imported memo is committed together with a MongoDB projection intent for its current version. This lets the normal reconciler repopulate rebuildable secondary stores after MongoDB becomes authoritative.
