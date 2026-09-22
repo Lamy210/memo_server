@@ -12,6 +12,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["v4", "serde"] }
 scylla = { version = "1.9.0", features = ["chrono-04"] }
 redis = { version = "1.7.0", features = ["tokio-comp"] }
+mongodb = "3.9.1"
 elasticsearch = "8.19.0-alpha.1"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
