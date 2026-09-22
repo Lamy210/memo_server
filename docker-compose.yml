@@ -34,7 +34,7 @@ services:
     environment:
       RUST_LOG: info
       AUTHORITATIVE_BACKEND: mongodb
-      MONGODB_URI: mongodb://mongodb:27017/?replicaSet=rs0
+      MONGODB_URI: mongodb://mongodb:27017/?replicaSet=rs0&directConnection=true
       MONGODB_DATABASE: memo_app
       REDIS_URL: redis://valkey:6379
       SEARCH_BACKEND: manticore
