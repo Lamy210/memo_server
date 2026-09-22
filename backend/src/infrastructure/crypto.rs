@@ -50,18 +50,20 @@ pub fn deserialize_high_memo_payload(
         AppError::DatabaseError(format!("deserialize HIGH memo payload: {error}"))
     })?;
 
-    let created_at = DateTime::<Utc>::from_timestamp_millis(payload.created_at_ms).ok_or_else(|| {
-        AppError::DatabaseError(format!(
-            "Invalid HIGH memo created_at milliseconds: {}",
-            payload.created_at_ms
-        ))
-    })?;
-    let updated_at = DateTime::<Utc>::from_timestamp_millis(payload.updated_at_ms).ok_or_else(|| {
-        AppError::DatabaseError(format!(
-            "Invalid HIGH memo updated_at milliseconds: {}",
-            payload.updated_at_ms
-        ))
-    })?;
+    let created_at =
+        DateTime::<Utc>::from_timestamp_millis(payload.created_at_ms).ok_or_else(|| {
+            AppError::DatabaseError(format!(
+                "Invalid HIGH memo created_at milliseconds: {}",
+                payload.created_at_ms
+            ))
+        })?;
+    let updated_at =
+        DateTime::<Utc>::from_timestamp_millis(payload.updated_at_ms).ok_or_else(|| {
+            AppError::DatabaseError(format!(
+                "Invalid HIGH memo updated_at milliseconds: {}",
+                payload.updated_at_ms
+            ))
+        })?;
 
     if updated_at < created_at {
         return Err(AppError::DatabaseError(
