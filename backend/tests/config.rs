@@ -36,25 +36,16 @@ fn scylla_fallback_ignores_empty_mongodb_database() {
 fn supports_explicit_mongodb_authoritative_backend() {
     let config = AppConfig::from_vars([
         ("AUTH_MODE".to_string(), "development".to_string()),
-        (
-            "AUTHORITATIVE_BACKEND".to_string(),
-            "mongodb".to_string(),
-        ),
+        ("AUTHORITATIVE_BACKEND".to_string(), "mongodb".to_string()),
         (
             "MONGODB_URI".to_string(),
             "mongodb://mongo.example.test:27017/?replicaSet=rs0".to_string(),
         ),
-        (
-            "MONGODB_DATABASE".to_string(),
-            "memo_test".to_string(),
-        ),
+        ("MONGODB_DATABASE".to_string(), "memo_test".to_string()),
     ])
     .expect("MongoDB configuration should be valid");
 
-    assert_eq!(
-        config.authoritative_backend,
-        AuthoritativeBackend::MongoDb
-    );
+    assert_eq!(config.authoritative_backend, AuthoritativeBackend::MongoDb);
     assert_eq!(
         config.authoritative_uri,
         "mongodb://mongo.example.test:27017/?replicaSet=rs0"
@@ -66,10 +57,7 @@ fn supports_explicit_mongodb_authoritative_backend() {
 fn rejects_unknown_authoritative_backend() {
     let error = AppConfig::from_vars([
         ("AUTH_MODE".to_string(), "development".to_string()),
-        (
-            "AUTHORITATIVE_BACKEND".to_string(),
-            "unknown".to_string(),
-        ),
+        ("AUTHORITATIVE_BACKEND".to_string(), "unknown".to_string()),
     ])
     .expect_err("unknown authoritative backend must be rejected");
 
