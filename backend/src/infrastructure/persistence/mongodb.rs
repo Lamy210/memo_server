@@ -583,6 +583,101 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    #[ignore = "requires a local MongoDB replica set"]
+    async fn mongodb_replica_set_preserves_atomic_outbox_and_tenant_scope() {
+        let uri = std::env::var("MONGODB_TEST_URI")
+            .unwrap_or_else(|_| "mongodb://127.0.0.1:27017/?replicaSet=rs0".to_string());
+
+        let cleanup_client = Client::with_uri_str(&uri).await.unwrap();
+        cleanup_client.database(DATABASE_NAME).drop().await.unwrap();
+
+        let store = MongoDbAuthoritativeStore::new(&uri).await.unwrap();
+        let owner = Uuid::new_v4();
+        let other_owner = Uuid::new_v4();
+
+        let memo = Memo::new(
+            "Version one".into(),
+            "MongoDB integration content".into(),
+            vec!["integration".into()],
+            owner,
+        );
+
+        let create_intent = store.save_with_projection_intent(&memo).await.unwrap();
+        assert_eq!(
+            store.find_by_id(owner, memo.id).await.unwrap().unwrap().id,
+            memo.id
+        );
+        assert!(store
+            .find_by_id(other_owner, memo.id)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(store.list_projection_intents().await.unwrap().len(), 1);
+        store
+            .acknowledge_projection_intent(&create_intent)
+            .await
+            .unwrap();
+
+        let mut winner = store.find_by_id(owner, memo.id).await.unwrap().unwrap();
+        let mut stale = winner.clone();
+
+        winner.update(Some("Winner".into()), None, None);
+        let update_intent = store.save_with_projection_intent(&winner).await.unwrap();
+        store
+            .acknowledge_projection_intent(&update_intent)
+            .await
+            .unwrap();
+
+        stale.update(Some("Stale writer".into()), None, None);
+        assert!(matches!(
+            store.save_with_projection_intent(&stale).await,
+            Err(AppError::Conflict(_))
+        ));
+        assert!(store.list_projection_intents().await.unwrap().is_empty());
+
+        let second = Memo::new(
+            "Second memo".into(),
+            "Hydration ordering".into(),
+            vec![],
+            owner,
+        );
+        let second_intent = store.save_with_projection_intent(&second).await.unwrap();
+        store
+            .acknowledge_projection_intent(&second_intent)
+            .await
+            .unwrap();
+
+        let missing = Uuid::new_v4();
+        let hydrated = store
+            .find_many_by_ids(owner, &[second.id, winner.id, missing, second.id])
+            .await
+            .unwrap();
+        assert_eq!(
+            hydrated.iter().map(|memo| memo.id).collect::<Vec<_>>(),
+            vec![second.id, winner.id, second.id]
+        );
+
+        let delete_intent = store
+            .delete_with_projection_intent(owner, winner.id)
+            .await
+            .unwrap();
+        assert!(store.find_by_id(owner, winner.id).await.unwrap().is_none());
+        assert_eq!(store.list_projection_intents().await.unwrap().len(), 1);
+        store
+            .acknowledge_projection_intent(&delete_intent)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            store.delete_with_projection_intent(owner, winner.id).await,
+            Err(AppError::NotFound(_))
+        ));
+        assert!(store.list_projection_intents().await.unwrap().is_empty());
+
+        cleanup_client.database(DATABASE_NAME).drop().await.unwrap();
+    }
+
     #[test]
     fn projection_version_must_be_positive() {
         let event =
