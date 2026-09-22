@@ -167,6 +167,12 @@ Backend が利用する主な環境変数:
 
 `DATABASE_URL` は `AUTHORITATIVE_BACKEND=scylla` の既存環境互換aliasです。MongoDB選択時には利用せず、`MONGODB_URI` / `MONGODB_DATABASE` を明示してください。MongoDB transactionを利用するため、接続先はreplica setまたはsharded clusterである必要があります。Dockerのsingle-node replica setではhost discoveryを避けるため `directConnection=true` を使います。本番の冗長replica set/sharded clusterでは全memberを到達可能にし、通常のtopology discoveryを利用してください。
 
+## ScyllaDB から MongoDB への既存データ移行
+
+既存ScyllaDB環境向けに、ページング走査・ID/version/timestamp保持・MongoDB transactional outbox作成・差異検出を行うbackfill CLIを用意しています。書き込みは `--apply` を明示した場合だけ実行されます。
+
+本番切替では書き込み停止、バックアップ、secondary projectionの再構築、ロールバック条件が必要です。手順は [docs/migrations/scylla-to-mongodb.md](docs/migrations/scylla-to-mongodb.md) を参照してください。
+
 Frontend は SvelteKit server route `/api/v1/...` をBackendへの同一origin proxyとして利用します。`BACKEND_URL` はserver-sideのみで参照され、Composeでは `http://backend:8080` が設定されます。ローカル開発では private env `DEVELOPMENT_USER_ID` を設定し、development buildのserver proxyだけが `X-Development-User-Id` を注入します。`VITE_*` へ認証情報を置かないでください。
 
 ## スコープ

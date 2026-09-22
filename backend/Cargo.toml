@@ -2,6 +2,7 @@
 name = "memo_app_backend"
 version = "0.1.0"
 edition = "2021"
+default-run = "memo_app_backend"
 
 [dependencies]
 tokio = { version = "1.36.0", features = ["full"] }

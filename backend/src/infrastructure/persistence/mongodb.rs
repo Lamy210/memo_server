@@ -27,7 +27,7 @@ const PROJECTION_INTENTS_COLLECTION: &str = "projection_intents";
 const TARGET_VERSION: &str = "version";
 const TARGET_DELETED: &str = "deleted";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct MemoDocument {
     #[serde(rename = "_id")]
     id: String,
@@ -159,6 +159,12 @@ struct OptimisticConflict;
 #[derive(Debug)]
 struct MissingMemo;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationImportResult {
+    Inserted,
+    AlreadyPresent,
+}
+
 struct SaveTransactionContext {
     memos: Collection<MemoDocument>,
     intents: Collection<ProjectionIntentDocument>,
@@ -249,6 +255,116 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("find MongoDB memo", error))?;
 
         document.map(MemoDocument::try_into_memo).transpose()
+    }
+
+    async fn ensure_migration_projection_intent(&self, memo: &Memo) -> AppResult<()> {
+        let pending = self
+            .projection_intents
+            .find_one(doc! {
+                "user_id": memo.user_id.to_string(),
+                "memo_id": memo.id.to_string(),
+                "target_kind": TARGET_VERSION,
+                "target_version": memo.version,
+            })
+            .await
+            .map_err(|error| mongo_error("inspect MongoDB migration projection intent", error))?;
+
+        if pending.is_none() {
+            let event = ProjectionIntent::new(
+                memo.user_id,
+                memo.id,
+                ProjectionTarget::Version(memo.version),
+            );
+            self.projection_intents
+                .insert_one(ProjectionIntentDocument::from_intent(&event)?)
+                .await
+                .map_err(|error| {
+                    mongo_error("enqueue MongoDB migration projection intent", error)
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Import a memo during a Scylla -> MongoDB backfill.
+    ///
+    /// The memo's existing identity, timestamps, and version are preserved. A
+    /// projection intent for the imported version is committed in the same
+    /// MongoDB transaction so rebuildable secondary stores can converge after
+    /// cutover. Existing identical documents are treated as idempotent reruns;
+    /// differing documents are never overwritten.
+    pub async fn import_memo_for_migration(&self, memo: &Memo) -> AppResult<MigrationImportResult> {
+        let document = MemoDocument::from(memo);
+
+        if let Some(existing) = self
+            .memos
+            .find_one(doc! { "_id": document.id.clone() })
+            .await
+            .map_err(|error| mongo_error("inspect MongoDB migration target", error))?
+        {
+            if existing == document {
+                self.ensure_migration_projection_intent(memo).await?;
+                return Ok(MigrationImportResult::AlreadyPresent);
+            }
+
+            return Err(AppError::Conflict(format!(
+                "MongoDB migration target already contains different memo {}",
+                memo.id
+            )));
+        }
+
+        let event = ProjectionIntent::new(
+            memo.user_id,
+            memo.id,
+            ProjectionTarget::Version(memo.version),
+        );
+        let mut session = self
+            .client
+            .start_session()
+            .await
+            .map_err(|error| mongo_error("start MongoDB migration session", error))?;
+        let context = SaveTransactionContext {
+            memos: self.memos.clone(),
+            intents: self.projection_intents.clone(),
+            memo: document,
+            intent: ProjectionIntentDocument::from_intent(&event)?,
+        };
+
+        session
+            .start_transaction()
+            .write_concern(WriteConcern::majority())
+            .and_run(context, |session, context| {
+                async move {
+                    context
+                        .memos
+                        .insert_one(context.memo.clone())
+                        .session(&mut *session)
+                        .await?;
+                    context
+                        .intents
+                        .insert_one(context.intent.clone())
+                        .session(&mut *session)
+                        .await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|error| mongo_error("commit MongoDB migration import", error))?;
+
+        Ok(MigrationImportResult::Inserted)
+    }
+
+    /// Count authoritative memo rows after a migration pass.
+    ///
+    /// The backfill CLI compares this value with the number of Scylla source
+    /// rows it visited. A mismatch means the MongoDB destination contains
+    /// target-only rows and must not be used for cutover.
+    pub async fn count_memos_for_migration(&self) -> AppResult<u64> {
+        self.memos
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| mongo_error("count MongoDB migration target memos", error))
     }
 
     async fn save_transaction(&self, memo: &Memo, event: &ProjectionIntent) -> AppResult<()> {
@@ -636,6 +752,64 @@ mod tests {
             .unwrap();
         let owner = Uuid::new_v4();
         let other_owner = Uuid::new_v4();
+
+        let mut migrated = Memo::new(
+            "Migrated memo".into(),
+            "Preserve source version".into(),
+            vec!["migration".into()],
+            owner,
+        );
+        migrated.update(Some("Migrated memo v2".into()), None, None);
+
+        assert_eq!(
+            store.import_memo_for_migration(&migrated).await.unwrap(),
+            MigrationImportResult::Inserted
+        );
+        let imported = store.find_by_id(owner, migrated.id).await.unwrap().unwrap();
+        assert_eq!(store.count_memos_for_migration().await.unwrap(), 1);
+        assert_eq!(imported.id, migrated.id);
+        assert_eq!(imported.version, migrated.version);
+        assert_eq!(
+            imported.created_at.timestamp_millis(),
+            migrated.created_at.timestamp_millis()
+        );
+        assert_eq!(
+            imported.updated_at.timestamp_millis(),
+            migrated.updated_at.timestamp_millis()
+        );
+
+        let import_intents = store.list_projection_intents().await.unwrap();
+        assert_eq!(import_intents.len(), 1);
+        assert_eq!(
+            import_intents[0].target,
+            ProjectionTarget::Version(migrated.version)
+        );
+        store
+            .acknowledge_projection_intent(&import_intents[0])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.import_memo_for_migration(&migrated).await.unwrap(),
+            MigrationImportResult::AlreadyPresent
+        );
+        let rerun_intents = store.list_projection_intents().await.unwrap();
+        assert_eq!(rerun_intents.len(), 1);
+        assert_eq!(
+            rerun_intents[0].target,
+            ProjectionTarget::Version(migrated.version)
+        );
+        store
+            .acknowledge_projection_intent(&rerun_intents[0])
+            .await
+            .unwrap();
+
+        let mut divergent = migrated.clone();
+        divergent.title = "Different target data".into();
+        assert!(matches!(
+            store.import_memo_for_migration(&divergent).await,
+            Err(AppError::Conflict(_))
+        ));
 
         let memo = Memo::new(
             "Version one".into(),
