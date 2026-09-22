@@ -104,7 +104,9 @@ impl AppConfig {
             .get("MONGODB_DATABASE")
             .cloned()
             .unwrap_or_else(|| DEFAULT_MONGODB_DATABASE.to_string());
-        if mongodb_database.trim().is_empty() {
+        if authoritative_backend == AuthoritativeBackend::MongoDb
+            && mongodb_database.trim().is_empty()
+        {
             return Err(ConfigError::EmptyMongoDatabase);
         }
 
