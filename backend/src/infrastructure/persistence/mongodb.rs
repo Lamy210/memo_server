@@ -27,7 +27,7 @@ const PROJECTION_INTENTS_COLLECTION: &str = "projection_intents";
 const TARGET_VERSION: &str = "version";
 const TARGET_DELETED: &str = "deleted";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct MemoDocument {
     #[serde(rename = "_id")]
     id: String,
@@ -159,6 +159,12 @@ struct OptimisticConflict;
 #[derive(Debug)]
 struct MissingMemo;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationImportResult {
+    Inserted,
+    AlreadyPresent,
+}
+
 struct SaveTransactionContext {
     memos: Collection<MemoDocument>,
     intents: Collection<ProjectionIntentDocument>,
@@ -249,6 +255,77 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("find MongoDB memo", error))?;
 
         document.map(MemoDocument::try_into_memo).transpose()
+    }
+
+    /// Import a memo during a Scylla -> MongoDB backfill.
+    ///
+    /// The memo's existing identity, timestamps, and version are preserved. A
+    /// projection intent for the imported version is committed in the same
+    /// MongoDB transaction so rebuildable secondary stores can converge after
+    /// cutover. Existing identical documents are treated as idempotent reruns;
+    /// differing documents are never overwritten.
+    pub async fn import_memo_for_migration(
+        &self,
+        memo: &Memo,
+    ) -> AppResult<MigrationImportResult> {
+        let document = MemoDocument::from(memo);
+
+        if let Some(existing) = self
+            .memos
+            .find_one(doc! { "_id": document.id.clone() })
+            .await
+            .map_err(|error| mongo_error("inspect MongoDB migration target", error))?
+        {
+            if existing == document {
+                return Ok(MigrationImportResult::AlreadyPresent);
+            }
+
+            return Err(AppError::Conflict(format!(
+                "MongoDB migration target already contains different memo {}",
+                memo.id
+            )));
+        }
+
+        let event = ProjectionIntent::new(
+            memo.user_id,
+            memo.id,
+            ProjectionTarget::Version(memo.version),
+        );
+        let mut session = self
+            .client
+            .start_session()
+            .await
+            .map_err(|error| mongo_error("start MongoDB migration session", error))?;
+        let context = SaveTransactionContext {
+            memos: self.memos.clone(),
+            intents: self.projection_intents.clone(),
+            memo: document,
+            intent: ProjectionIntentDocument::from_intent(&event)?,
+        };
+
+        session
+            .start_transaction()
+            .write_concern(WriteConcern::majority())
+            .and_run(context, |session, context| {
+                async move {
+                    context
+                        .memos
+                        .insert_one(context.memo.clone())
+                        .session(&mut *session)
+                        .await?;
+                    context
+                        .intents
+                        .insert_one(context.intent.clone())
+                        .session(&mut *session)
+                        .await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|error| mongo_error("commit MongoDB migration import", error))?;
+
+        Ok(MigrationImportResult::Inserted)
     }
 
     async fn save_transaction(&self, memo: &Memo, event: &ProjectionIntent) -> AppResult<()> {
