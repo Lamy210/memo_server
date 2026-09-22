@@ -144,8 +144,7 @@ impl TryFrom<&HighEncryptedMemoEnvelope> for EncryptedMemoDocument {
 impl EncryptedMemoDocument {
     fn try_into_envelope(self) -> AppResult<HighEncryptedMemoEnvelope> {
         let memo_id = parse_uuid("encrypted memo id", &self.id)?;
-        let owner_partition =
-            parse_uuid("encrypted memo owner partition", &self.owner_partition)?;
+        let owner_partition = parse_uuid("encrypted memo owner partition", &self.owner_partition)?;
         let schema_version = u32::try_from(self.schema_version).map_err(|_| {
             AppError::DatabaseError(format!(
                 "Invalid MongoDB encrypted memo schema version: {}",
