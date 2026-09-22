@@ -267,9 +267,7 @@ impl MongoDbAuthoritativeStore {
                 "target_version": memo.version,
             })
             .await
-            .map_err(|error| {
-                mongo_error("inspect MongoDB migration projection intent", error)
-            })?;
+            .map_err(|error| mongo_error("inspect MongoDB migration projection intent", error))?;
 
         if pending.is_none() {
             let event = ProjectionIntent::new(
