@@ -53,6 +53,8 @@ pub enum ConfigError {
     InvalidAuthoritativeBackend(String),
     #[error("MONGODB_DATABASE must not be empty")]
     EmptyMongoDatabase,
+    #[error("MONGODB_DATABASE is not a valid MongoDB database name: `{0}`")]
+    InvalidMongoDatabase(String),
     #[error("SEARCH_BACKEND must be `elasticsearch` or `manticore`, got `{0}`")]
     InvalidSearchBackend(String),
     #[error("AUTH_MODE is required; use `development` or `jwt`")]
@@ -100,10 +102,8 @@ impl AppConfig {
             .get("MONGODB_DATABASE")
             .cloned()
             .unwrap_or_else(|| DEFAULT_MONGODB_DATABASE.to_string());
-        if authoritative_backend == AuthoritativeBackend::MongoDb
-            && mongodb_database.trim().is_empty()
-        {
-            return Err(ConfigError::EmptyMongoDatabase);
+        if authoritative_backend == AuthoritativeBackend::MongoDb {
+            validate_mongodb_database_name(&mongodb_database)?;
         }
 
         let redis_uri = vars
@@ -164,6 +164,30 @@ impl AppConfig {
             auth,
         })
     }
+}
+
+fn validate_mongodb_database_name(name: &str) -> Result<(), ConfigError> {
+    if name.trim().is_empty() {
+        return Err(ConfigError::EmptyMongoDatabase);
+    }
+
+    let invalid_character = name
+        .chars()
+        .any(|character| matches!(character, '/' | '\\' | '.' | ' ' | '"' | '
+    vars: &HashMap<String, String>,
+    name: &'static str,
+) -> Result<String, ConfigError> {
+    vars.get(name)
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .ok_or(ConfigError::MissingJwtSetting(name))
+}
+ | '\0'));
+    if name.as_bytes().len() >= 64 || invalid_character {
+        return Err(ConfigError::InvalidMongoDatabase(name.to_string()));
+    }
+
+    Ok(())
 }
 
 fn required_jwt_setting(
