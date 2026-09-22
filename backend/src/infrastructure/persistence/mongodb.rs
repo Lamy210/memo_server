@@ -962,6 +962,11 @@ mod tests {
         let owner = Uuid::new_v4();
         let other_owner = Uuid::new_v4();
 
+        let collections_before_staging = store.database.list_collection_names().await.unwrap();
+        assert!(!collections_before_staging
+            .iter()
+            .any(|name| name == ENCRYPTED_MEMOS_COLLECTION));
+
         let encrypted = HighEncryptedMemoEnvelope {
             memo_id: Uuid::new_v4(),
             owner_partition: owner,
@@ -994,6 +999,10 @@ mod tests {
                 .unwrap(),
             1
         );
+        let collections_after_staging = store.database.list_collection_names().await.unwrap();
+        assert!(collections_after_staging
+            .iter()
+            .any(|name| name == ENCRYPTED_MEMOS_COLLECTION));
         assert_eq!(
             store
                 .find_staged_encrypted_memo_for_migration(owner, encrypted.memo_id)
