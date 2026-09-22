@@ -26,6 +26,7 @@ The backfill intentionally fails closed.
 - `MONGODB_URI` and `MONGODB_DATABASE` must be explicitly configured for `--apply`.
 - MongoDB must be a replica set or sharded cluster because the memo row and projection intent are committed atomically.
 - Re-running against an identical destination row is idempotent and reports it as already present.
+- An identical rerun also ensures a current-version projection intent is pending, so clearing/rebuilding Valkey or Manticore after an earlier reconciliation does not strand the memo outside secondary projections.
 - If the destination already contains the same memo ID with different data, the migration stops with a conflict instead of overwriting it.
 
 Do not run multiple backfill writers concurrently.
