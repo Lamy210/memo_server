@@ -407,6 +407,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ring_encrypt_rejects_invalid_domain_state() {
+        let cryptography = cryptography();
+        let memo = Memo::new("".into(), "content".into(), vec![], Uuid::new_v4());
+
+        assert!(matches!(
+            cryptography.encrypt_memo_inner(&memo).await,
+            Err(AppError::ValidationError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn planned_suite_blocks_public_runtime_encryption() {
+        let cryptography = cryptography();
+        let memo = Memo::new("title".into(), "content".into(), vec![], Uuid::new_v4());
+
+        assert!(matches!(
+            cryptography.encrypt_memo(&memo).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn ring_aead_round_trip_uses_fresh_dek_and_nonce() {
         let cryptography = cryptography();
         let memo = Memo::new(
