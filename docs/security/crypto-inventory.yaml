@@ -1,5 +1,5 @@
 version: 1
-last_reviewed: "2026-09-21"
+last_reviewed: "2026-09-23"
 
 policy:
   default_security_profile: HIGH
@@ -45,6 +45,12 @@ assets:
       legacy_authoritative_store: ScyllaDB
       selection: AUTHORITATIVE_BACKEND
       atomic_outbox_on_mongodb: true
+      crypto_foundation:
+        envelope_contract: implemented
+        payload_codec: implemented
+        aead_adapter: staged
+        key_wrapping_provider: not_configured
+        runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto
 
@@ -73,8 +79,11 @@ assets:
       key_size_bits: 256
       reuse: forbidden
     current:
-      state: not_implemented
-    migration_status: planned
+      state: provider_boundary_staged
+      plaintext_key_zeroizing: true
+      production_provider: not_implemented
+      runtime_eligible: false
+    migration_status: in_progress
     owner: memo-crypto
 
   - asset: vault_key_derivation

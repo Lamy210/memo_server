@@ -1,3 +1,5 @@
+use std::fmt;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -162,7 +164,7 @@ impl HighMemoAad {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HighEncryptedMemoEnvelope {
     pub memo_id: Uuid,
     pub owner_partition: Uuid,
@@ -174,6 +176,23 @@ pub struct HighEncryptedMemoEnvelope {
     pub crypto_suite_id: String,
     pub key_version: String,
     pub schema_version: u32,
+}
+
+impl fmt::Debug for HighEncryptedMemoEnvelope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HighEncryptedMemoEnvelope")
+            .field("memo_id", &self.memo_id)
+            .field("owner_partition", &self.owner_partition)
+            .field("ciphertext_len", &self.ciphertext.len())
+            .field("nonce_len", &self.nonce.len())
+            .field("wrapped_dek_len", &self.wrapped_dek.len())
+            .field("version", &self.version)
+            .field("crypto_suite_id", &self.crypto_suite_id)
+            .field("key_version", &self.key_version)
+            .field("schema_version", &self.schema_version)
+            .finish()
+    }
 }
 
 impl From<&HighEncryptedMemoEnvelope> for HighMemoAad {
@@ -251,6 +270,18 @@ mod tests {
             key_version: "kms-key-v1".into(),
             schema_version: MEMO_HIGH_SCHEMA_VERSION,
         }
+    }
+
+    #[test]
+    fn encrypted_envelope_debug_redacts_binary_material() {
+        let envelope = envelope();
+        let debug = format!("{envelope:?}");
+
+        assert!(debug.contains("ciphertext_len"));
+        assert!(debug.contains("wrapped_dek_len"));
+        assert!(!debug.contains("[170"));
+        assert!(!debug.contains("[187"));
+        assert!(!debug.contains("[204"));
     }
 
     #[test]
