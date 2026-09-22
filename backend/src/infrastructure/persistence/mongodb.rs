@@ -726,6 +726,29 @@ mod tests {
             vec![second.id, winner.id, second.id]
         );
 
+        let duplicate_delete_event =
+            ProjectionIntent::new(owner, winner.id, ProjectionTarget::Deleted);
+        store
+            .projection_intents
+            .insert_one(
+                ProjectionIntentDocument::from_intent(&duplicate_delete_event).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            store
+                .delete_transaction(owner, winner.id, &duplicate_delete_event)
+                .await,
+            Err(AppError::DatabaseError(_))
+        ));
+        assert!(store.find_by_id(owner, winner.id).await.unwrap().is_some());
+        store
+            .acknowledge_projection_intent(&duplicate_delete_event)
+            .await
+            .unwrap();
+        assert!(store.list_projection_intents().await.unwrap().is_empty());
+
         let delete_intent = store
             .delete_with_projection_intent(owner, winner.id)
             .await
