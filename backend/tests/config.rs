@@ -71,10 +71,7 @@ fn rejects_unknown_authoritative_backend() {
 fn rejects_empty_mongodb_database() {
     let error = AppConfig::from_vars([
         ("AUTH_MODE".to_string(), "development".to_string()),
-        (
-            "AUTHORITATIVE_BACKEND".to_string(),
-            "mongodb".to_string(),
-        ),
+        ("AUTHORITATIVE_BACKEND".to_string(), "mongodb".to_string()),
         ("MONGODB_DATABASE".to_string(), "   ".to_string()),
     ])
     .expect_err("empty MongoDB database must be rejected");
