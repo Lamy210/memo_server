@@ -51,6 +51,18 @@ struct PreparedStatements {
 
 impl ScyllaDB {
     pub async fn new(uri: &str) -> AppResult<Self> {
+        Self::connect(uri, true).await
+    }
+
+    /// Connect to an existing Scylla schema without creating or altering it.
+    ///
+    /// Operational migration tooling uses this constructor so source-side
+    /// validation and dry runs remain read-only.
+    pub async fn connect_existing(uri: &str) -> AppResult<Self> {
+        Self::connect(uri, false).await
+    }
+
+    async fn connect(uri: &str, initialize_schema: bool) -> AppResult<Self> {
         let session = SessionBuilder::new()
             .known_node(uri)
             .build()
@@ -60,7 +72,9 @@ impl ScyllaDB {
             })?;
         let session = Arc::new(session);
 
-        Self::initialize_schema(&session).await?;
+        if initialize_schema {
+            Self::initialize_schema(&session).await?;
+        }
         let prepared_statements = Self::prepare_statements(&session).await?;
 
         Ok(Self {
