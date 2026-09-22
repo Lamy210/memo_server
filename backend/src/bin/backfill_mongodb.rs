@@ -29,7 +29,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let apply = parse_apply_flag()?;
     let scylla_uri = required_env("SCYLLA_URI")?;
-    let source = ScyllaDB::new(&scylla_uri).await?;
+    let source = ScyllaDB::connect_existing(&scylla_uri).await?;
 
     if !apply {
         let count = source.for_each_memo(|_| async { Ok(()) }).await?;
