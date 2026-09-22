@@ -587,7 +587,7 @@ mod tests {
     #[ignore = "requires a local MongoDB replica set"]
     async fn mongodb_replica_set_preserves_atomic_outbox_and_tenant_scope() {
         let uri = std::env::var("MONGODB_TEST_URI")
-            .unwrap_or_else(|_| "mongodb://127.0.0.1:27017/?replicaSet=rs0".to_string());
+            .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
 
         let cleanup_client = Client::with_uri_str(&uri).await.unwrap();
         cleanup_client.database(TEST_DATABASE_NAME).drop().await.unwrap();
