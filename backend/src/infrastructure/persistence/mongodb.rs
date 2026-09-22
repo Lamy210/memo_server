@@ -309,9 +309,11 @@ impl MongoDbAuthoritativeStore {
         id: Uuid,
         event: &ProjectionIntent,
     ) -> AppResult<()> {
-        let mut session = self.client.start_session().await.map_err(|error| {
-            mongo_error("start MongoDB session", error)
-        })?;
+        let mut session = self
+            .client
+            .start_session()
+            .await
+            .map_err(|error| mongo_error("start MongoDB session", error))?;
         let context = DeleteTransactionContext {
             memos: self.memos.clone(),
             intents: self.projection_intents.clone(),
