@@ -94,9 +94,7 @@ impl ManticoreClient {
             .send()
             .await
             .map_err(|error| {
-                AppError::DatabaseError(format!(
-                    "Manticore {endpoint} request failed: {error}"
-                ))
+                AppError::DatabaseError(format!("Manticore {endpoint} request failed: {error}"))
             })?;
 
         if !response.status().is_success() {
@@ -192,9 +190,7 @@ impl ManticoreClient {
         let search_result = self.post_json("search", &body).await?;
         let total = search_result["hits"]["total"]
             .as_u64()
-            .ok_or_else(|| {
-                AppError::DatabaseError("Invalid Manticore search total".to_string())
-            })
+            .ok_or_else(|| AppError::DatabaseError("Invalid Manticore search total".to_string()))
             .and_then(|value| {
                 usize::try_from(value).map_err(|_| {
                     AppError::DatabaseError(
