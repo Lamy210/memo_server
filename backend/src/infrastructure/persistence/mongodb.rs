@@ -355,6 +355,18 @@ impl MongoDbAuthoritativeStore {
         Ok(MigrationImportResult::Inserted)
     }
 
+    /// Count authoritative memo rows after a migration pass.
+    ///
+    /// The backfill CLI compares this value with the number of Scylla source
+    /// rows it visited. A mismatch means the MongoDB destination contains
+    /// target-only rows and must not be used for cutover.
+    pub async fn count_memos_for_migration(&self) -> AppResult<u64> {
+        self.memos
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| mongo_error("count MongoDB migration target memos", error))
+    }
+
     async fn save_transaction(&self, memo: &Memo, event: &ProjectionIntent) -> AppResult<()> {
         let mut session = self
             .client
@@ -754,6 +766,7 @@ mod tests {
             MigrationImportResult::Inserted
         );
         let imported = store.find_by_id(owner, migrated.id).await.unwrap().unwrap();
+        assert_eq!(store.count_memos_for_migration().await.unwrap(), 1);
         assert_eq!(imported.id, migrated.id);
         assert_eq!(imported.version, migrated.version);
         assert_eq!(
