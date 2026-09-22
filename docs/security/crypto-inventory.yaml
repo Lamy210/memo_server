@@ -40,9 +40,12 @@ assets:
         - crypto_suite_id
       suite_id: MEMO-HIGH-1
     current:
-      state: legacy_plaintext_storage
-      authoritative_store: ScyllaDB
-    migration_status: planned
+      state: plaintext_authoritative_storage_migration
+      authoritative_store: MongoDB
+      legacy_authoritative_store: ScyllaDB
+      selection: AUTHORITATIVE_BACKEND
+      atomic_outbox_on_mongodb: true
+    migration_status: in_progress
     owner: memo-crypto
 
   - asset: memo_payload_vault
