@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, TryStreamExt};
-use mongodb::{
+use ::mongodb::{
     bson::doc,
     error::Error as MongoError,
     options::WriteConcern,
@@ -395,7 +395,7 @@ impl MemoAuthoritativeStore for MongoDbAuthoritativeStore {
             .memos
             .find(doc! {
                 "user_id": user_id.to_string(),
-                "_id": { "$in": &requested_ids },
+                "_id": { "$in": requested_ids.clone() },
             })
             .await
             .map_err(|error| mongo_error("find MongoDB memos by ids", error))?
@@ -513,8 +513,14 @@ mod tests {
         assert_eq!(restored.title, memo.title);
         assert_eq!(restored.content, memo.content);
         assert_eq!(restored.tags, memo.tags);
-        assert_eq!(restored.created_at, memo.created_at);
-        assert_eq!(restored.updated_at, memo.updated_at);
+        assert_eq!(
+            restored.created_at.timestamp_millis(),
+            memo.created_at.timestamp_millis()
+        );
+        assert_eq!(
+            restored.updated_at.timestamp_millis(),
+            memo.updated_at.timestamp_millis()
+        );
         assert_eq!(restored.version, memo.version);
     }
 
