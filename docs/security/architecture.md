@@ -31,6 +31,8 @@ The target storage stack is:
 
 Storage migration and cryptographic migration are separate concerns. MongoDB and Manticore migration adapters still handle plaintext domain data during this phase; that does not satisfy the HIGH encrypted-storage target. Existing ScyllaDB deployments must remain explicitly selected until verified backfill/cutover is complete.
 
+The MongoDB encryption migration stages encrypted envelopes in a separate `memos_encrypted_v1` collection. That collection is deliberately **non-authoritative** until application-level crypto orchestration, a production key-wrapping provider, ciphertext-only cache semantics, and protected search projection are ready. Request paths continue to use the existing authoritative collection during this staging phase. The encrypted staging collection must not contain semantic plaintext fields and must not emit the existing plaintext projection intents.
+
 ## 3. Security profiles
 
 ### HIGH
