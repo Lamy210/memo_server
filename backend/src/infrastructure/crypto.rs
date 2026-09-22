@@ -1,10 +1,22 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use ring::{
+    aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN},
+    rand::{SecureRandom, SystemRandom},
+};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::{
-    application::crypto::HighEncryptedMemoEnvelope,
+    application::crypto::{
+        require_read_suite, require_write_suite, HighEncryptedMemoEnvelope, HighMemoAad,
+        HighMemoCryptography, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID,
+    },
     domain::memo::entity::Memo,
     error::{AppError, AppResult},
+    infrastructure::crypto_keys::{DataKeyProvider, GeneratedDataKey},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,12 +103,138 @@ pub fn deserialize_high_memo_payload(
     Ok(memo)
 }
 
+pub(super) struct RingHighMemoCryptography {
+    data_keys: Arc<dyn DataKeyProvider>,
+    rng: SystemRandom,
+}
+
+impl RingHighMemoCryptography {
+    pub(super) fn new(data_keys: Arc<dyn DataKeyProvider>) -> Self {
+        Self {
+            data_keys,
+            rng: SystemRandom::new(),
+        }
+    }
+
+    async fn encrypt_memo_inner(&self, memo: &Memo) -> AppResult<HighEncryptedMemoEnvelope> {
+        if !memo.validate() {
+            return Err(AppError::ValidationError(
+                "Memo violates domain invariants before HIGH encryption".into(),
+            ));
+        }
+
+        let aad = HighMemoAad {
+            owner_partition: memo.user_id,
+            memo_id: memo.id,
+            version: memo.version,
+            schema_version: MEMO_HIGH_SCHEMA_VERSION,
+            crypto_suite_id: MEMO_HIGH_SUITE_ID.into(),
+        };
+        let aad_bytes = aad.encode()?;
+
+        let generated = self.data_keys.generate_data_key(&aad).await?;
+        generated.validate()?;
+        let GeneratedDataKey {
+            plaintext,
+            wrapped_dek,
+            key_version,
+        } = generated;
+
+        let unbound = UnboundKey::new(&AES_256_GCM, plaintext.expose()).map_err(|_| {
+            AppError::InternalServerError("Failed to initialize HIGH AES-256-GCM key".into())
+        })?;
+        let key = LessSafeKey::new(unbound);
+
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        self.rng.fill(&mut nonce_bytes).map_err(|_| {
+            AppError::InternalServerError("Failed to generate HIGH AES-GCM nonce".into())
+        })?;
+
+        let mut buffer = Zeroizing::new(serialize_high_memo_payload(memo)?);
+        key.seal_in_place_append_tag(
+            Nonce::assume_unique_for_key(nonce_bytes),
+            Aad::from(aad_bytes.as_slice()),
+            &mut *buffer,
+        )
+        .map_err(|_| AppError::InternalServerError("Failed to encrypt HIGH memo payload".into()))?;
+
+        let envelope = HighEncryptedMemoEnvelope {
+            memo_id: memo.id,
+            owner_partition: memo.user_id,
+            ciphertext: buffer.to_vec(),
+            nonce: nonce_bytes.to_vec(),
+            wrapped_dek,
+            version: memo.version,
+            crypto_suite_id: MEMO_HIGH_SUITE_ID.into(),
+            key_version,
+            schema_version: MEMO_HIGH_SCHEMA_VERSION,
+        };
+        envelope.validate_structure()?;
+        Ok(envelope)
+    }
+
+    async fn decrypt_memo_inner(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+    ) -> AppResult<Memo> {
+        envelope.validate_structure()?;
+
+        let aad = HighMemoAad::from(envelope);
+        let aad_bytes = aad.encode()?;
+        let plaintext_key = self
+            .data_keys
+            .unwrap_data_key(&envelope.wrapped_dek, &envelope.key_version, &aad)
+            .await?;
+
+        let unbound = UnboundKey::new(&AES_256_GCM, plaintext_key.expose()).map_err(|_| {
+            AppError::InternalServerError("Failed to initialize HIGH AES-256-GCM key".into())
+        })?;
+        let key = LessSafeKey::new(unbound);
+
+        let nonce_bytes: [u8; NONCE_LEN] = envelope
+            .nonce
+            .as_slice()
+            .try_into()
+            .map_err(|_| AppError::DatabaseError("Invalid HIGH AES-GCM nonce length".into()))?;
+
+        let mut buffer = Zeroizing::new(envelope.ciphertext.clone());
+        let plaintext = key
+            .open_in_place(
+                Nonce::assume_unique_for_key(nonce_bytes),
+                Aad::from(aad_bytes.as_slice()),
+                &mut *buffer,
+            )
+            .map_err(|_| {
+                AppError::DatabaseError(
+                    "HIGH memo authentication failed; ciphertext was not released".into(),
+                )
+            })?;
+
+        deserialize_high_memo_payload(envelope, plaintext)
+    }
+}
+
+#[async_trait]
+impl HighMemoCryptography for RingHighMemoCryptography {
+    async fn encrypt_memo(&self, memo: &Memo) -> AppResult<HighEncryptedMemoEnvelope> {
+        require_write_suite(MEMO_HIGH_SUITE_ID)?;
+        self.encrypt_memo_inner(memo).await
+    }
+
+    async fn decrypt_memo(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo> {
+        require_read_suite(&envelope.crypto_suite_id)?;
+        self.decrypt_memo_inner(envelope).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
     use uuid::Uuid;
 
     use super::*;
     use crate::application::crypto::{MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID};
+    use crate::infrastructure::crypto_keys::SecretDataKey;
 
     fn envelope_for(memo: &Memo) -> HighEncryptedMemoEnvelope {
         HighEncryptedMemoEnvelope {
@@ -217,4 +355,6 @@ mod tests {
             Err(AppError::DatabaseError(_))
         ));
     }
+
+
 }
