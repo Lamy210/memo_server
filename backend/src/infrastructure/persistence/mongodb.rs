@@ -93,6 +93,7 @@ impl MemoDocument {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EncryptedMemoDocument {
     #[serde(rename = "_id")]
     id: String,
@@ -867,6 +868,26 @@ mod tests {
 
         let restored = document.try_into_envelope().unwrap();
         assert_eq!(restored, envelope);
+    }
+
+    #[test]
+    fn encrypted_memo_document_rejects_unapproved_plaintext_fields() {
+        let envelope = HighEncryptedMemoEnvelope {
+            memo_id: Uuid::new_v4(),
+            owner_partition: Uuid::new_v4(),
+            ciphertext: vec![0xAA; 32],
+            nonce: vec![0xBB; 12],
+            wrapped_dek: vec![0xCC; 48],
+            version: 1,
+            crypto_suite_id: crate::application::crypto::MEMO_HIGH_SUITE_ID.into(),
+            key_version: "kms-key-v1".into(),
+            schema_version: crate::application::crypto::MEMO_HIGH_SCHEMA_VERSION,
+        };
+        let document = EncryptedMemoDocument::try_from(&envelope).unwrap();
+        let mut bson = ::mongodb::bson::to_document(&document).unwrap();
+        bson.insert("title", "must never be plaintext");
+
+        assert!(::mongodb::bson::from_document::<EncryptedMemoDocument>(bson).is_err());
     }
 
     #[test]
