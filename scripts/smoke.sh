@@ -221,16 +221,30 @@ search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=update
 jq -e --arg id "$memo_id" '.items | any(.id == $id)' <<<"$search" >/dev/null
 
 for index in $(seq 1 105); do
-  pagination_id="$(printf '00000000-0000-4000-8000-%012d' "$index")"
-  curl -fsS \
+  pagination_created="$(memo_curl -fsS \
     -H 'Content-Type: application/json' \
-    -d "{\"table\":\"memos\",\"id\":\"$pagination_id\",\"doc\":{\"title\":\"pagination-probe $index\",\"content\":\"pagination-probe\",\"tag_tokens\":\"706167696e6174696f6e\",\"user_id\":\"12345678-1234-1234-1234-123456789012\",\"updated_at\":1789689600000,\"version\":1}}" \
-    http://localhost:9308/replace \
-    | jq -e '.result == "created" or .result == "updated"' >/dev/null
+    -d "{\"title\":\"paginationprobe $index\",\"content\":\"paginationprobe\",\"tags\":[\"pagination\"]}" \
+    http://localhost:8083/api/v1/memos)"
+  jq -e '.id != null and .version == 1' <<<"$pagination_created" >/dev/null
 done
 
-pagination_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=pagination-probe&page=6&limit=20')"
+pagination_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=paginationprobe&page=6&limit=20')"
 jq -e '.total == 105 and .page == 6 and .total_pages == 6 and (.items | length) == 5' <<<"$pagination_search" >/dev/null
+
+long_tag="$(python3 -c 'print("🧊" * 64)')"
+long_tag_payload="$(jq -nc --arg tag "$long_tag" '{title:"Long tag memo",content:"long tag search probe",tags:[$tag]}')"
+long_tag_created="$(memo_curl -fsS \
+  -H 'Content-Type: application/json' \
+  -d "$long_tag_payload" \
+  http://localhost:8083/api/v1/memos)"
+long_tag_id="$(jq -er '.id' <<<"$long_tag_created")"
+long_tag_search="$(memo_curl -fsSG \
+  --data-urlencode 'query=' \
+  --data-urlencode "tag=$long_tag" \
+  --data-urlencode 'page=1' \
+  --data-urlencode 'limit=20' \
+  http://localhost:8083/api/v1/memos/search)"
+jq -e --arg id "$long_tag_id" '.items | any(.id == $id)' <<<"$long_tag_search" >/dev/null
 
 expected_version="$(jq -er '.version' <<<"$updated")"
 for attempt in $(seq 1 8); do
