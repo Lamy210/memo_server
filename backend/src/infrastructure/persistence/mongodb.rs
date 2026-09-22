@@ -92,7 +92,7 @@ impl MemoDocument {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EncryptedMemoDocument {
     #[serde(rename = "_id")]
