@@ -44,33 +44,41 @@ impl ManticoreClient {
     }
 
     async fn initialize_table(&self) -> AppResult<()> {
+        self.execute_raw_sql(CREATE_TABLE_SQL, "table initialization")
+            .await
+    }
+
+    async fn execute_raw_sql(&self, sql: &str, operation: &str) -> AppResult<()> {
         let response = self
             .client
             .post(format!("{}/sql?mode=raw", self.base_url))
             .header(reqwest::header::CONTENT_TYPE, "text/plain")
-            .body(CREATE_TABLE_SQL)
+            .body(sql.to_string())
             .send()
             .await
             .map_err(|error| {
-                AppError::DatabaseError(format!("Failed to initialize Manticore table: {error}"))
+                AppError::DatabaseError(format!(
+                    "Manticore {operation} request failed: {error}"
+                ))
             })?;
 
-        if !response.status().is_success() {
+        let status = response.status();
+        let result = response.json::<Value>().await.map_err(|error| {
+            AppError::DatabaseError(format!(
+                "Failed to parse Manticore {operation} response: {error}"
+            ))
+        })?;
+
+        if !status.is_success() {
             return Err(AppError::DatabaseError(format!(
-                "Manticore rejected table initialization with status {}",
-                response.status()
+                "Manticore {operation} failed with status {status}: {result}"
             )));
         }
 
-        let result = response.json::<Value>().await.map_err(|error| {
-            AppError::DatabaseError(format!(
-                "Failed to parse Manticore table initialization response: {error}"
-            ))
-        })?;
         let result_sets = result.as_array().ok_or_else(|| {
-            AppError::DatabaseError(
-                "Invalid Manticore table initialization response format".to_string(),
-            )
+            AppError::DatabaseError(format!(
+                "Invalid Manticore {operation} response format"
+            ))
         })?;
 
         if let Some(error) = result_sets
@@ -79,7 +87,7 @@ impl ManticoreClient {
             .find(|error| !error.is_empty())
         {
             return Err(AppError::DatabaseError(format!(
-                "Manticore table initialization failed: {error}"
+                "Manticore {operation} failed: {error}"
             )));
         }
 
@@ -237,17 +245,8 @@ impl ManticoreClient {
     }
 
     pub async fn health_check(&self) -> AppResult<bool> {
-        let response = self
-            .client
-            .get(format!("{}/sql", self.base_url))
-            .query(&[("query", "SELECT 1")])
-            .send()
-            .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!("Manticore health check failed: {error}"))
-            })?;
-
-        Ok(response.status().is_success())
+        self.execute_raw_sql("SELECT 1", "health check").await?;
+        Ok(true)
     }
 }
 
