@@ -138,6 +138,12 @@ mod tests {
 
         assert!(result.ready);
         assert_eq!(result.status, ReadinessStatus::Ready);
+        assert_eq!(result.checks.authoritative, ComponentStatus::Ok);
+        assert_eq!(result.checks.cache, ComponentStatus::Ok);
+        assert_eq!(result.checks.search, ComponentStatus::Ok);
+        assert_eq!(result.checks.scylla, result.checks.authoritative);
+        assert_eq!(result.checks.redis, result.checks.cache);
+        assert_eq!(result.checks.elasticsearch, result.checks.search);
     }
 
     #[test]
