@@ -103,11 +103,14 @@ pub fn deserialize_high_memo_payload(
     Ok(memo)
 }
 
+// Staged until a production DataKeyProvider is configured and MEMO-HIGH-1 is deployed.
+#[allow(dead_code)]
 pub(super) struct RingHighMemoCryptography {
     data_keys: Arc<dyn DataKeyProvider>,
     rng: SystemRandom,
 }
 
+#[allow(dead_code)]
 impl RingHighMemoCryptography {
     pub(super) fn new(data_keys: Arc<dyn DataKeyProvider>) -> Self {
         Self {
@@ -199,7 +202,7 @@ impl RingHighMemoCryptography {
             .open_in_place(
                 Nonce::assume_unique_for_key(nonce_bytes),
                 Aad::from(aad_bytes.as_slice()),
-                &mut *buffer,
+                &mut buffer,
             )
             .map_err(|_| {
                 AppError::DatabaseError(
