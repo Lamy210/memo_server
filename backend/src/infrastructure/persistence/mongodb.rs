@@ -20,6 +20,7 @@ use crate::{
 
 use super::ports::{MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget};
 
+#[cfg(test)]
 const TEST_DATABASE_NAME: &str = "memo_app_test";
 const MEMOS_COLLECTION: &str = "memos";
 const PROJECTION_INTENTS_COLLECTION: &str = "projection_intents";
