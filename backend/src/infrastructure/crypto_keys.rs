@@ -1,3 +1,7 @@
+// This module is a staged infrastructure boundary. It becomes runtime-reachable
+// only after a production key-wrapping provider is configured.
+#![allow(dead_code)]
+
 use std::{collections::BTreeMap, fmt};
 
 use async_trait::async_trait;
