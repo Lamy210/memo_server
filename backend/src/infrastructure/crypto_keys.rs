@@ -82,7 +82,9 @@ pub(super) trait DataKeyProvider: Send + Sync {
 /// The same logical fields are authenticated by memo AEAD AAD. A KMS adapter
 /// can additionally bind this map as its encryption context without exposing
 /// memo plaintext.
-pub(super) fn data_key_encryption_context(aad: &HighMemoAad) -> AppResult<BTreeMap<String, String>> {
+pub(super) fn data_key_encryption_context(
+    aad: &HighMemoAad,
+) -> AppResult<BTreeMap<String, String>> {
     aad.validate()?;
 
     Ok(BTreeMap::from([
@@ -100,9 +102,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::application::crypto::{
-        MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID,
-    };
+    use crate::application::crypto::{MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID};
 
     fn aad() -> HighMemoAad {
         HighMemoAad {
@@ -164,10 +164,7 @@ mod tests {
             context.get("schema_version").unwrap(),
             &MEMO_HIGH_SCHEMA_VERSION.to_string()
         );
-        assert_eq!(
-            context.get("crypto_suite_id").unwrap(),
-            MEMO_HIGH_SUITE_ID
-        );
+        assert_eq!(context.get("crypto_suite_id").unwrap(), MEMO_HIGH_SUITE_ID);
         assert!(!context.contains_key("title"));
         assert!(!context.contains_key("content"));
         assert!(!context.contains_key("tags"));
