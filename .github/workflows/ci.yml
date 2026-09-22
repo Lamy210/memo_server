@@ -95,7 +95,7 @@ jobs:
 
       - name: MongoDB transactional integration
         env:
-          MONGODB_TEST_URI: mongodb://localhost:27017/?replicaSet=rs0&serverSelectionTimeoutMS=10000
+          MONGODB_TEST_URI: mongodb://localhost:27017/?replicaSet=rs0&directConnection=true&serverSelectionTimeoutMS=10000
         run: |
           cargo test --locked mongodb_replica_set_preserves_atomic_outbox_and_tenant_scope \
             -- --ignored --nocapture
