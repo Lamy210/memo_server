@@ -83,6 +83,36 @@ fn rejects_empty_mongodb_database() {
 }
 
 #[test]
+fn rejects_invalid_mongodb_database_name() {
+    for invalid in ["memo.app", "memo app", "memo/app", "memo\\app", "memo$app"] {
+        let error = AppConfig::from_vars([
+            ("AUTH_MODE".to_string(), "development".to_string()),
+            ("AUTHORITATIVE_BACKEND".to_string(), "mongodb".to_string()),
+            ("MONGODB_DATABASE".to_string(), invalid.to_string()),
+        ])
+        .expect_err("invalid MongoDB database name must be rejected");
+
+        assert_eq!(
+            error,
+            ConfigError::InvalidMongoDatabase(invalid.to_string())
+        );
+    }
+}
+
+#[test]
+fn rejects_mongodb_database_name_at_64_bytes() {
+    let invalid = "a".repeat(64);
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        ("AUTHORITATIVE_BACKEND".to_string(), "mongodb".to_string()),
+        ("MONGODB_DATABASE".to_string(), invalid.clone()),
+    ])
+    .expect_err("MongoDB database names must be shorter than 64 bytes");
+
+    assert_eq!(error, ConfigError::InvalidMongoDatabase(invalid));
+}
+
+#[test]
 fn supports_explicit_manticore_search_backend() {
     let config = AppConfig::from_vars([
         ("AUTH_MODE".to_string(), "development".to_string()),
