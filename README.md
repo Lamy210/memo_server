@@ -30,7 +30,7 @@ docker compose up --build
 - Backend liveness: http://localhost:8083/api/v1/health/live
 - Backend readiness: http://localhost:8083/api/v1/health/ready
 - Manticore HTTP: http://localhost:9308
-- MongoDB: localhost:27017 (single-node replica set for local/CI)
+- MongoDB: localhost:27017 (single-node replica set for local/CI only; production should use a redundant replica set or sharded cluster)
 - Valkey: localhost:6379
 
 停止:
@@ -105,9 +105,9 @@ MongoDBまたはScyllaDBのうち選択されたbackendがauthoritative storeで
 
 MongoDB backendでは、メモの作成・更新・削除とValkey/Manticore向けdurable projection intentを同一MongoDB transactionでcommitします。保存intentは対象memo version、削除intentはdelete targetを持ちます。これによりprimary mutationだけがcommitされoutboxが欠落する状態を防ぎます。Scylla migration fallbackでは従来のintent-first方式を維持し、ambiguous failure時はintentを残してreconcilerがauthoritative stateを確認します。
 
-通常はprimary mutation直後に同期を試みます。ValkeyまたはManticoreが利用できない場合でもprimary CRUDは成功し、intentはScyllaDBに残ります。background reconcilerが約2秒間隔で再試行し、backend再起動後も未処理intentを再開します。
+通常はprimary mutation直後に同期を試みます。ValkeyまたはManticoreが利用できない場合でもprimary CRUDは成功し、intentは選択中のauthoritative storeに残ります。background reconcilerが約2秒間隔で再試行し、backend再起動後も未処理intentを再開します。
 
-reconcilerは現在の選択されたauthoritative storeの状態をsource of truthとして同期します。保存intentはauthoritative storeがtarget version以上へ到達するまで、削除intentは行が消えるまでackしません。各intentは一意eventなのでworker同士が別mutationのintentを削除しません。secondaryへ書いた直後にScyllaDBを再確認し、同期中にsource stateが変わっていればcorrective intentを先に追加してから古いeventをackするため、stale workerによる書き戻しも最終的に再収束します。
+reconcilerは現在の選択されたauthoritative storeの状態をsource of truthとして同期します。保存intentはauthoritative storeがtarget version以上へ到達するまで、削除intentは行が消えるまでackしません。各intentは一意eventなのでworker同士が別mutationのintentを削除しません。secondaryへ書いた直後にauthoritative storeを再確認し、同期中にsource stateが変わっていればcorrective intentを先に追加してから古いeventをackするため、stale workerによる書き戻しも最終的に再収束します。
 
 この仕組みにより、secondary store停止中のcreate/update/deleteは、secondary store復帰後にcache/search projectionへ収束します。
 
