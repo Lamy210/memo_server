@@ -1,7 +1,8 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
 use scylla::{
     client::{session::Session, session_builder::SessionBuilder},
     statement::prepared::PreparedStatement,
@@ -66,6 +67,41 @@ impl ScyllaDB {
             session,
             prepared_statements,
         })
+    }
+
+    /// Visit every memo in Scylla using driver-managed paging.
+    ///
+    /// This exists for bounded-memory operational migrations. Application
+    /// request paths should continue to use the user-scoped repository API.
+    pub async fn for_each_memo<F, Fut>(&self, mut visitor: F) -> AppResult<usize>
+    where
+        F: FnMut(Memo) -> Fut,
+        Fut: Future<Output = AppResult<()>>,
+    {
+        let pager = self
+            .session
+            .query_iter(
+                "SELECT id, title, content, tags, user_id, created_at, updated_at, version \
+                 FROM memo_app.memos",
+                &[],
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!("Failed to page ScyllaDB memos: {error}"))
+            })?;
+        let mut rows = pager.rows_stream::<MemoRow>().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to type-check paged ScyllaDB memos: {error}"))
+        })?;
+
+        let mut visited = 0usize;
+        while let Some(row) = rows.try_next().await.map_err(|error| {
+            AppError::DatabaseError(format!("Failed to read paged ScyllaDB memo: {error}"))
+        })? {
+            visitor(Self::memo_from_row(row)).await?;
+            visited += 1;
+        }
+
+        Ok(visited)
     }
 
     async fn initialize_schema(session: &Session) -> AppResult<()> {
