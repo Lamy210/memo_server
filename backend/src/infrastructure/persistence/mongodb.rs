@@ -18,7 +18,7 @@ use crate::{
 
 use super::ports::{MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget};
 
-const DATABASE_NAME: &str = "memo_app";
+const TEST_DATABASE_NAME: &str = "memo_app_test";
 const MEMOS_COLLECTION: &str = "memos";
 const PROJECTION_INTENTS_COLLECTION: &str = "projection_intents";
 const TARGET_VERSION: &str = "version";
@@ -179,11 +179,11 @@ pub struct MongoDbAuthoritativeStore {
 }
 
 impl MongoDbAuthoritativeStore {
-    pub async fn new(uri: &str) -> AppResult<Self> {
+    pub async fn new(uri: &str, database_name: &str) -> AppResult<Self> {
         let client = Client::with_uri_str(uri).await.map_err(|error| {
             AppError::DatabaseError(format!("Failed to create MongoDB client: {error}"))
         })?;
-        let database = client.database(DATABASE_NAME);
+        let database = client.database(database_name);
         let memos = database.collection::<MemoDocument>(MEMOS_COLLECTION);
         let projection_intents =
             database.collection::<ProjectionIntentDocument>(PROJECTION_INTENTS_COLLECTION);
@@ -590,9 +590,11 @@ mod tests {
             .unwrap_or_else(|_| "mongodb://127.0.0.1:27017/?replicaSet=rs0".to_string());
 
         let cleanup_client = Client::with_uri_str(&uri).await.unwrap();
-        cleanup_client.database(DATABASE_NAME).drop().await.unwrap();
+        cleanup_client.database(TEST_DATABASE_NAME).drop().await.unwrap();
 
-        let store = MongoDbAuthoritativeStore::new(&uri).await.unwrap();
+        let store = MongoDbAuthoritativeStore::new(&uri, TEST_DATABASE_NAME)
+            .await
+            .unwrap();
         let owner = Uuid::new_v4();
         let other_owner = Uuid::new_v4();
 
@@ -675,7 +677,7 @@ mod tests {
         ));
         assert!(store.list_projection_intents().await.unwrap().is_empty());
 
-        cleanup_client.database(DATABASE_NAME).drop().await.unwrap();
+        cleanup_client.database(TEST_DATABASE_NAME).drop().await.unwrap();
     }
 
     #[test]
