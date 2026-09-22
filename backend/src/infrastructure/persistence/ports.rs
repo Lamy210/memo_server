@@ -3,10 +3,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::{
-    domain::memo::{entity::Memo, repository::MemoSearchPage},
-    error::AppResult,
-};
+use crate::{domain::memo::entity::Memo, error::AppResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectionTarget {
@@ -37,6 +34,12 @@ impl ProjectionIntent {
 pub trait MemoAuthoritativeStore: Send + Sync {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>>;
     async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>>;
+
+    /// Load authoritative memos in the same order as the requested IDs.
+    ///
+    /// Missing IDs are omitted. Implementations may optimize this as a bulk
+    /// read, but must preserve the input ordering for the memos they return.
+    async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>>;
 
     /// Persist a memo mutation together with a durable projection intent.
     ///
@@ -80,17 +83,23 @@ pub trait MemoCache: Send + Sync {
     async fn exists(&self, key: &str) -> AppResult<bool>;
 }
 
+#[derive(Debug, Clone)]
+pub struct MemoSearchHitPage {
+    pub memo_ids: Vec<Uuid>,
+    pub total: usize,
+}
+
 #[async_trait]
 pub trait MemoSearchProjection: Send + Sync {
     async fn index_memo(&self, memo: &Memo) -> AppResult<()>;
-    async fn search_memos(
+    async fn search_memo_ids(
         &self,
         query: &str,
         tag: Option<String>,
         user_id: Uuid,
         page: usize,
         limit: usize,
-    ) -> AppResult<MemoSearchPage>;
+    ) -> AppResult<MemoSearchHitPage>;
     async fn delete_memo(&self, id: Uuid) -> AppResult<()>;
 }
 

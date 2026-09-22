@@ -101,9 +101,19 @@ impl MemoRepository for MemoRepositoryImpl {
         page: usize,
         limit: usize,
     ) -> AppResult<crate::domain::memo::repository::MemoSearchPage> {
-        self.search_projection
-            .search_memos(query, tag, user_id, page, limit)
-            .await
+        let hits = self
+            .search_projection
+            .search_memo_ids(query, tag, user_id, page, limit)
+            .await?;
+        let items = self
+            .authoritative_store
+            .find_many_by_ids(user_id, &hits.memo_ids)
+            .await?;
+
+        Ok(crate::domain::memo::repository::MemoSearchPage {
+            items,
+            total: hits.total,
+        })
     }
 
     async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {

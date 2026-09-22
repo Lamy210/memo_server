@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+diagnose_failure() {
+  local status="$1"
+  local line="$2"
+
+  set +e
+  echo "Compose smoke test failed: line=$line exit_status=$status" >&2
+  docker compose ps >&2
+  docker compose logs --no-color --tail=200 scylla backend manticore valkey frontend >&2
+  exit "$status"
+}
 
 cleanup() {
   docker compose down -v --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+trap 'status=$?; diagnose_failure "$status" "$LINENO"' ERR
 
 DEVELOPMENT_USER_ID="12345678-1234-1234-1234-123456789012"
 OTHER_DEVELOPMENT_USER_ID="87654321-4321-4321-4321-210987654321"
@@ -34,7 +46,7 @@ wait_for_url() {
 if ! docker compose up -d --build; then
   echo "Docker Compose startup failed" >&2
   docker compose ps >&2 || true
-  docker compose logs --no-color --tail=300 scylla backend elasticsearch valkey frontend >&2 || true
+  docker compose logs --no-color --tail=300 scylla backend manticore valkey frontend >&2 || true
   exit 1
 fi
 
@@ -42,7 +54,10 @@ wait_for_url "http://localhost:8083/api/v1/health" 120 5
 wait_for_url "http://localhost:3001/memos" 60 3
 wait_for_url "http://localhost:3001/api/v1/health" 30 2
 
-docker compose exec -T valkey valkey-cli INFO server | tr -d '\r' | grep -Eq '^valkey_version:9\.1\.2$'
+valkey_info="$(docker compose exec -T valkey valkey-cli INFO server | tr -d '\r')"
+grep -Eq '^valkey_version:9\.1\.2$' <<<"$valkey_info"
+grep -Eq '^server_name:valkey$' <<<"$valkey_info"
+echo "Smoke milestone: dependencies responding"
 
 curl -fsS "http://localhost:8083/api/v1/health/live" \
   | jq -e '.status == "ok"' >/dev/null
@@ -55,6 +70,7 @@ jq -e '
   and .checks.redis == "ok"
   and .checks.elasticsearch == "ok"
 ' <<<"$ready" >/dev/null
+echo "Smoke milestone: readiness ready"
 
 unauthenticated_status="$(curl -sS -o /tmp/memo-unauthenticated.json -w '%{http_code}' \
   http://localhost:8083/api/v1/memos)"
@@ -219,23 +235,34 @@ jq -e --arg id "$memo_id" '.id == $id and .title == "Smoke memo updated"' <<<"$u
 
 search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=updated&tag=smoke&page=1&limit=20')"
 jq -e --arg id "$memo_id" '.items | any(.id == $id)' <<<"$search" >/dev/null
+echo "Smoke milestone: Manticore CRUD/search path"
 
-bulk_file="$(mktemp)"
 for index in $(seq 1 105); do
-  pagination_id="$(printf '00000000-0000-4000-8000-%012d' "$index")"
-  printf '{"index":{"_index":"memos","_id":"%s"}}\n' "$pagination_id" >>"$bulk_file"
-  printf '{"id":"%s","title":"pagination-probe %d","content":"pagination-probe","tags":["pagination"],"user_id":"12345678-1234-1234-1234-123456789012","created_at":"2026-09-18T00:00:00Z","updated_at":"2026-09-18T00:00:00Z","version":1}\n' "$pagination_id" "$index" >>"$bulk_file"
+  pagination_created="$(memo_curl -fsS \
+    -H 'Content-Type: application/json' \
+    -d "{\"title\":\"paginationprobe $index\",\"content\":\"paginationprobe\",\"tags\":[\"pagination\"]}" \
+    http://localhost:8083/api/v1/memos)"
+  jq -e '.id != null and .version == 1' <<<"$pagination_created" >/dev/null
 done
 
-curl -fsS \
-  -H 'Content-Type: application/x-ndjson' \
-  --data-binary @"$bulk_file" \
-  'http://localhost:9200/_bulk?refresh=true' \
-  | jq -e '.errors == false' >/dev/null
-rm -f "$bulk_file"
-
-pagination_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=pagination-probe&page=6&limit=20')"
+pagination_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=paginationprobe&page=6&limit=20')"
 jq -e '.total == 105 and .page == 6 and .total_pages == 6 and (.items | length) == 5' <<<"$pagination_search" >/dev/null
+
+long_tag="$(python3 -c 'print("🧊" * 64)')"
+long_tag_payload="$(jq -nc --arg tag "$long_tag" '{title:"Long tag memo",content:"long tag search probe",tags:[$tag]}')"
+long_tag_created="$(memo_curl -fsS \
+  -H 'Content-Type: application/json' \
+  -d "$long_tag_payload" \
+  http://localhost:8083/api/v1/memos)"
+long_tag_id="$(jq -er '.id' <<<"$long_tag_created")"
+long_tag_search="$(memo_curl -fsSG \
+  --data-urlencode 'query=' \
+  --data-urlencode "tag=$long_tag" \
+  --data-urlencode 'page=1' \
+  --data-urlencode 'limit=20' \
+  http://localhost:8083/api/v1/memos/search)"
+jq -e --arg id "$long_tag_id" '.items | any(.id == $id)' <<<"$long_tag_search" >/dev/null
+echo "Smoke milestone: pagination and long-tag search"
 
 expected_version="$(jq -er '.version' <<<"$updated")"
 for attempt in $(seq 1 8); do
@@ -286,7 +313,7 @@ resilience_created="$(memo_curl -fsS \
   http://localhost:8083/api/v1/memos)"
 resilience_id="$(jq -er '.id' <<<"$resilience_created")"
 
-docker compose stop valkey elasticsearch >/dev/null
+docker compose stop valkey manticore >/dev/null
 
 degraded_ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
 jq -e '
@@ -321,7 +348,7 @@ jq -e '
   and .checks.elasticsearch == "down"
 ' <<<"$restart_degraded" >/dev/null
 
-docker compose start valkey elasticsearch >/dev/null
+docker compose start valkey manticore >/dev/null
 
 recovery_ready=0
 for _ in $(seq 1 60); do
@@ -351,7 +378,7 @@ for _ in $(seq 1 60); do
 done
 if [[ "$projection_recovered" -ne 1 ]]; then
   echo "Projection reconciliation did not recover create/delete changes after secondary stores returned" >&2
-  docker compose logs --no-color --tail=200 backend elasticsearch valkey >&2 || true
+  docker compose logs --no-color --tail=200 backend manticore valkey >&2 || true
   exit 1
 fi
 

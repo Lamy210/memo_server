@@ -1,4 +1,4 @@
-use memo_app_backend::config::{AppConfig, AuthConfig, ConfigError};
+use memo_app_backend::config::{AppConfig, AuthConfig, ConfigError, SearchBackend};
 
 fn development_vars() -> Vec<(String, String)> {
     vec![("AUTH_MODE".to_string(), "development".to_string())]
@@ -11,9 +11,43 @@ fn uses_service_defaults_in_explicit_development_mode() {
 
     assert_eq!(config.scylla_uri, "127.0.0.1:9042");
     assert_eq!(config.redis_uri, "redis://127.0.0.1:6379");
-    assert_eq!(config.elasticsearch_uri, "http://127.0.0.1:9200");
+    assert_eq!(config.search_backend, SearchBackend::Elasticsearch);
+    assert_eq!(config.search_uri, "http://127.0.0.1:9200");
     assert_eq!(config.port, 8080);
     assert_eq!(config.auth, AuthConfig::Development);
+}
+
+#[test]
+fn supports_explicit_manticore_search_backend() {
+    let config = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        ("SEARCH_BACKEND".to_string(), "manticore".to_string()),
+        (
+            "MANTICORE_URL".to_string(),
+            "http://manticore.example.test:9308".to_string(),
+        ),
+    ])
+    .expect("Manticore configuration should be valid");
+
+    assert_eq!(config.search_backend, SearchBackend::Manticore);
+    assert_eq!(
+        config.search_uri,
+        "http://manticore.example.test:9308".to_string()
+    );
+}
+
+#[test]
+fn rejects_unknown_search_backend() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        ("SEARCH_BACKEND".to_string(), "unknown".to_string()),
+    ])
+    .expect_err("unknown search backend must be rejected");
+
+    assert_eq!(
+        error,
+        ConfigError::InvalidSearchBackend("unknown".to_string())
+    );
 }
 
 #[test]
