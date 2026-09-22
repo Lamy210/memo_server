@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ::mongodb::{
-    bson::{doc, Document},
+    bson::{doc, spec::BinarySubtype, Binary, Document},
     error::Error as MongoError,
     options::WriteConcern,
     Client, Collection, Database, IndexModel,
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    application::health::HealthProbe,
+    application::{crypto::HighEncryptedMemoEnvelope, health::HealthProbe},
     domain::memo::entity::Memo,
     error::{AppError, AppResult},
 };
@@ -23,6 +23,7 @@ use super::ports::{MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget};
 #[cfg(test)]
 const TEST_DATABASE_NAME: &str = "memo_app_test";
 const MEMOS_COLLECTION: &str = "memos";
+const ENCRYPTED_MEMOS_COLLECTION: &str = "memos_encrypted_v1";
 const PROJECTION_INTENTS_COLLECTION: &str = "projection_intents";
 const TARGET_VERSION: &str = "version";
 const TARGET_DELETED: &str = "deleted";
@@ -88,6 +89,95 @@ impl MemoDocument {
             updated_at,
             version: self.version,
         })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct EncryptedMemoDocument {
+    #[serde(rename = "_id")]
+    id: String,
+    owner_partition: String,
+    ciphertext: Binary,
+    nonce: Binary,
+    wrapped_dek: Binary,
+    version: i32,
+    crypto_suite_id: String,
+    key_version: String,
+    schema_version: i32,
+}
+
+impl TryFrom<&HighEncryptedMemoEnvelope> for EncryptedMemoDocument {
+    type Error = AppError;
+
+    fn try_from(envelope: &HighEncryptedMemoEnvelope) -> AppResult<Self> {
+        envelope.validate_structure()?;
+        let schema_version = i32::try_from(envelope.schema_version).map_err(|_| {
+            AppError::DatabaseError(format!(
+                "Encrypted memo schema version is too large for MongoDB: {}",
+                envelope.schema_version
+            ))
+        })?;
+
+        Ok(Self {
+            id: envelope.memo_id.to_string(),
+            owner_partition: envelope.owner_partition.to_string(),
+            ciphertext: Binary {
+                subtype: BinarySubtype::Generic,
+                bytes: envelope.ciphertext.clone(),
+            },
+            nonce: Binary {
+                subtype: BinarySubtype::Generic,
+                bytes: envelope.nonce.clone(),
+            },
+            wrapped_dek: Binary {
+                subtype: BinarySubtype::Generic,
+                bytes: envelope.wrapped_dek.clone(),
+            },
+            version: envelope.version,
+            crypto_suite_id: envelope.crypto_suite_id.clone(),
+            key_version: envelope.key_version.clone(),
+            schema_version,
+        })
+    }
+}
+
+impl EncryptedMemoDocument {
+    fn try_into_envelope(self) -> AppResult<HighEncryptedMemoEnvelope> {
+        let memo_id = parse_uuid("encrypted memo id", &self.id)?;
+        let owner_partition =
+            parse_uuid("encrypted memo owner partition", &self.owner_partition)?;
+        let schema_version = u32::try_from(self.schema_version).map_err(|_| {
+            AppError::DatabaseError(format!(
+                "Invalid MongoDB encrypted memo schema version: {}",
+                self.schema_version
+            ))
+        })?;
+
+        for (field, binary) in [
+            ("ciphertext", &self.ciphertext),
+            ("nonce", &self.nonce),
+            ("wrapped_dek", &self.wrapped_dek),
+        ] {
+            if binary.subtype != BinarySubtype::Generic {
+                return Err(AppError::DatabaseError(format!(
+                    "Invalid MongoDB encrypted memo {field} binary subtype"
+                )));
+            }
+        }
+
+        let envelope = HighEncryptedMemoEnvelope {
+            memo_id,
+            owner_partition,
+            ciphertext: self.ciphertext.bytes,
+            nonce: self.nonce.bytes,
+            wrapped_dek: self.wrapped_dek.bytes,
+            version: self.version,
+            crypto_suite_id: self.crypto_suite_id,
+            key_version: self.key_version,
+            schema_version,
+        };
+        envelope.validate_structure()?;
+        Ok(envelope)
     }
 }
 
@@ -184,6 +274,7 @@ pub struct MongoDbAuthoritativeStore {
     client: Client,
     database: Database,
     memos: Collection<MemoDocument>,
+    encrypted_memos: Collection<EncryptedMemoDocument>,
     projection_intents: Collection<ProjectionIntentDocument>,
 }
 
@@ -194,6 +285,8 @@ impl MongoDbAuthoritativeStore {
         })?;
         let database = client.database(database_name);
         let memos = database.collection::<MemoDocument>(MEMOS_COLLECTION);
+        let encrypted_memos =
+            database.collection::<EncryptedMemoDocument>(ENCRYPTED_MEMOS_COLLECTION);
         let projection_intents =
             database.collection::<ProjectionIntentDocument>(PROJECTION_INTENTS_COLLECTION);
 
@@ -201,6 +294,7 @@ impl MongoDbAuthoritativeStore {
             client,
             database,
             memos,
+            encrypted_memos,
             projection_intents,
         };
         store.validate_transaction_topology().await?;
@@ -235,6 +329,15 @@ impl MongoDbAuthoritativeStore {
             )
             .await
             .map_err(|error| mongo_error("create MongoDB memo indexes", error))?;
+
+        self.encrypted_memos
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "owner_partition": 1 })
+                    .build(),
+            )
+            .await
+            .map_err(|error| mongo_error("create MongoDB encrypted memo indexes", error))?;
 
         self.projection_intents
             .create_index(IndexModel::builder().keys(doc! { "memo_id": 1 }).build())
@@ -365,6 +468,66 @@ impl MongoDbAuthoritativeStore {
             .count_documents(doc! {})
             .await
             .map_err(|error| mongo_error("count MongoDB migration target memos", error))
+    }
+
+    /// Stage one HIGH encrypted envelope in an isolated migration collection.
+    ///
+    /// This collection is not authoritative and is not used by request paths.
+    /// Identical reruns are idempotent; divergent rows fail closed.
+    pub async fn stage_encrypted_memo_for_migration(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+    ) -> AppResult<MigrationImportResult> {
+        let document = EncryptedMemoDocument::try_from(envelope)?;
+
+        if let Some(existing) = self
+            .encrypted_memos
+            .find_one(doc! { "_id": document.id.clone() })
+            .await
+            .map_err(|error| mongo_error("inspect MongoDB encrypted migration target", error))?
+        {
+            if existing == document {
+                return Ok(MigrationImportResult::AlreadyPresent);
+            }
+
+            return Err(AppError::Conflict(format!(
+                "MongoDB encrypted migration target already contains different memo {}",
+                envelope.memo_id
+            )));
+        }
+
+        self.encrypted_memos
+            .insert_one(document)
+            .await
+            .map_err(|error| mongo_error("stage MongoDB encrypted migration memo", error))?;
+
+        Ok(MigrationImportResult::Inserted)
+    }
+
+    pub async fn find_staged_encrypted_memo_for_migration(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<Option<HighEncryptedMemoEnvelope>> {
+        let document = self
+            .encrypted_memos
+            .find_one(doc! {
+                "_id": memo_id.to_string(),
+                "owner_partition": owner_partition.to_string(),
+            })
+            .await
+            .map_err(|error| mongo_error("find MongoDB encrypted migration memo", error))?;
+
+        document
+            .map(EncryptedMemoDocument::try_into_envelope)
+            .transpose()
+    }
+
+    pub async fn count_staged_encrypted_memos_for_migration(&self) -> AppResult<u64> {
+        self.encrypted_memos
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| mongo_error("count MongoDB encrypted migration memos", error))
     }
 
     async fn save_transaction(&self, memo: &Memo, event: &ProjectionIntent) -> AppResult<()> {
@@ -683,6 +846,34 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_memo_document_round_trip_preserves_only_envelope_fields() {
+        let envelope = HighEncryptedMemoEnvelope {
+            memo_id: Uuid::new_v4(),
+            owner_partition: Uuid::new_v4(),
+            ciphertext: vec![0xAA; 32],
+            nonce: vec![0xBB; 12],
+            wrapped_dek: vec![0xCC; 48],
+            version: 3,
+            crypto_suite_id: crate::application::crypto::MEMO_HIGH_SUITE_ID.into(),
+            key_version: "kms-key-v1".into(),
+            schema_version: crate::application::crypto::MEMO_HIGH_SCHEMA_VERSION,
+        };
+
+        let document = EncryptedMemoDocument::try_from(&envelope).unwrap();
+        assert_eq!(document.id, envelope.memo_id.to_string());
+        assert_eq!(
+            document.owner_partition,
+            envelope.owner_partition.to_string()
+        );
+        assert_eq!(document.ciphertext.subtype, BinarySubtype::Generic);
+        assert_eq!(document.nonce.subtype, BinarySubtype::Generic);
+        assert_eq!(document.wrapped_dek.subtype, BinarySubtype::Generic);
+
+        let restored = document.try_into_envelope().unwrap();
+        assert_eq!(restored, envelope);
+    }
+
+    #[test]
     fn hydration_preserves_requested_order_and_omits_missing_ids() {
         let user_id = Uuid::new_v4();
         let mut first = Memo::new("First".into(), "Content".into(), vec![], user_id);
@@ -752,6 +943,61 @@ mod tests {
             .unwrap();
         let owner = Uuid::new_v4();
         let other_owner = Uuid::new_v4();
+
+        let encrypted = HighEncryptedMemoEnvelope {
+            memo_id: Uuid::new_v4(),
+            owner_partition: owner,
+            ciphertext: vec![0x11; 32],
+            nonce: vec![0x22; 12],
+            wrapped_dek: vec![0x33; 48],
+            version: 2,
+            crypto_suite_id: crate::application::crypto::MEMO_HIGH_SUITE_ID.into(),
+            key_version: "kms-key-v1".into(),
+            schema_version: crate::application::crypto::MEMO_HIGH_SCHEMA_VERSION,
+        };
+        assert_eq!(
+            store
+                .stage_encrypted_memo_for_migration(&encrypted)
+                .await
+                .unwrap(),
+            MigrationImportResult::Inserted
+        );
+        assert_eq!(
+            store
+                .stage_encrypted_memo_for_migration(&encrypted)
+                .await
+                .unwrap(),
+            MigrationImportResult::AlreadyPresent
+        );
+        assert_eq!(
+            store
+                .count_staged_encrypted_memos_for_migration()
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .find_staged_encrypted_memo_for_migration(owner, encrypted.memo_id)
+                .await
+                .unwrap()
+                .unwrap(),
+            encrypted
+        );
+        assert!(store
+            .find_staged_encrypted_memo_for_migration(other_owner, encrypted.memo_id)
+            .await
+            .unwrap()
+            .is_none());
+
+        let mut divergent_encrypted = encrypted.clone();
+        divergent_encrypted.ciphertext[0] ^= 0x01;
+        assert!(matches!(
+            store
+                .stage_encrypted_memo_for_migration(&divergent_encrypted)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
 
         let mut migrated = Memo::new(
             "Migrated memo".into(),
