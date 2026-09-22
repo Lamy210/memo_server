@@ -714,6 +714,52 @@ mod tests {
         let owner = Uuid::new_v4();
         let other_owner = Uuid::new_v4();
 
+        let mut migrated = Memo::new(
+            "Migrated memo".into(),
+            "Preserve source version".into(),
+            vec!["migration".into()],
+            owner,
+        );
+        migrated.update(Some("Migrated memo v2".into()), None, None);
+
+        assert_eq!(
+            store.import_memo_for_migration(&migrated).await.unwrap(),
+            MigrationImportResult::Inserted
+        );
+        let imported = store
+            .find_by_id(owner, migrated.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(imported.id, migrated.id);
+        assert_eq!(imported.version, migrated.version);
+        assert_eq!(imported.created_at, migrated.created_at);
+        assert_eq!(imported.updated_at, migrated.updated_at);
+
+        let import_intents = store.list_projection_intents().await.unwrap();
+        assert_eq!(import_intents.len(), 1);
+        assert_eq!(
+            import_intents[0].target,
+            ProjectionTarget::Version(migrated.version)
+        );
+        store
+            .acknowledge_projection_intent(&import_intents[0])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.import_memo_for_migration(&migrated).await.unwrap(),
+            MigrationImportResult::AlreadyPresent
+        );
+        assert!(store.list_projection_intents().await.unwrap().is_empty());
+
+        let mut divergent = migrated.clone();
+        divergent.title = "Different target data".into();
+        assert!(matches!(
+            store.import_memo_for_migration(&divergent).await,
+            Err(AppError::Conflict(_))
+        ));
+
         let memo = Memo::new(
             "Version one".into(),
             "MongoDB integration content".into(),
