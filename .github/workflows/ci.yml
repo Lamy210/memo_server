@@ -74,7 +74,7 @@ jobs:
           fi
 
           docker exec memo-mongodb-ci mongosh --quiet --eval \
-            'rs.initiate({_id:"rs0",members:[{_id:0,host:"127.0.0.1:27017"}]})'
+            'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
 
           primary=0
           for _ in $(seq 1 60); do
@@ -95,7 +95,7 @@ jobs:
 
       - name: MongoDB transactional integration
         env:
-          MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?replicaSet=rs0&serverSelectionTimeoutMS=10000
+          MONGODB_TEST_URI: mongodb://localhost:27017/?replicaSet=rs0&serverSelectionTimeoutMS=10000
         run: |
           cargo test --locked mongodb_replica_set_preserves_atomic_outbox_and_tenant_scope \
             -- --ignored --nocapture
