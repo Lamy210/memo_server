@@ -22,6 +22,17 @@ fn uses_service_defaults_in_explicit_development_mode() {
 }
 
 #[test]
+fn scylla_fallback_ignores_empty_mongodb_database() {
+    let config = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        ("MONGODB_DATABASE".to_string(), "   ".to_string()),
+    ])
+    .expect("unused MongoDB settings must not break Scylla fallback");
+
+    assert_eq!(config.authoritative_backend, AuthoritativeBackend::Scylla);
+}
+
+#[test]
 fn supports_explicit_mongodb_authoritative_backend() {
     let config = AppConfig::from_vars([
         ("AUTH_MODE".to_string(), "development".to_string()),
