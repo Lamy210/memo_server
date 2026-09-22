@@ -257,6 +257,37 @@ impl MongoDbAuthoritativeStore {
         document.map(MemoDocument::try_into_memo).transpose()
     }
 
+    async fn ensure_migration_projection_intent(&self, memo: &Memo) -> AppResult<()> {
+        let pending = self
+            .projection_intents
+            .find_one(doc! {
+                "user_id": memo.user_id.to_string(),
+                "memo_id": memo.id.to_string(),
+                "target_kind": TARGET_VERSION,
+                "target_version": memo.version,
+            })
+            .await
+            .map_err(|error| {
+                mongo_error("inspect MongoDB migration projection intent", error)
+            })?;
+
+        if pending.is_none() {
+            let event = ProjectionIntent::new(
+                memo.user_id,
+                memo.id,
+                ProjectionTarget::Version(memo.version),
+            );
+            self.projection_intents
+                .insert_one(ProjectionIntentDocument::from_intent(&event)?)
+                .await
+                .map_err(|error| {
+                    mongo_error("enqueue MongoDB migration projection intent", error)
+                })?;
+        }
+
+        Ok(())
+    }
+
     /// Import a memo during a Scylla -> MongoDB backfill.
     ///
     /// The memo's existing identity, timestamps, and version are preserved. A
@@ -274,6 +305,7 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("inspect MongoDB migration target", error))?
         {
             if existing == document {
+                self.ensure_migration_projection_intent(memo).await?;
                 return Ok(MigrationImportResult::AlreadyPresent);
             }
 
@@ -750,7 +782,16 @@ mod tests {
             store.import_memo_for_migration(&migrated).await.unwrap(),
             MigrationImportResult::AlreadyPresent
         );
-        assert!(store.list_projection_intents().await.unwrap().is_empty());
+        let rerun_intents = store.list_projection_intents().await.unwrap();
+        assert_eq!(rerun_intents.len(), 1);
+        assert_eq!(
+            rerun_intents[0].target,
+            ProjectionTarget::Version(migrated.version)
+        );
+        store
+            .acknowledge_projection_intent(&rerun_intents[0])
+            .await
+            .unwrap();
 
         let mut divergent = migrated.clone();
         divergent.title = "Different target data".into();
