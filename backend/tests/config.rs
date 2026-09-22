@@ -1,4 +1,6 @@
-use memo_app_backend::config::{AppConfig, AuthConfig, ConfigError, SearchBackend};
+use memo_app_backend::config::{
+    AppConfig, AuthConfig, AuthoritativeBackend, ConfigError, SearchBackend,
+};
 
 fn development_vars() -> Vec<(String, String)> {
     vec![("AUTH_MODE".to_string(), "development".to_string())]
@@ -9,12 +11,76 @@ fn uses_service_defaults_in_explicit_development_mode() {
     let config = AppConfig::from_vars(development_vars())
         .expect("explicit development configuration should be valid");
 
-    assert_eq!(config.scylla_uri, "127.0.0.1:9042");
+    assert_eq!(config.authoritative_backend, AuthoritativeBackend::Scylla);
+    assert_eq!(config.authoritative_uri, "127.0.0.1:9042");
+    assert_eq!(config.mongodb_database, "memo_app");
     assert_eq!(config.redis_uri, "redis://127.0.0.1:6379");
     assert_eq!(config.search_backend, SearchBackend::Elasticsearch);
     assert_eq!(config.search_uri, "http://127.0.0.1:9200");
     assert_eq!(config.port, 8080);
     assert_eq!(config.auth, AuthConfig::Development);
+}
+
+#[test]
+fn supports_explicit_mongodb_authoritative_backend() {
+    let config = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        (
+            "AUTHORITATIVE_BACKEND".to_string(),
+            "mongodb".to_string(),
+        ),
+        (
+            "MONGODB_URI".to_string(),
+            "mongodb://mongo.example.test:27017/?replicaSet=rs0".to_string(),
+        ),
+        (
+            "MONGODB_DATABASE".to_string(),
+            "memo_test".to_string(),
+        ),
+    ])
+    .expect("MongoDB configuration should be valid");
+
+    assert_eq!(
+        config.authoritative_backend,
+        AuthoritativeBackend::MongoDb
+    );
+    assert_eq!(
+        config.authoritative_uri,
+        "mongodb://mongo.example.test:27017/?replicaSet=rs0"
+    );
+    assert_eq!(config.mongodb_database, "memo_test");
+}
+
+#[test]
+fn rejects_unknown_authoritative_backend() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        (
+            "AUTHORITATIVE_BACKEND".to_string(),
+            "unknown".to_string(),
+        ),
+    ])
+    .expect_err("unknown authoritative backend must be rejected");
+
+    assert_eq!(
+        error,
+        ConfigError::InvalidAuthoritativeBackend("unknown".to_string())
+    );
+}
+
+#[test]
+fn rejects_empty_mongodb_database() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        (
+            "AUTHORITATIVE_BACKEND".to_string(),
+            "mongodb".to_string(),
+        ),
+        ("MONGODB_DATABASE".to_string(), "   ".to_string()),
+    ])
+    .expect_err("empty MongoDB database must be rejected");
+
+    assert_eq!(error, ConfigError::EmptyMongoDatabase);
 }
 
 #[test]
