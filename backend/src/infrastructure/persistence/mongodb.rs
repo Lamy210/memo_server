@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use ::mongodb::{
-    bson::doc, error::Error as MongoError, options::WriteConcern, Client, Collection, Database,
-    IndexModel,
+    bson::{doc, Document},
+    error::Error as MongoError,
+    options::WriteConcern,
+    Client, Collection, Database, IndexModel,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -194,8 +196,27 @@ impl MongoDbAuthoritativeStore {
             memos,
             projection_intents,
         };
+        store.validate_transaction_topology().await?;
         store.initialize_schema().await?;
         Ok(store)
+    }
+
+    async fn validate_transaction_topology(&self) -> AppResult<()> {
+        let hello = self
+            .client
+            .database("admin")
+            .run_command(doc! { "hello": 1 })
+            .await
+            .map_err(|error| mongo_error("inspect MongoDB topology", error))?;
+
+        if transaction_topology_supported(&hello) {
+            return Ok(());
+        }
+
+        Err(AppError::DatabaseError(
+            "MongoDB authoritative storage requires a replica set or sharded cluster because memo mutations and projection intents must commit atomically"
+                .to_string(),
+        ))
     }
 
     async fn initialize_schema(&self) -> AppResult<()> {
@@ -372,6 +393,10 @@ impl MongoDbAuthoritativeStore {
 
 fn mongo_error(operation: &str, error: MongoError) -> AppError {
     AppError::DatabaseError(format!("{operation} failed: {error}"))
+}
+
+fn transaction_topology_supported(hello: &Document) -> bool {
+    hello.get_str("setName").is_ok() || hello.get_str("msg").is_ok_and(|msg| msg == "isdbgrid")
 }
 
 fn order_memos_by_ids(ids: &[Uuid], by_id: &HashMap<Uuid, Memo>) -> Vec<Memo> {
@@ -559,6 +584,13 @@ mod tests {
     }
 
     #[test]
+    fn transaction_topology_requires_replica_set_or_mongos() {
+        assert!(transaction_topology_supported(&doc! { "setName": "rs0" }));
+        assert!(transaction_topology_supported(&doc! { "msg": "isdbgrid" }));
+        assert!(!transaction_topology_supported(&doc! { "isWritablePrimary": true }));
+    }
+
+    #[test]
     fn projection_intent_round_trip_preserves_typed_target() {
         let versioned =
             ProjectionIntent::new(Uuid::new_v4(), Uuid::new_v4(), ProjectionTarget::Version(3));
@@ -640,6 +672,36 @@ mod tests {
             store.save_with_projection_intent(&stale).await,
             Err(AppError::Conflict(_))
         ));
+        assert!(store.list_projection_intents().await.unwrap().is_empty());
+
+        let mut rollback_candidate = store.find_by_id(owner, winner.id).await.unwrap().unwrap();
+        rollback_candidate.update(Some("Must roll back".into()), None, None);
+        let duplicate_event = ProjectionIntent::new(
+            owner,
+            rollback_candidate.id,
+            ProjectionTarget::Version(rollback_candidate.version),
+        );
+        store
+            .projection_intents
+            .insert_one(ProjectionIntentDocument::from_intent(&duplicate_event).unwrap())
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            store
+                .save_transaction(&rollback_candidate, &duplicate_event)
+                .await,
+            Err(AppError::DatabaseError(_))
+        ));
+
+        let after_aborted_transaction =
+            store.find_by_id(owner, winner.id).await.unwrap().unwrap();
+        assert_eq!(after_aborted_transaction.title, "Winner");
+        assert_eq!(after_aborted_transaction.version, winner.version);
+        store
+            .acknowledge_projection_intent(&duplicate_event)
+            .await
+            .unwrap();
         assert!(store.list_projection_intents().await.unwrap().is_empty());
 
         let second = Memo::new(
