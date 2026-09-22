@@ -587,7 +587,9 @@ mod tests {
     fn transaction_topology_requires_replica_set_or_mongos() {
         assert!(transaction_topology_supported(&doc! { "setName": "rs0" }));
         assert!(transaction_topology_supported(&doc! { "msg": "isdbgrid" }));
-        assert!(!transaction_topology_supported(&doc! { "isWritablePrimary": true }));
+        assert!(!transaction_topology_supported(
+            &doc! { "isWritablePrimary": true }
+        ));
     }
 
     #[test]
@@ -694,8 +696,7 @@ mod tests {
             Err(AppError::DatabaseError(_))
         ));
 
-        let after_aborted_transaction =
-            store.find_by_id(owner, winner.id).await.unwrap().unwrap();
+        let after_aborted_transaction = store.find_by_id(owner, winner.id).await.unwrap().unwrap();
         assert_eq!(after_aborted_transaction.title, "Winner");
         assert_eq!(after_aborted_transaction.version, winner.version);
         store
@@ -730,9 +731,7 @@ mod tests {
             ProjectionIntent::new(owner, winner.id, ProjectionTarget::Deleted);
         store
             .projection_intents
-            .insert_one(
-                ProjectionIntentDocument::from_intent(&duplicate_delete_event).unwrap(),
-            )
+            .insert_one(ProjectionIntentDocument::from_intent(&duplicate_delete_event).unwrap())
             .await
             .unwrap();
 
