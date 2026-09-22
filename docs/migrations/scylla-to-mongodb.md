@@ -28,6 +28,7 @@ The backfill intentionally fails closed.
 - Re-running against an identical destination row is idempotent and reports it as already present.
 - An identical rerun also ensures a current-version projection intent is pending, so clearing/rebuilding Valkey or Manticore after an earlier reconciliation does not strand the memo outside secondary projections.
 - If the destination already contains the same memo ID with different data, the migration stops with a conflict instead of overwriting it.
+- After the copy, source and destination memo counts must match exactly. A mismatch fails verification so target-only stale rows cannot silently survive into cutover.
 
 Do not run multiple backfill writers concurrently.
 
@@ -83,10 +84,10 @@ cargo run --locked --bin backfill_mongodb -- --apply
 A successful result prints:
 
 ```text
-Backfill complete: visited=<n> inserted=<n> already_present=<n>
+Backfill complete: visited=<n> inserted=<n> already_present=<n> destination=<n>
 ```
 
-The command aborts on the first source/destination conflict.
+The command aborts on the first source/destination conflict. It also refuses to complete when the final MongoDB memo count differs from the Scylla source count; this catches stale destination-only rows left by a prior rehearsal or partial migration.
 
 ## 5. Secondary projections
 
