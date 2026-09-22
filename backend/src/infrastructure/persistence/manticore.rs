@@ -57,9 +57,7 @@ impl ManticoreClient {
             .send()
             .await
             .map_err(|error| {
-                AppError::DatabaseError(format!(
-                    "Manticore {operation} request failed: {error}"
-                ))
+                AppError::DatabaseError(format!("Manticore {operation} request failed: {error}"))
             })?;
 
         let status = response.status();
@@ -76,9 +74,7 @@ impl ManticoreClient {
         }
 
         let result_sets = result.as_array().ok_or_else(|| {
-            AppError::DatabaseError(format!(
-                "Invalid Manticore {operation} response format"
-            ))
+            AppError::DatabaseError(format!("Invalid Manticore {operation} response format"))
         })?;
 
         if let Some(error) = result_sets
