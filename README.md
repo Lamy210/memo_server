@@ -152,7 +152,7 @@ Backend が利用する主な環境変数:
 | Variable | Development default |
 | --- | --- |
 | `AUTHORITATIVE_BACKEND` | `scylla`（既存環境互換。Composeでは `mongodb`） |
-| `MONGODB_URI` | `mongodb://127.0.0.1:27017/?replicaSet=rs0` |
+| `MONGODB_URI` | `mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true`（local/CI single-node用） |
 | `MONGODB_DATABASE` | `memo_app` |
 | `SCYLLA_URI` | `127.0.0.1:9042`（migration fallbackのみ） |
 | `REDIS_URL` | `redis://127.0.0.1:6379`（Valkey接続先。互換env名を維持） |
@@ -165,7 +165,7 @@ Backend が利用する主な環境変数:
 | `AUTH_AUDIENCE` | `AUTH_MODE=jwt` のとき必須。memo API向けのaudience値 |
 | `AUTH_JWKS_URI` | `AUTH_MODE=jwt` のとき必須 |
 
-`DATABASE_URL` は `AUTHORITATIVE_BACKEND=scylla` の既存環境互換aliasです。MongoDB選択時には利用せず、`MONGODB_URI` / `MONGODB_DATABASE` を明示してください。MongoDB transactionを利用するため、接続先はreplica setまたはsharded clusterである必要があります。
+`DATABASE_URL` は `AUTHORITATIVE_BACKEND=scylla` の既存環境互換aliasです。MongoDB選択時には利用せず、`MONGODB_URI` / `MONGODB_DATABASE` を明示してください。MongoDB transactionを利用するため、接続先はreplica setまたはsharded clusterである必要があります。Dockerのsingle-node replica setではhost discoveryを避けるため `directConnection=true` を使います。本番の冗長replica set/sharded clusterでは全memberを到達可能にし、通常のtopology discoveryを利用してください。
 
 Frontend は SvelteKit server route `/api/v1/...` をBackendへの同一origin proxyとして利用します。`BACKEND_URL` はserver-sideのみで参照され、Composeでは `http://backend:8080` が設定されます。ローカル開発では private env `DEVELOPMENT_USER_ID` を設定し、development buildのserver proxyだけが `X-Development-User-Id` を注入します。`VITE_*` へ認証情報を置かないでください。
 
