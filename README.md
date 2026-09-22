@@ -6,12 +6,12 @@ Rust/Actix Web + SvelteKit で構成したメモアプリケーションです�
 
 - Frontend: SvelteKit 2 / Svelte 5 / TypeScript / Tailwind CSS
 - Backend: Rust / Actix Web
-- Primary store: ScyllaDB
+- Primary store: MongoDB 8.0.32 (Compose target; ScyllaDB remains a migration fallback)
 - Cache: Valkey 9.1
 - Search index: Manticore Search 29.9.0 (Compose default; Elasticsearch remains a migration fallback)
 - Local orchestration: Docker Compose
 
-ScyllaDB をメモ本体の永続化先とし、Valkey はキャッシュ、Manticore Search は再構築可能な検索projectionとして利用します。Rust側のValkey接続はRESP互換のため既存の `redis` crateを継続利用します。検索は移行期間中のみ `SEARCH_BACKEND=elasticsearch|manticore` で切替可能です。
+MongoDB を新規Compose環境のauthoritative storeとし、Valkeyはcache、Manticore Searchは再構築可能な検索projectionとして利用します。既存デプロイの安全な移行のため、`AUTHORITATIVE_BACKEND=scylla|mongodb` を明示的に切り替えられます。ScyllaDBからMongoDBへの既存データbackfillは別migrationで行うため、環境変数未指定時は互換性のためScyllaDBを維持します。
 
 > [!NOTE]
 > メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、SvelteKit server proxy が private env `DEVELOPMENT_USER_ID` から `X-Development-User-Id` を付与します。ブラウザ側JSは認証headerを生成しません。本番では独立した認証サービスを運用し、`AUTH_MODE=jwt` でそのサービスが発行するaccess tokenを検証します。
@@ -30,7 +30,7 @@ docker compose up --build
 - Backend liveness: http://localhost:8083/api/v1/health/live
 - Backend readiness: http://localhost:8083/api/v1/health/ready
 - Manticore HTTP: http://localhost:9308
-- ScyllaDB: localhost:9042
+- MongoDB: localhost:27017 (single-node replica set for local/CI)
 - Valkey: localhost:6379
 
 停止:
@@ -93,21 +93,21 @@ curl -H 'Authorization: Bearer <access-token>' \
 
 `/health/ready` は依存サービスを最大2秒で並行probeし、次の状態を返します。
 
-| State | HTTP | ScyllaDB | Valkey / Search projection | Meaning |
+| State | HTTP | Authoritative store | Valkey / Search projection | Meaning |
 | --- | ---: | --- | --- | --- |
 | `ready` | 200 | healthy | healthy | 全機能を利用可能 |
 | `degraded` | 200 | healthy | 1つ以上down | CRUDは利用可能。cache/search projectionは縮退 |
 | `unavailable` | 503 | down | any | authoritative storeへ安全にアクセスできないためreadyではない |
 
-ScyllaDBがauthoritative storeです。Valkeyはcache、Manticoreは再構築可能なsearch projectionとして扱うため、secondary store障害だけではcore CRUDのreadinessを落としません。Valkeyはdisposable cacheとしてRDB/AOFを無効化しています。readiness JSONの `.checks.redis` / `.checks.elasticsearch` は既存監視との後方互換のため現時点では名称を維持しています。
+MongoDBまたはScyllaDBのうち選択されたbackendがauthoritative storeです。Valkeyはcache、Manticoreは再構築可能なsearch projectionとして扱うため、secondary store障害だけではcore CRUDのreadinessを落としません。正規のreadiness fieldは `.checks.authoritative` / `.checks.cache` / `.checks.search` です。旧 `.checks.scylla` / `.checks.redis` / `.checks.elasticsearch` も既存監視との後方互換aliasとして同じ状態を返します。
 
 ### Projection reconciliation
 
-メモの作成・更新・削除では、Valkey/Manticoreへ反映するためのdurable projection intentをScyllaDBへprimary mutationより先に一意eventとして保存します。保存時は対象のmemo version、削除時はdelete targetを持ちます。primary mutationでクライアント側にエラーが返ってもserver-side commit済みの可能性があるためintentは即時削除せず保持し、reconcilerがauthoritative stateを確認します。targetへ到達しないintentはgrace period後にstaleとして破棄します。
+MongoDB backendでは、メモの作成・更新・削除とValkey/Manticore向けdurable projection intentを同一MongoDB transactionでcommitします。保存intentは対象memo version、削除intentはdelete targetを持ちます。これによりprimary mutationだけがcommitされoutboxが欠落する状態を防ぎます。Scylla migration fallbackでは従来のintent-first方式を維持し、ambiguous failure時はintentを残してreconcilerがauthoritative stateを確認します。
 
 通常はprimary mutation直後に同期を試みます。ValkeyまたはManticoreが利用できない場合でもprimary CRUDは成功し、intentはScyllaDBに残ります。background reconcilerが約2秒間隔で再試行し、backend再起動後も未処理intentを再開します。
 
-reconcilerは現在のScyllaDB状態をsource of truthとして同期します。保存intentはScyllaDBがtarget version以上へ到達するまで、削除intentは行が消えるまでackしません。各intentは一意eventなのでworker同士が別mutationのintentを削除しません。secondaryへ書いた直後にScyllaDBを再確認し、同期中にsource stateが変わっていればcorrective intentを先に追加してから古いeventをackするため、stale workerによる書き戻しも最終的に再収束します。
+reconcilerは現在の選択されたauthoritative storeの状態をsource of truthとして同期します。保存intentはauthoritative storeがtarget version以上へ到達するまで、削除intentは行が消えるまでackしません。各intentは一意eventなのでworker同士が別mutationのintentを削除しません。secondaryへ書いた直後にScyllaDBを再確認し、同期中にsource stateが変わっていればcorrective intentを先に追加してから古いeventをackするため、stale workerによる書き戻しも最終的に再収束します。
 
 この仕組みにより、secondary store停止中のcreate/update/deleteは、secondary store復帰後にcache/search projectionへ収束します。
 
@@ -151,7 +151,10 @@ Backend が利用する主な環境変数:
 
 | Variable | Development default |
 | --- | --- |
-| `SCYLLA_URI` | `127.0.0.1:9042` |
+| `AUTHORITATIVE_BACKEND` | `scylla`（既存環境互換。Composeでは `mongodb`） |
+| `MONGODB_URI` | `mongodb://127.0.0.1:27017/?replicaSet=rs0` |
+| `MONGODB_DATABASE` | `memo_app` |
+| `SCYLLA_URI` | `127.0.0.1:9042`（migration fallbackのみ） |
 | `REDIS_URL` | `redis://127.0.0.1:6379`（Valkey接続先。互換env名を維持） |
 | `SEARCH_BACKEND` | `elasticsearch`（既存環境互換。Composeでは `manticore`） |
 | `MANTICORE_URL` | `http://127.0.0.1:9308` |
@@ -162,7 +165,7 @@ Backend が利用する主な環境変数:
 | `AUTH_AUDIENCE` | `AUTH_MODE=jwt` のとき必須。memo API向けのaudience値 |
 | `AUTH_JWKS_URI` | `AUTH_MODE=jwt` のとき必須 |
 
-`DATABASE_URL` は既存環境との互換目的で Scylla の接続先としても読み取りますが、新規設定では `SCYLLA_URI` を使ってください。
+`DATABASE_URL` は `AUTHORITATIVE_BACKEND=scylla` の既存環境互換aliasです。MongoDB選択時には利用せず、`MONGODB_URI` / `MONGODB_DATABASE` を明示してください。MongoDB transactionを利用するため、接続先はreplica setまたはsharded clusterである必要があります。
 
 Frontend は SvelteKit server route `/api/v1/...` をBackendへの同一origin proxyとして利用します。`BACKEND_URL` はserver-sideのみで参照され、Composeでは `http://backend:8080` が設定されます。ローカル開発では private env `DEVELOPMENT_USER_ID` を設定し、development buildのserver proxyだけが `X-Development-User-Id` を注入します。`VITE_*` へ認証情報を置かないでください。
 
