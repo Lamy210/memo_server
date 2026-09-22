@@ -330,15 +330,6 @@ impl MongoDbAuthoritativeStore {
             .await
             .map_err(|error| mongo_error("create MongoDB memo indexes", error))?;
 
-        self.encrypted_memos
-            .create_index(
-                IndexModel::builder()
-                    .keys(doc! { "owner_partition": 1 })
-                    .build(),
-            )
-            .await
-            .map_err(|error| mongo_error("create MongoDB encrypted memo indexes", error))?;
-
         self.projection_intents
             .create_index(IndexModel::builder().keys(doc! { "memo_id": 1 }).build())
             .await
@@ -860,6 +851,12 @@ mod tests {
         };
 
         let document = EncryptedMemoDocument::try_from(&envelope).unwrap();
+        let bson = ::mongodb::bson::to_document(&document).unwrap();
+        assert!(!bson.contains_key("title"));
+        assert!(!bson.contains_key("content"));
+        assert!(!bson.contains_key("tags"));
+        assert!(!bson.contains_key("created_at_ms"));
+        assert!(!bson.contains_key("updated_at_ms"));
         assert_eq!(document.id, envelope.memo_id.to_string());
         assert_eq!(
             document.owner_partition,
@@ -871,6 +868,28 @@ mod tests {
 
         let restored = document.try_into_envelope().unwrap();
         assert_eq!(restored, envelope);
+    }
+
+    #[test]
+    fn encrypted_memo_document_rejects_non_generic_binary_fields() {
+        let envelope = HighEncryptedMemoEnvelope {
+            memo_id: Uuid::new_v4(),
+            owner_partition: Uuid::new_v4(),
+            ciphertext: vec![0xAA; 32],
+            nonce: vec![0xBB; 12],
+            wrapped_dek: vec![0xCC; 48],
+            version: 1,
+            crypto_suite_id: crate::application::crypto::MEMO_HIGH_SUITE_ID.into(),
+            key_version: "kms-key-v1".into(),
+            schema_version: crate::application::crypto::MEMO_HIGH_SCHEMA_VERSION,
+        };
+        let mut document = EncryptedMemoDocument::try_from(&envelope).unwrap();
+        document.nonce.subtype = BinarySubtype::Uuid;
+
+        assert!(matches!(
+            document.try_into_envelope(),
+            Err(AppError::DatabaseError(_))
+        ));
     }
 
     #[test]
