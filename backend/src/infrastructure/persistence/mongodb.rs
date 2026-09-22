@@ -726,8 +726,14 @@ mod tests {
         let imported = store.find_by_id(owner, migrated.id).await.unwrap().unwrap();
         assert_eq!(imported.id, migrated.id);
         assert_eq!(imported.version, migrated.version);
-        assert_eq!(imported.created_at, migrated.created_at);
-        assert_eq!(imported.updated_at, migrated.updated_at);
+        assert_eq!(
+            imported.created_at.timestamp_millis(),
+            migrated.created_at.timestamp_millis()
+        );
+        assert_eq!(
+            imported.updated_at.timestamp_millis(),
+            migrated.updated_at.timestamp_millis()
+        );
 
         let import_intents = store.list_projection_intents().await.unwrap();
         assert_eq!(import_intents.len(), 1);
