@@ -54,7 +54,12 @@ wait_for_url "http://localhost:8083/api/v1/health" 120 5
 wait_for_url "http://localhost:3001/memos" 60 3
 wait_for_url "http://localhost:3001/api/v1/health" 30 2
 
-docker compose exec -T valkey valkey-cli INFO server | tr -d '\r' | grep -Eq '^valkey_version:9\.1\.2 "http://localhost:8083/api/v1/health/live" \
+valkey_info="$(docker compose exec -T valkey valkey-cli INFO server | tr -d '\r')"
+grep -Eq '^valkey_version:9\.1\.2$' <<<"$valkey_info"
+grep -Eq '^server_name:valkey$' <<<"$valkey_info"
+echo "Smoke milestone: dependencies responding"
+
+curl -fsS "http://localhost:8083/api/v1/health/live" \
   | jq -e '.status == "ok"' >/dev/null
 
 ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
