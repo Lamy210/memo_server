@@ -1020,6 +1020,7 @@ mod tests {
                 .unwrap(),
             1
         );
+        assert!(store.list_projection_intents().await.unwrap().is_empty());
         let collections_after_staging = store.database.list_collection_names().await.unwrap();
         assert!(collections_after_staging
             .iter()
