@@ -110,7 +110,6 @@ fn required_env(name: &'static str) -> Result<String, Box<dyn std::error::Error>
     Ok(value)
 }
 
-
 fn verify_cardinality(
     source_count: usize,
     destination_count: u64,
