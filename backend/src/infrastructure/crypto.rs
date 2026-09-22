@@ -229,12 +229,62 @@ impl HighMemoCryptography for RingHighMemoCryptography {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
     use async_trait::async_trait;
     use uuid::Uuid;
 
     use super::*;
     use crate::application::crypto::{MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID};
-    use crate::infrastructure::crypto_keys::SecretDataKey;
+    use crate::infrastructure::crypto_keys::{GeneratedDataKey, SecretDataKey, DATA_KEY_BYTES};
+
+    struct TestDataKeyProvider {
+        next_byte: AtomicU8,
+    }
+
+    impl TestDataKeyProvider {
+        fn new() -> Self {
+            Self {
+                next_byte: AtomicU8::new(1),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl DataKeyProvider for TestDataKeyProvider {
+        async fn generate_data_key(&self, _aad: &HighMemoAad) -> AppResult<GeneratedDataKey> {
+            let byte = self.next_byte.fetch_add(1, Ordering::Relaxed);
+            let key = [byte; DATA_KEY_BYTES];
+
+            Ok(GeneratedDataKey {
+                plaintext: SecretDataKey::new(key),
+                wrapped_dek: key.to_vec(),
+                key_version: "test-key-v1".into(),
+            })
+        }
+
+        async fn unwrap_data_key(
+            &self,
+            wrapped_dek: &[u8],
+            key_version: &str,
+            _aad: &HighMemoAad,
+        ) -> AppResult<SecretDataKey> {
+            if key_version != "test-key-v1" {
+                return Err(AppError::DatabaseError(
+                    "Unexpected test key version".into(),
+                ));
+            }
+
+            let key: [u8; DATA_KEY_BYTES] = wrapped_dek.try_into().map_err(|_| {
+                AppError::DatabaseError("Invalid test wrapped DEK length".into())
+            })?;
+            Ok(SecretDataKey::new(key))
+        }
+    }
+
+    fn cryptography() -> RingHighMemoCryptography {
+        RingHighMemoCryptography::new(Arc::new(TestDataKeyProvider::new()))
+    }
 
     fn envelope_for(memo: &Memo) -> HighEncryptedMemoEnvelope {
         HighEncryptedMemoEnvelope {
@@ -356,5 +406,94 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn ring_aead_round_trip_uses_fresh_dek_and_nonce() {
+        let cryptography = cryptography();
+        let memo = Memo::new(
+            "Encrypted title".into(),
+            "Encrypted content".into(),
+            vec!["secret".into()],
+            Uuid::new_v4(),
+        );
 
+        let first = cryptography.encrypt_memo_inner(&memo).await.unwrap();
+        let second = cryptography.encrypt_memo_inner(&memo).await.unwrap();
+
+        assert_ne!(first.wrapped_dek, second.wrapped_dek);
+        assert_ne!(first.nonce, second.nonce);
+        assert_ne!(first.ciphertext, second.ciphertext);
+
+        let restored = cryptography.decrypt_memo_inner(&first).await.unwrap();
+        assert_eq!(restored.id, memo.id);
+        assert_eq!(restored.user_id, memo.user_id);
+        assert_eq!(restored.title, memo.title);
+        assert_eq!(restored.content, memo.content);
+        assert_eq!(restored.tags, memo.tags);
+        assert_eq!(restored.version, memo.version);
+    }
+
+    async fn assert_tampered_envelope_rejected(
+        cryptography: &RingHighMemoCryptography,
+        envelope: HighEncryptedMemoEnvelope,
+    ) {
+        assert!(matches!(
+            cryptography.decrypt_memo_inner(&envelope).await,
+            Err(AppError::DatabaseError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn ring_aead_rejects_ciphertext_mutation() {
+        let cryptography = cryptography();
+        let memo = Memo::new("title".into(), "content".into(), vec![], Uuid::new_v4());
+        let mut envelope = cryptography.encrypt_memo_inner(&memo).await.unwrap();
+
+        envelope.ciphertext[0] ^= 0x01;
+
+        assert_tampered_envelope_rejected(&cryptography, envelope).await;
+    }
+
+    #[tokio::test]
+    async fn ring_aead_rejects_owner_substitution() {
+        let cryptography = cryptography();
+        let memo = Memo::new("title".into(), "content".into(), vec![], Uuid::new_v4());
+        let mut envelope = cryptography.encrypt_memo_inner(&memo).await.unwrap();
+
+        envelope.owner_partition = Uuid::new_v4();
+
+        assert_tampered_envelope_rejected(&cryptography, envelope).await;
+    }
+
+    #[tokio::test]
+    async fn ring_aead_rejects_memo_id_substitution() {
+        let cryptography = cryptography();
+        let memo = Memo::new("title".into(), "content".into(), vec![], Uuid::new_v4());
+        let mut envelope = cryptography.encrypt_memo_inner(&memo).await.unwrap();
+
+        envelope.memo_id = Uuid::new_v4();
+
+        assert_tampered_envelope_rejected(&cryptography, envelope).await;
+    }
+
+    #[tokio::test]
+    async fn ring_aead_rejects_version_substitution() {
+        let cryptography = cryptography();
+        let memo = Memo::new("title".into(), "content".into(), vec![], Uuid::new_v4());
+        let mut envelope = cryptography.encrypt_memo_inner(&memo).await.unwrap();
+
+        envelope.version += 1;
+
+        assert_tampered_envelope_rejected(&cryptography, envelope).await;
+    }
+
+    #[tokio::test]
+    async fn ring_aead_rejects_nonce_mutation() {
+        let cryptography = cryptography();
+        let memo = Memo::new("title".into(), "content".into(), vec![], Uuid::new_v4());
+        let mut envelope = cryptography.encrypt_memo_inner(&memo).await.unwrap();
+
+        envelope.nonce[0] ^= 0x01;
+
+        assert_tampered_envelope_rejected(&cryptography, envelope).await;
+    }
 }
