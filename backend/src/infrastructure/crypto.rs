@@ -173,10 +173,7 @@ impl RingHighMemoCryptography {
         Ok(envelope)
     }
 
-    async fn decrypt_memo_inner(
-        &self,
-        envelope: &HighEncryptedMemoEnvelope,
-    ) -> AppResult<Memo> {
+    async fn decrypt_memo_inner(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo> {
         envelope.validate_structure()?;
 
         let aad = HighMemoAad::from(envelope);
@@ -275,9 +272,9 @@ mod tests {
                 ));
             }
 
-            let key: [u8; DATA_KEY_BYTES] = wrapped_dek.try_into().map_err(|_| {
-                AppError::DatabaseError("Invalid test wrapped DEK length".into())
-            })?;
+            let key: [u8; DATA_KEY_BYTES] = wrapped_dek
+                .try_into()
+                .map_err(|_| AppError::DatabaseError("Invalid test wrapped DEK length".into()))?;
             Ok(SecretDataKey::new(key))
         }
     }
