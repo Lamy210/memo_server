@@ -2206,6 +2206,7 @@ dependencies = [
  "mongodb",
  "redis",
  "reqwest",
+ "ring",
  "scylla",
  "serde",
  "serde_json",
@@ -2215,6 +2216,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
