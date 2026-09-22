@@ -4,7 +4,7 @@ use std::env;
 use thiserror::Error;
 
 const DEFAULT_SCYLLA_URI: &str = "127.0.0.1:9042";
-const DEFAULT_MONGODB_URI: &str = "mongodb://127.0.0.1:27017/?replicaSet=rs0";
+const DEFAULT_MONGODB_URI: &str = "mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true";
 const DEFAULT_MONGODB_DATABASE: &str = "memo_app";
 const DEFAULT_REDIS_URI: &str = "redis://127.0.0.1:6379";
 const DEFAULT_ELASTICSEARCH_URI: &str = "http://127.0.0.1:9200";
