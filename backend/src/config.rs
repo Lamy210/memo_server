@@ -81,11 +81,7 @@ impl AppConfig {
         {
             None | Some("scylla") => AuthoritativeBackend::Scylla,
             Some("mongodb") => AuthoritativeBackend::MongoDb,
-            Some(value) => {
-                return Err(ConfigError::InvalidAuthoritativeBackend(
-                    value.to_string(),
-                ))
-            }
+            Some(value) => return Err(ConfigError::InvalidAuthoritativeBackend(value.to_string())),
         };
 
         let authoritative_uri = match authoritative_backend {
