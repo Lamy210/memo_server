@@ -80,9 +80,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let inserted = inserted.load(Ordering::Relaxed);
     let already_present = already_present.load(Ordering::Relaxed);
+    let destination_count = destination.count_memos_for_migration().await?;
+    verify_cardinality(visited, destination_count)?;
 
     println!(
-        "Backfill complete: visited={visited} inserted={inserted} already_present={already_present}"
+        "Backfill complete: visited={visited} inserted={inserted} already_present={already_present} destination={destination_count}"
     );
     println!(
         "Do not switch AUTHORITATIVE_BACKEND yet. Rebuild or isolate Valkey/Manticore projections, verify application reads, then perform the documented cutover."
@@ -106,4 +108,34 @@ fn required_env(name: &'static str) -> Result<String, Box<dyn std::error::Error>
         return Err(format!("{name} must not be empty").into());
     }
     Ok(value)
+}
+
+
+fn verify_cardinality(
+    source_count: usize,
+    destination_count: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source_count = u64::try_from(source_count)
+        .map_err(|_| "source memo count cannot be represented as u64")?;
+
+    if source_count != destination_count {
+        return Err(format!(
+            "migration verification failed: Scylla source has {source_count} memo(s) but MongoDB destination has {destination_count}; target-only stale rows may exist, so cutover is unsafe"
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_cardinality_requires_exact_match() {
+        assert!(verify_cardinality(3, 3).is_ok());
+        assert!(verify_cardinality(3, 4).is_err());
+        assert!(verify_cardinality(3, 2).is_err());
+    }
 }
