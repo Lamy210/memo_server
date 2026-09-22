@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use crate::{
     application::health::HealthProbe,
-    config::{AppConfig, SearchBackend},
+    config::{AppConfig, AuthoritativeBackend, SearchBackend},
     error::AppResult,
 };
 
 use super::{
     elasticsearch::ElasticsearchClient,
     manticore::ManticoreClient,
+    mongodb::MongoDbAuthoritativeStore,
     ports::{MemoAuthoritativeStore, MemoCache, MemoSearchProjection},
     redis::RedisCache,
     scylla::ScyllaDB,
@@ -25,7 +26,26 @@ pub(crate) struct PersistenceStack {
 
 impl PersistenceStack {
     pub(crate) async fn build(config: &AppConfig) -> AppResult<Self> {
-        let scylla = Arc::new(ScyllaDB::new(&config.scylla_uri).await?);
+        let (authoritative_store, authoritative_health): (
+            Arc<dyn MemoAuthoritativeStore>,
+            Arc<dyn HealthProbe>,
+        ) = match config.authoritative_backend {
+            AuthoritativeBackend::Scylla => {
+                let store = Arc::new(ScyllaDB::new(&config.authoritative_uri).await?);
+                (store.clone(), store)
+            }
+            AuthoritativeBackend::MongoDb => {
+                let store = Arc::new(
+                    MongoDbAuthoritativeStore::new(
+                        &config.authoritative_uri,
+                        &config.mongodb_database,
+                    )
+                    .await?,
+                );
+                (store.clone(), store)
+            }
+        };
+
         let redis = Arc::new(RedisCache::new(&config.redis_uri)?);
 
         let (search_projection, search_health): (
@@ -42,10 +62,7 @@ impl PersistenceStack {
             }
         };
 
-        let authoritative_store: Arc<dyn MemoAuthoritativeStore> = scylla.clone();
         let cache: Arc<dyn MemoCache> = redis.clone();
-
-        let authoritative_health: Arc<dyn HealthProbe> = scylla;
         let cache_health: Arc<dyn HealthProbe> = redis;
 
         Ok(Self {
