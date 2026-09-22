@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 
+use ::mongodb::{
+    bson::doc, error::Error as MongoError, options::WriteConcern, Client, Collection, Database,
+    IndexModel,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, TryStreamExt};
-use ::mongodb::{
-    bson::doc,
-    error::Error as MongoError,
-    options::WriteConcern,
-    Client, Collection, Database, IndexModel,
-};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -62,18 +60,20 @@ impl MemoDocument {
         let user_id = Uuid::parse_str(&self.user_id).map_err(|error| {
             AppError::DatabaseError(format!("Invalid MongoDB memo user id: {error}"))
         })?;
-        let created_at = DateTime::<Utc>::from_timestamp_millis(self.created_at_ms).ok_or_else(|| {
-            AppError::DatabaseError(format!(
-                "Invalid MongoDB memo created_at milliseconds: {}",
-                self.created_at_ms
-            ))
-        })?;
-        let updated_at = DateTime::<Utc>::from_timestamp_millis(self.updated_at_ms).ok_or_else(|| {
-            AppError::DatabaseError(format!(
-                "Invalid MongoDB memo updated_at milliseconds: {}",
-                self.updated_at_ms
-            ))
-        })?;
+        let created_at =
+            DateTime::<Utc>::from_timestamp_millis(self.created_at_ms).ok_or_else(|| {
+                AppError::DatabaseError(format!(
+                    "Invalid MongoDB memo created_at milliseconds: {}",
+                    self.created_at_ms
+                ))
+            })?;
+        let updated_at =
+            DateTime::<Utc>::from_timestamp_millis(self.updated_at_ms).ok_or_else(|| {
+                AppError::DatabaseError(format!(
+                    "Invalid MongoDB memo updated_at milliseconds: {}",
+                    self.updated_at_ms
+                ))
+            })?;
 
         Ok(Memo {
             id,
@@ -153,6 +153,9 @@ fn parse_uuid(field: &str, value: &str) -> AppResult<Uuid> {
 #[derive(Debug)]
 struct OptimisticConflict;
 
+#[derive(Debug)]
+struct MissingMemo;
+
 struct SaveTransactionContext {
     memos: Collection<MemoDocument>,
     intents: Collection<ProjectionIntentDocument>,
@@ -206,11 +209,7 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("create MongoDB memo indexes", error))?;
 
         self.projection_intents
-            .create_index(
-                IndexModel::builder()
-                    .keys(doc! { "memo_id": 1 })
-                    .build(),
-            )
+            .create_index(IndexModel::builder().keys(doc! { "memo_id": 1 }).build())
             .await
             .map_err(|error| mongo_error("create MongoDB projection intent indexes", error))?;
 
@@ -231,9 +230,11 @@ impl MongoDbAuthoritativeStore {
     }
 
     async fn save_transaction(&self, memo: &Memo, event: &ProjectionIntent) -> AppResult<()> {
-        let mut session = self.client.start_session().await.map_err(|error| {
-            mongo_error("start MongoDB session", error)
-        })?;
+        let mut session = self
+            .client
+            .start_session()
+            .await
+            .map_err(|error| mongo_error("start MongoDB session", error))?;
         let context = SaveTransactionContext {
             memos: self.memos.clone(),
             intents: self.projection_intents.clone(),
@@ -295,11 +296,9 @@ impl MongoDbAuthoritativeStore {
 
         match result {
             Ok(()) => Ok(()),
-            Err(error) if error.get_custom::<OptimisticConflict>().is_some() => {
-                Err(AppError::Conflict(
-                    "Memo has been updated by another client".into(),
-                ))
-            }
+            Err(error) if error.get_custom::<OptimisticConflict>().is_some() => Err(
+                AppError::Conflict("Memo has been updated by another client".into()),
+            ),
             Err(error) => Err(mongo_error("commit MongoDB memo transaction", error)),
         }
     }
@@ -321,12 +320,12 @@ impl MongoDbAuthoritativeStore {
             intent: ProjectionIntentDocument::from_intent(event)?,
         };
 
-        session
+        let result = session
             .start_transaction()
             .write_concern(WriteConcern::majority())
             .and_run(context, |session, context| {
                 async move {
-                    context
+                    let result = context
                         .memos
                         .delete_one(doc! {
                             "_id": context.memo_id.clone(),
@@ -334,6 +333,10 @@ impl MongoDbAuthoritativeStore {
                         })
                         .session(&mut *session)
                         .await?;
+
+                    if result.deleted_count != 1 {
+                        return Err(MongoError::custom(MissingMemo));
+                    }
 
                     context
                         .intents
@@ -345,8 +348,15 @@ impl MongoDbAuthoritativeStore {
                 }
                 .boxed()
             })
-            .await
-            .map_err(|error| mongo_error("commit MongoDB delete transaction", error))
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if error.get_custom::<MissingMemo>().is_some() => {
+                Err(AppError::NotFound("Memo not found".into()))
+            }
+            Err(error) => Err(mongo_error("commit MongoDB delete transaction", error)),
+        }
     }
 
     pub async fn health_check(&self) -> AppResult<bool> {
@@ -360,6 +370,10 @@ impl MongoDbAuthoritativeStore {
 
 fn mongo_error(operation: &str, error: MongoError) -> AppError {
     AppError::DatabaseError(format!("{operation} failed: {error}"))
+}
+
+fn order_memos_by_ids(ids: &[Uuid], by_id: &HashMap<Uuid, Memo>) -> Vec<Memo> {
+    ids.iter().filter_map(|id| by_id.get(id).cloned()).collect()
 }
 
 #[async_trait]
@@ -409,15 +423,15 @@ impl MemoAuthoritativeStore for MongoDbAuthoritativeStore {
             by_id.insert(memo.id, memo);
         }
 
-        Ok(ids
-            .iter()
-            .filter_map(|id| by_id.get(id).cloned())
-            .collect())
+        Ok(order_memos_by_ids(ids, &by_id))
     }
 
     async fn save_with_projection_intent(&self, memo: &Memo) -> AppResult<ProjectionIntent> {
-        let event =
-            ProjectionIntent::new(memo.user_id, memo.id, ProjectionTarget::Version(memo.version));
+        let event = ProjectionIntent::new(
+            memo.user_id,
+            memo.id,
+            ProjectionTarget::Version(memo.version),
+        );
         self.save_transaction(memo, &event).await?;
         Ok(event)
     }
@@ -525,12 +539,27 @@ mod tests {
     }
 
     #[test]
-    fn projection_intent_round_trip_preserves_typed_target() {
-        let versioned = ProjectionIntent::new(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            ProjectionTarget::Version(3),
+    fn hydration_preserves_requested_order_and_omits_missing_ids() {
+        let user_id = Uuid::new_v4();
+        let mut first = Memo::new("First".into(), "Content".into(), vec![], user_id);
+        let mut second = Memo::new("Second".into(), "Content".into(), vec![], user_id);
+        first.id = Uuid::new_v4();
+        second.id = Uuid::new_v4();
+        let missing = Uuid::new_v4();
+
+        let by_id = HashMap::from([(first.id, first.clone()), (second.id, second.clone())]);
+        let ordered = order_memos_by_ids(&[second.id, missing, first.id, second.id], &by_id);
+
+        assert_eq!(
+            ordered.iter().map(|memo| memo.id).collect::<Vec<_>>(),
+            vec![second.id, first.id, second.id]
         );
+    }
+
+    #[test]
+    fn projection_intent_round_trip_preserves_typed_target() {
+        let versioned =
+            ProjectionIntent::new(Uuid::new_v4(), Uuid::new_v4(), ProjectionTarget::Version(3));
         let deleted =
             ProjectionIntent::new(Uuid::new_v4(), Uuid::new_v4(), ProjectionTarget::Deleted);
 
@@ -554,11 +583,8 @@ mod tests {
 
     #[test]
     fn projection_version_must_be_positive() {
-        let event = ProjectionIntent::new(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            ProjectionTarget::Version(0),
-        );
+        let event =
+            ProjectionIntent::new(Uuid::new_v4(), Uuid::new_v4(), ProjectionTarget::Version(0));
 
         assert!(ProjectionIntentDocument::from_intent(&event).is_err());
     }
