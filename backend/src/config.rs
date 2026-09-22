@@ -4,12 +4,17 @@ use std::env;
 use thiserror::Error;
 
 const DEFAULT_SCYLLA_URI: &str = "127.0.0.1:9042";
-const DEFAULT_MONGODB_URI: &str = "mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true";
+const DEFAULT_MONGODB_URI: &str =
+    "mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true";
 const DEFAULT_MONGODB_DATABASE: &str = "memo_app";
 const DEFAULT_REDIS_URI: &str = "redis://127.0.0.1:6379";
 const DEFAULT_ELASTICSEARCH_URI: &str = "http://127.0.0.1:9200";
 const DEFAULT_MANTICORE_URI: &str = "http://127.0.0.1:9308";
 const DEFAULT_PORT: u16 = 8080;
+
+// MongoDB database names on Unix/Linux must not contain NUL, space, double quote,
+// dollar sign, dot, forward slash, or backslash.
+const INVALID_MONGODB_DATABASE_BYTES: [u8; 7] = [0, 32, 34, 36, 46, 47, 92];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthConfig {
@@ -110,6 +115,7 @@ impl AppConfig {
             .get("REDIS_URL")
             .cloned()
             .unwrap_or_else(|| DEFAULT_REDIS_URI.to_string());
+
         let search_backend = match vars
             .get("SEARCH_BACKEND")
             .map(|value| value.to_ascii_lowercase())
@@ -171,19 +177,10 @@ fn validate_mongodb_database_name(name: &str) -> Result<(), ConfigError> {
         return Err(ConfigError::EmptyMongoDatabase);
     }
 
-    let invalid_character = name
-        .chars()
-        .any(|character| matches!(character, '/' | '\\' | '.' | ' ' | '"' | '
-    vars: &HashMap<String, String>,
-    name: &'static str,
-) -> Result<String, ConfigError> {
-    vars.get(name)
-        .filter(|value| !value.trim().is_empty())
-        .cloned()
-        .ok_or(ConfigError::MissingJwtSetting(name))
-}
- | '\0'));
-    if name.as_bytes().len() >= 64 || invalid_character {
+    let has_invalid_byte = name
+        .bytes()
+        .any(|byte| INVALID_MONGODB_DATABASE_BYTES.contains(&byte));
+    if name.len() >= 64 || has_invalid_byte {
         return Err(ConfigError::InvalidMongoDatabase(name.to_string()));
     }
 
