@@ -4,10 +4,16 @@ use std::env;
 use thiserror::Error;
 
 const DEFAULT_SCYLLA_URI: &str = "127.0.0.1:9042";
+const DEFAULT_MONGODB_URI: &str = "mongodb://127.0.0.1:27017/?replicaSet=rs0&directConnection=true";
+const DEFAULT_MONGODB_DATABASE: &str = "memo_app";
 const DEFAULT_REDIS_URI: &str = "redis://127.0.0.1:6379";
 const DEFAULT_ELASTICSEARCH_URI: &str = "http://127.0.0.1:9200";
 const DEFAULT_MANTICORE_URI: &str = "http://127.0.0.1:9308";
 const DEFAULT_PORT: u16 = 8080;
+
+// MongoDB database names on Unix/Linux must not contain NUL, space, double quote,
+// dollar sign, dot, forward slash, or backslash.
+const INVALID_MONGODB_DATABASE_BYTES: [u8; 7] = [0, 32, 34, 36, 46, 47, 92];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthConfig {
@@ -20,6 +26,12 @@ pub enum AuthConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthoritativeBackend {
+    Scylla,
+    MongoDb,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchBackend {
     Elasticsearch,
     Manticore,
@@ -27,7 +39,9 @@ pub enum SearchBackend {
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
-    pub scylla_uri: String,
+    pub authoritative_backend: AuthoritativeBackend,
+    pub authoritative_uri: String,
+    pub mongodb_database: String,
     pub redis_uri: String,
     pub search_backend: SearchBackend,
     pub search_uri: String,
@@ -39,6 +53,12 @@ pub struct AppConfig {
 pub enum ConfigError {
     #[error("PORT must be a valid u16, got `{0}`")]
     InvalidPort(String),
+    #[error("AUTHORITATIVE_BACKEND must be `scylla` or `mongodb`, got `{0}`")]
+    InvalidAuthoritativeBackend(String),
+    #[error("MONGODB_DATABASE must not be empty")]
+    EmptyMongoDatabase,
+    #[error("MONGODB_DATABASE is not a valid MongoDB database name: `{0}`")]
+    InvalidMongoDatabase(String),
     #[error("SEARCH_BACKEND must be `elasticsearch` or `manticore`, got `{0}`")]
     InvalidSearchBackend(String),
     #[error("AUTH_MODE is required; use `development` or `jwt`")]
@@ -60,15 +80,41 @@ impl AppConfig {
     {
         let vars: HashMap<String, String> = vars.into_iter().collect();
 
-        let scylla_uri = vars
-            .get("SCYLLA_URI")
-            .or_else(|| vars.get("DATABASE_URL"))
+        let authoritative_backend = match vars
+            .get("AUTHORITATIVE_BACKEND")
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref()
+        {
+            None | Some("scylla") => AuthoritativeBackend::Scylla,
+            Some("mongodb") => AuthoritativeBackend::MongoDb,
+            Some(value) => return Err(ConfigError::InvalidAuthoritativeBackend(value.to_string())),
+        };
+
+        let authoritative_uri = match authoritative_backend {
+            AuthoritativeBackend::Scylla => vars
+                .get("SCYLLA_URI")
+                .or_else(|| vars.get("DATABASE_URL"))
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_SCYLLA_URI.to_string()),
+            AuthoritativeBackend::MongoDb => vars
+                .get("MONGODB_URI")
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_MONGODB_URI.to_string()),
+        };
+
+        let mongodb_database = vars
+            .get("MONGODB_DATABASE")
             .cloned()
-            .unwrap_or_else(|| DEFAULT_SCYLLA_URI.to_string());
+            .unwrap_or_else(|| DEFAULT_MONGODB_DATABASE.to_string());
+        if authoritative_backend == AuthoritativeBackend::MongoDb {
+            validate_mongodb_database_name(&mongodb_database)?;
+        }
+
         let redis_uri = vars
             .get("REDIS_URL")
             .cloned()
             .unwrap_or_else(|| DEFAULT_REDIS_URI.to_string());
+
         let search_backend = match vars
             .get("SEARCH_BACKEND")
             .map(|value| value.to_ascii_lowercase())
@@ -113,7 +159,9 @@ impl AppConfig {
         };
 
         Ok(Self {
-            scylla_uri,
+            authoritative_backend,
+            authoritative_uri,
+            mongodb_database,
             redis_uri,
             search_backend,
             search_uri,
@@ -121,6 +169,21 @@ impl AppConfig {
             auth,
         })
     }
+}
+
+fn validate_mongodb_database_name(name: &str) -> Result<(), ConfigError> {
+    if name.trim().is_empty() {
+        return Err(ConfigError::EmptyMongoDatabase);
+    }
+
+    let has_invalid_byte = name
+        .bytes()
+        .any(|byte| INVALID_MONGODB_DATABASE_BYTES.contains(&byte));
+    if name.len() >= 64 || has_invalid_byte {
+        return Err(ConfigError::InvalidMongoDatabase(name.to_string()));
+    }
+
+    Ok(())
 }
 
 fn required_jwt_setting(

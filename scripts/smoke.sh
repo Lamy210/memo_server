@@ -8,7 +8,7 @@ diagnose_failure() {
   set +e
   echo "Compose smoke test failed: line=$line exit_status=$status" >&2
   docker compose ps >&2
-  docker compose logs --no-color --tail=200 scylla backend manticore valkey frontend >&2
+  docker compose logs --no-color --tail=200 mongodb backend manticore valkey frontend >&2
   exit "$status"
 }
 
@@ -46,7 +46,7 @@ wait_for_url() {
 if ! docker compose up -d --build; then
   echo "Docker Compose startup failed" >&2
   docker compose ps >&2 || true
-  docker compose logs --no-color --tail=300 scylla backend manticore valkey frontend >&2 || true
+  docker compose logs --no-color --tail=300 mongodb backend manticore valkey frontend >&2 || true
   exit 1
 fi
 
@@ -66,9 +66,9 @@ ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
 jq -e '
   .ready == true
   and .status == "ready"
-  and .checks.scylla == "ok"
-  and .checks.redis == "ok"
-  and .checks.elasticsearch == "ok"
+  and .checks.authoritative == "ok"
+  and .checks.cache == "ok"
+  and .checks.search == "ok"
 ' <<<"$ready" >/dev/null
 echo "Smoke milestone: readiness ready"
 
@@ -319,9 +319,9 @@ degraded_ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
 jq -e '
   .ready == true
   and .status == "degraded"
-  and .checks.scylla == "ok"
-  and .checks.redis == "down"
-  and .checks.elasticsearch == "down"
+  and .checks.authoritative == "ok"
+  and .checks.cache == "down"
+  and .checks.search == "down"
 ' <<<"$degraded_ready" >/dev/null
 
 memo_curl -fsS "http://localhost:8083/api/v1/memos/$resilience_id" \
@@ -329,7 +329,7 @@ memo_curl -fsS "http://localhost:8083/api/v1/memos/$resilience_id" \
 
 outage_created="$(memo_curl -fsS \
   -H 'Content-Type: application/json' \
-  -d '{"title":"Outage write","content":"Scylla remains authoritative","tags":["ci","resilience"]}' \
+  -d '{"title":"Outage write","content":"MongoDB remains authoritative","tags":["ci","resilience"]}' \
   http://localhost:8083/api/v1/memos)"
 outage_id="$(jq -er '.id' <<<"$outage_created")"
 
@@ -343,9 +343,9 @@ restart_degraded="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
 jq -e '
   .ready == true
   and .status == "degraded"
-  and .checks.scylla == "ok"
-  and .checks.redis == "down"
-  and .checks.elasticsearch == "down"
+  and .checks.authoritative == "ok"
+  and .checks.cache == "down"
+  and .checks.search == "down"
 ' <<<"$restart_degraded" >/dev/null
 
 docker compose start valkey manticore >/dev/null
@@ -382,11 +382,11 @@ if [[ "$projection_recovered" -ne 1 ]]; then
   exit 1
 fi
 
-docker compose stop scylla >/dev/null
+docker compose stop mongodb >/dev/null
 unavailable_body="$(mktemp)"
 ready_status="$(curl -sS -o "$unavailable_body" -w '%{http_code}' "http://localhost:8083/api/v1/health/ready")"
 if [[ "$ready_status" != "503" ]]; then
-  echo "Expected readiness to return 503 when Scylla is down, got $ready_status" >&2
+  echo "Expected readiness to return 503 when MongoDB is down, got $ready_status" >&2
   cat "$unavailable_body" >&2 || true
   rm -f "$unavailable_body"
   exit 1
@@ -394,7 +394,7 @@ fi
 jq -e '
   .ready == false
   and .status == "unavailable"
-  and .checks.scylla == "down"
+  and .checks.authoritative == "down"
 ' "$unavailable_body" >/dev/null
 rm -f "$unavailable_body"
 

@@ -50,6 +50,60 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      - name: Start MongoDB replica set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run -d --name memo-mongodb-ci -p 27017:27017 \
+            mongo:8.0.32 --replSet rs0 --bind_ip_all
+
+          ready=0
+          for _ in $(seq 1 60); do
+            if docker exec memo-mongodb-ci mongosh --quiet \
+              --eval 'db.adminCommand({ ping: 1 }).ok' | grep -qx '1'; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$ready" -ne 1 ]]; then
+            docker logs memo-mongodb-ci >&2 || true
+            exit 1
+          fi
+
+          docker exec memo-mongodb-ci mongosh --quiet --eval \
+            'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+
+          primary=0
+          for _ in $(seq 1 60); do
+            state="$(docker exec memo-mongodb-ci mongosh --quiet \
+              --eval 'try { rs.status().myState } catch (error) { 0 }' | tail -n 1)"
+            if [[ "$state" == "1" ]]; then
+              primary=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$primary" -ne 1 ]]; then
+            docker exec memo-mongodb-ci mongosh --quiet --eval 'rs.status()' >&2 || true
+            docker logs memo-mongodb-ci >&2 || true
+            exit 1
+          fi
+
+      - name: MongoDB transactional integration
+        env:
+          MONGODB_TEST_URI: mongodb://localhost:27017/?replicaSet=rs0&directConnection=true&serverSelectionTimeoutMS=10000
+        run: |
+          cargo test --locked mongodb_replica_set_preserves_atomic_outbox_and_tenant_scope \
+            -- --ignored --nocapture
+
+      - name: Stop MongoDB replica set
+        if: always()
+        run: docker rm -f memo-mongodb-ci >/dev/null 2>&1 || true
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

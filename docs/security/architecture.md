@@ -18,9 +18,9 @@ The current application on `main` uses:
 
 - Rust / Actix Web backend
 - SvelteKit 2 / Svelte 5 frontend
-- ScyllaDB as the authoritative memo store
+- MongoDB as the Compose/CI authoritative-store target with ScyllaDB retained as an explicit migration fallback
 - Valkey 9.1 as a disposable cache (runtime cutover complete; ciphertext-only cache representation remains part of the HIGH encryption migration)
-- Elasticsearch as a rebuildable search projection
+- Manticore Search as the Compose/CI rebuildable search projection with Elasticsearch retained as an explicit migration fallback
 - an independent JWT issuing authentication service boundary
 
 The target storage stack is:
@@ -29,7 +29,7 @@ The target storage stack is:
 - Valkey as disposable cache
 - Manticore Search as rebuildable search projection
 
-Storage migration and cryptographic migration are separate concerns. Security work must not silently replace persistence implementations in the same pull request unless the PR explicitly owns both changes.
+Storage migration and cryptographic migration are separate concerns. MongoDB and Manticore migration adapters still handle plaintext domain data during this phase; that does not satisfy the HIGH encrypted-storage target. Existing ScyllaDB deployments must remain explicitly selected until verified backfill/cutover is complete.
 
 ## 3. Security profiles
 

@@ -29,6 +29,12 @@ pub enum ReadinessStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HealthChecks {
+    pub authoritative: ComponentStatus,
+    pub cache: ComponentStatus,
+    pub search: ComponentStatus,
+
+    // Deprecated compatibility aliases. Remove only after downstream
+    // monitoring has migrated to the responsibility-oriented names above.
     pub scylla: ComponentStatus,
     pub redis: ComponentStatus,
     pub elasticsearch: ComponentStatus,
@@ -43,34 +49,34 @@ pub struct ReadinessResponse {
 }
 
 pub struct HealthService {
-    scylla: Arc<dyn HealthProbe>,
-    redis: Arc<dyn HealthProbe>,
-    elasticsearch: Arc<dyn HealthProbe>,
+    authoritative: Arc<dyn HealthProbe>,
+    cache: Arc<dyn HealthProbe>,
+    search: Arc<dyn HealthProbe>,
     probe_timeout: Duration,
 }
 
 impl HealthService {
     pub fn new(
-        scylla: Arc<dyn HealthProbe>,
-        redis: Arc<dyn HealthProbe>,
-        elasticsearch: Arc<dyn HealthProbe>,
+        authoritative: Arc<dyn HealthProbe>,
+        cache: Arc<dyn HealthProbe>,
+        search: Arc<dyn HealthProbe>,
     ) -> Self {
         Self {
-            scylla,
-            redis,
-            elasticsearch,
+            authoritative,
+            cache,
+            search,
             probe_timeout: DEFAULT_PROBE_TIMEOUT,
         }
     }
 
     pub async fn readiness(&self) -> ReadinessResponse {
-        let (scylla, redis, elasticsearch) = tokio::join!(
-            check_with_timeout("scylla", &self.scylla, self.probe_timeout),
-            check_with_timeout("redis", &self.redis, self.probe_timeout),
-            check_with_timeout("elasticsearch", &self.elasticsearch, self.probe_timeout,),
+        let (authoritative, cache, search) = tokio::join!(
+            check_with_timeout("authoritative", &self.authoritative, self.probe_timeout),
+            check_with_timeout("cache", &self.cache, self.probe_timeout),
+            check_with_timeout("search", &self.search, self.probe_timeout,),
         );
 
-        readiness_from_checks(scylla, redis, elasticsearch)
+        readiness_from_checks(authoritative, cache, search)
     }
 }
 
@@ -90,14 +96,14 @@ async fn check_with_timeout(
 }
 
 fn readiness_from_checks(
-    scylla: ComponentStatus,
-    redis: ComponentStatus,
-    elasticsearch: ComponentStatus,
+    authoritative: ComponentStatus,
+    cache: ComponentStatus,
+    search: ComponentStatus,
 ) -> ReadinessResponse {
-    let ready = scylla == ComponentStatus::Ok;
+    let ready = authoritative == ComponentStatus::Ok;
     let status = if !ready {
         ReadinessStatus::Unavailable
-    } else if redis == ComponentStatus::Ok && elasticsearch == ComponentStatus::Ok {
+    } else if cache == ComponentStatus::Ok && search == ComponentStatus::Ok {
         ReadinessStatus::Ready
     } else {
         ReadinessStatus::Degraded
@@ -107,9 +113,12 @@ fn readiness_from_checks(
         ready,
         status,
         checks: HealthChecks {
-            scylla,
-            redis,
-            elasticsearch,
+            authoritative,
+            cache,
+            search,
+            scylla: authoritative,
+            redis: cache,
+            elasticsearch: search,
         },
         timestamp: Utc::now(),
     }
@@ -129,6 +138,12 @@ mod tests {
 
         assert!(result.ready);
         assert_eq!(result.status, ReadinessStatus::Ready);
+        assert_eq!(result.checks.authoritative, ComponentStatus::Ok);
+        assert_eq!(result.checks.cache, ComponentStatus::Ok);
+        assert_eq!(result.checks.search, ComponentStatus::Ok);
+        assert_eq!(result.checks.scylla, result.checks.authoritative);
+        assert_eq!(result.checks.redis, result.checks.cache);
+        assert_eq!(result.checks.elasticsearch, result.checks.search);
     }
 
     #[test]
