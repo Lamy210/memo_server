@@ -369,6 +369,84 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    #[ignore = "requires a local Manticore Search instance"]
+    async fn high_manticore_preserves_owner_scope_and_blind_tokens() {
+        let uri = std::env::var("MANTICORE_TEST_URL")
+            .unwrap_or_else(|_| "http://localhost:9308".to_string());
+        let client = HighManticoreClient::new(&uri).unwrap();
+
+        client
+            .execute_raw_sql(
+                "DROP TABLE IF EXISTS memos_high_v1",
+                "integration cleanup before test",
+            )
+            .await
+            .unwrap();
+
+        let owner = Uuid::new_v4();
+        let other_owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let blind_content = token("search-v1", "ab");
+        let blind_tag = token("search-v1", "cd");
+        let document = HighSearchProjectionDocument {
+            memo_id,
+            owner_partition: owner,
+            version: 1,
+            search_key_version: "search-v1".into(),
+            content_tokens: vec![blind_content.clone()],
+            tag_tokens: vec![blind_tag.clone()],
+        };
+
+        client.replace_document(&document).await.unwrap();
+
+        let query = HighSearchProjectionQuery {
+            content_tokens: vec![blind_content],
+            tag_token: Some(blind_tag),
+            search_key_version: Some("search-v1".into()),
+        };
+
+        let owner_hits = client
+            .search_memo_ids(owner, &query, 1, 20)
+            .await
+            .unwrap();
+        assert_eq!(owner_hits.total, 1);
+        assert_eq!(owner_hits.memo_ids, vec![memo_id]);
+
+        let other_owner_hits = client
+            .search_memo_ids(other_owner, &query, 1, 20)
+            .await
+            .unwrap();
+        assert_eq!(other_owner_hits.total, 0);
+        assert!(other_owner_hits.memo_ids.is_empty());
+
+        client
+            .delete_document(other_owner, memo_id)
+            .await
+            .unwrap();
+        let after_wrong_owner_delete = client
+            .search_memo_ids(owner, &query, 1, 20)
+            .await
+            .unwrap();
+        assert_eq!(after_wrong_owner_delete.memo_ids, vec![memo_id]);
+
+        client.delete_document(owner, memo_id).await.unwrap();
+        let after_owner_delete = client
+            .search_memo_ids(owner, &query, 1, 20)
+            .await
+            .unwrap();
+        assert_eq!(after_owner_delete.total, 0);
+        assert!(after_owner_delete.memo_ids.is_empty());
+
+        client
+            .execute_raw_sql(
+                "DROP TABLE IF EXISTS memos_high_v1",
+                "integration cleanup after test",
+            )
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn protected_projection_body_contains_no_semantic_plaintext_fields() {
         let document = HighSearchProjectionDocument {
