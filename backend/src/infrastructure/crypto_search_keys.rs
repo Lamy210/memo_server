@@ -9,9 +9,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    application::crypto_search::{
-        search_version_identifier_is_valid, MAX_SEARCH_VERSION_ID_CHARS,
-    },
+    application::crypto_search::{search_version_identifier_is_valid, MAX_SEARCH_VERSION_ID_CHARS},
     error::{AppError, AppResult},
 };
 
