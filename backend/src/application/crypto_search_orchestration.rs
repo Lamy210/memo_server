@@ -165,7 +165,11 @@ impl HighSearchProjectionService {
         }
         let (mut combined_tokens, key_version) =
             self.derive_terms(owner_partition, &combined_terms).await?;
-        let tag_token = has_tag.then(|| combined_tokens.pop()).flatten();
+        let tag_token = if has_tag {
+            combined_tokens.pop()
+        } else {
+            None
+        };
         let mut content_tokens = combined_tokens;
         content_tokens.sort_by(|left, right| left.value.cmp(&right.value));
 
