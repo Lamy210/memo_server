@@ -276,6 +276,8 @@ Manticore
 
 Blind indexing does not provide zero knowledge. Depending on the scheme and attacker visibility, equality, frequency, document relationship, access patterns, and query patterns may leak.
 
+The staged `SEARCH-HIGH-1` implementation derives owner-scoped HMAC-SHA-384 tokens through an independent search-key provider boundary. The cryptographic boundary accepts one pre-normalized term and returns an opaque 96-character hexadecimal token plus an opaque key version. Search-key material is zeroized and must not reuse memo-encryption DEKs. The current Manticore request path still indexes plaintext and is not switched to this staged token implementation yet.
+
 ### VAULT
 
 Private VAULT content is not projected to server-side search.
