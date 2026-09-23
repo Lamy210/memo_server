@@ -123,6 +123,29 @@ impl HighMemoMigrationService {
         self.staging.count_staged().await
     }
 
+    /// Verify that an already-staged envelope still decrypts to the current
+    /// authoritative memo. This never creates or replaces staging data.
+    pub async fn verify_staged_memo(&self, memo: &Memo) -> AppResult<()> {
+        if !memo.validate() {
+            return Err(AppError::ValidationError(
+                "Memo violates domain invariants during HIGH staging verification".into(),
+            ));
+        }
+
+        let envelope = self
+            .staging
+            .find_staged(memo.user_id, memo.id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Conflict(format!(
+                    "Encrypted migration target is missing authoritative memo {}",
+                    memo.id
+                ))
+            })?;
+
+        self.verify_envelope_matches_memo(memo, &envelope).await
+    }
+
     async fn verify_envelope_matches_memo(
         &self,
         expected: &Memo,
