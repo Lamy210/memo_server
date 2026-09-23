@@ -13,9 +13,9 @@ pub const MAX_SEARCH_VERSION_ID_CHARS: usize = 128;
 pub fn search_version_identifier_is_valid(value: &str) -> bool {
     !value.is_empty()
         && value.chars().count() <= MAX_SEARCH_VERSION_ID_CHARS
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
 /// Opaque blind-index token suitable for a rebuildable HIGH search projection.
