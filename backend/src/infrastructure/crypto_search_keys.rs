@@ -156,10 +156,7 @@ impl SearchKeyProvider for HkdfSearchKeyProvider {
         let seed = self.seeds.resolve_search_seed(owner_partition).await?;
         seed.validate()?;
 
-        let key_version = format!(
-            "{SEARCH_KEY_DERIVATION_VERSION}:{}",
-            seed.key_version
-        );
+        let key_version = format!("{SEARCH_KEY_DERIVATION_VERSION}:{}", seed.key_version);
         if !search_version_identifier_is_valid(&key_version) {
             return Err(AppError::ServiceUnavailable(format!(
                 "Derived search-key version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
