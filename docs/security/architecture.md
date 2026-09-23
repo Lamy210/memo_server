@@ -276,7 +276,9 @@ Manticore
 
 Blind indexing does not provide zero knowledge. Depending on the scheme and attacker visibility, equality, frequency, document relationship, access patterns, and query patterns may leak.
 
-The staged `SEARCH-HIGH-1` implementation derives owner-scoped HMAC-SHA-384 tokens through an independent search-key provider boundary. The cryptographic boundary accepts one pre-normalized term and returns an opaque 96-character hexadecimal token plus an opaque key version. Search-key material is zeroized and must not reuse memo-encryption DEKs. The current Manticore request path still indexes plaintext and is not switched to this staged token implementation yet.
+The staged `SEARCH-HIGH-1` implementation derives owner-scoped HMAC-SHA-384 tokens through an independent search-key provider boundary. The cryptographic boundary accepts one pre-normalized term and returns an opaque 96-character hexadecimal token plus an opaque key version. Search-key material is zeroized and must not reuse memo-encryption DEKs.
+
+A separate protected Manticore adapter stages these tokens in `memos_high_v1`. Its full-text fields are indexed-only, use `dict=keywords_32k` for the 96-character machine-generated tokens, and contain no title/body/tag plaintext or user-visible timestamps. The table stores only opaque routing/version metadata needed for authorization, deterministic pagination, key-rotation routing, and search-analysis-version routing. Tokenized queries must target the same analysis version used to build the projection so normalization/tokenization changes require an explicit reindex rather than silently mixing semantics. Search responses explicitly exclude source attributes, and projection deletion is scoped by both owner partition and memo ID rather than memo ID alone. The current request path still uses the legacy plaintext projection until coordinated cutover.
 
 ### VAULT
 

@@ -8,6 +8,15 @@ use crate::error::{AppError, AppResult};
 pub const SEARCH_HIGH_SUITE_ID: &str = "SEARCH-HIGH-1";
 pub const SEARCH_HIGH_TOKEN_BYTES: usize = 48;
 pub const SEARCH_HIGH_TOKEN_HEX_CHARS: usize = SEARCH_HIGH_TOKEN_BYTES * 2;
+pub const MAX_SEARCH_VERSION_ID_CHARS: usize = 128;
+
+pub fn search_version_identifier_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= MAX_SEARCH_VERSION_ID_CHARS
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
 
 /// Opaque blind-index token suitable for a rebuildable HIGH search projection.
 ///
@@ -28,13 +37,16 @@ impl HighSearchToken {
                 self.suite_id
             )));
         }
-        if self.key_version.trim().is_empty() {
-            return Err(AppError::DatabaseError(
-                "HIGH search token key version must not be empty".into(),
-            ));
+        if !search_version_identifier_is_valid(&self.key_version) {
+            return Err(AppError::DatabaseError(format!(
+                "HIGH search token key version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
+            )));
         }
         if self.value.len() != SEARCH_HIGH_TOKEN_HEX_CHARS
-            || !self.value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !self
+                .value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
         {
             return Err(AppError::DatabaseError(
                 "HIGH search token must be a SHA-384-sized hexadecimal value".into(),
@@ -106,6 +118,18 @@ mod tests {
 
         let mut invalid = valid.clone();
         invalid.value.replace_range(0..1, "z");
+        assert!(invalid.validate().is_err());
+
+        let mut invalid = valid.clone();
+        invalid.value.replace_range(0..1, "A");
+        assert!(invalid.validate().is_err());
+
+        let mut invalid = valid.clone();
+        invalid.key_version = "search key v1".into();
+        assert!(invalid.validate().is_err());
+
+        let mut invalid = valid.clone();
+        invalid.key_version = "x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1);
         assert!(invalid.validate().is_err());
 
         let mut invalid = valid;

@@ -8,7 +8,10 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    application::crypto_search::{search_version_identifier_is_valid, MAX_SEARCH_VERSION_ID_CHARS},
+    error::{AppError, AppResult},
+};
 
 pub(super) const SEARCH_KEY_BYTES: usize = 48;
 
@@ -37,10 +40,10 @@ pub(super) struct ResolvedSearchKey {
 
 impl ResolvedSearchKey {
     pub(super) fn validate(&self) -> AppResult<()> {
-        if self.key_version.trim().is_empty() {
-            return Err(AppError::ServiceUnavailable(
-                "Search-key provider returned an empty key version".into(),
-            ));
+        if !search_version_identifier_is_valid(&self.key_version) {
+            return Err(AppError::ServiceUnavailable(format!(
+                "Search-key provider key version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
+            )));
         }
         Ok(())
     }
@@ -90,6 +93,18 @@ mod tests {
         let invalid = ResolvedSearchKey {
             plaintext: SecretSearchKey::new([0x01; SEARCH_KEY_BYTES]),
             key_version: " ".into(),
+        };
+        assert!(invalid.validate().is_err());
+
+        let invalid = ResolvedSearchKey {
+            plaintext: SecretSearchKey::new([0x01; SEARCH_KEY_BYTES]),
+            key_version: "search key v1".into(),
+        };
+        assert!(invalid.validate().is_err());
+
+        let invalid = ResolvedSearchKey {
+            plaintext: SecretSearchKey::new([0x01; SEARCH_KEY_BYTES]),
+            key_version: "x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1),
         };
         assert!(invalid.validate().is_err());
     }
