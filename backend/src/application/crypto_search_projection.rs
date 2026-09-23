@@ -160,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn tokenized_query_requires_explicit_key_version() {
+    fn tokenized_query_requires_explicit_analysis_and_key_versions() {
         let query = HighSearchProjectionQuery {
             content_tokens: vec![token("search-v1", "ab")],
             tag_token: None,
@@ -176,6 +176,7 @@ mod tests {
         let query = HighSearchProjectionQuery {
             content_tokens: vec![],
             tag_token: None,
+            analysis_version: None,
             search_key_version: None,
         };
 
