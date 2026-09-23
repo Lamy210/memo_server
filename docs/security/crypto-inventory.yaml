@@ -124,6 +124,10 @@ assets:
       server_index: Manticore
       legacy_server_index: Elasticsearch
       selection: SEARCH_BACKEND
+      blind_token_deriver: staged
+      search_key_provider: boundary_staged
+      production_search_key_provider: not_implemented
+      runtime_eligible: false
     migration_status: in_progress
     owner: memo-search
 
