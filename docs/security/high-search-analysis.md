@@ -52,7 +52,7 @@ The application orchestration:
 
 - validates analyzer output before HMAC,
 - deduplicates normalized terms before token derivation,
-- uses deterministic term ordering,
+- sorts only the resulting opaque blind-token values before projection, rather than persisting plaintext-derived term ordering,
 - rejects empty content-term sets for projected memos,
 - never logs normalized terms,
 - rejects mixed search-key versions within one projection/search operation.
