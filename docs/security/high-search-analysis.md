@@ -93,5 +93,9 @@ Runtime cutover still requires:
 - a production language-aware analyzer,
 - a production search-key provider,
 - protected projection backfill/reindex verification,
+- an explicit search-key rotation protocol that prevents old/new key-version query gaps (for example generation-based reindex plus atomic switch or verified dual-read),
+- an explicit analysis-version migration protocol for tokenizer/normalizer changes,
 - request-path orchestration wiring,
 - rollback rehearsal.
+
+Changing either the search-key version or analysis version in place while only one version is queried can make valid documents temporarily undiscoverable. Runtime activation must therefore treat projection generations as a coordinated migration, not as a per-request configuration flip.
