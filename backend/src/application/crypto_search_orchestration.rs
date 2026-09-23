@@ -106,13 +106,15 @@ impl HighSearchProjectionService {
             ));
         }
 
-        let mut key_version = None;
-        let content_tokens = self
-            .derive_terms(memo.user_id, &content_terms, &mut key_version)
-            .await?;
-        let tag_tokens = self
-            .derive_terms(memo.user_id, &tag_terms, &mut key_version)
-            .await?;
+        let content_len = content_terms.len();
+        let mut combined_terms = content_terms;
+        combined_terms.extend(tag_terms);
+        let (mut combined_tokens, key_version) =
+            self.derive_terms(memo.user_id, &combined_terms).await?;
+        let mut tag_tokens = combined_tokens.split_off(content_len);
+        let mut content_tokens = combined_tokens;
+        content_tokens.sort_by(|left, right| left.value.cmp(&right.value));
+        tag_tokens.sort_by(|left, right| left.value.cmp(&right.value));
         let search_key_version = key_version.ok_or_else(|| {
             AppError::InternalServerError(
                 "HIGH search projection produced no search-key version".into(),
@@ -156,19 +158,16 @@ impl HighSearchProjectionService {
             ));
         }
 
-        let mut key_version = None;
-        let content_tokens = self
-            .derive_terms(owner_partition, &content_terms, &mut key_version)
-            .await?;
-        let tag_token = match tag_term {
-            Some(term) => {
-                let tokens = self
-                    .derive_terms(owner_partition, &[term], &mut key_version)
-                    .await?;
-                tokens.into_iter().next()
-            }
-            None => None,
-        };
+        let has_tag = tag_term.is_some();
+        let mut combined_terms = content_terms;
+        if let Some(term) = tag_term {
+            combined_terms.push(term);
+        }
+        let (mut combined_tokens, key_version) =
+            self.derive_terms(owner_partition, &combined_terms).await?;
+        let tag_token = has_tag.then(|| combined_tokens.pop()).flatten();
+        let mut content_tokens = combined_tokens;
+        content_tokens.sort_by(|left, right| left.value.cmp(&right.value));
 
         let tokenized = !content_tokens.is_empty() || tag_token.is_some();
         let projection_query = HighSearchProjectionQuery {
@@ -194,15 +193,21 @@ impl HighSearchProjectionService {
         &self,
         owner_partition: Uuid,
         terms: &[String],
-        operation_key_version: &mut Option<String>,
-    ) -> AppResult<Vec<HighSearchToken>> {
-        let mut tokens = Vec::with_capacity(terms.len());
+    ) -> AppResult<(Vec<HighSearchToken>, Option<String>)> {
+        let tokens = self
+            .cryptography
+            .derive_tokens(owner_partition, terms)
+            .await?;
+        if tokens.len() != terms.len() {
+            return Err(AppError::InternalServerError(format!(
+                "HIGH search cryptography returned {} token(s) for {} normalized term(s)",
+                tokens.len(),
+                terms.len()
+            )));
+        }
 
-        for term in terms {
-            let token = self
-                .cryptography
-                .derive_token(owner_partition, term)
-                .await?;
+        let mut operation_key_version = None;
+        for token in &tokens {
             token.validate()?;
 
             if let Some(expected) = operation_key_version.as_deref() {
@@ -213,14 +218,11 @@ impl HighSearchProjectionService {
                     ));
                 }
             } else {
-                *operation_key_version = Some(token.key_version.clone());
+                operation_key_version = Some(token.key_version.clone());
             }
-
-            tokens.push(token);
         }
 
-        tokens.sort_by(|left, right| left.value.cmp(&right.value));
-        Ok(tokens)
+        Ok((tokens, operation_key_version))
     }
 }
 
