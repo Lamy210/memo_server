@@ -121,7 +121,7 @@ This runbook does not authorize production execution yet. The following remain b
 - deployment configuration and least-privilege KMS identity,
 - a guarded migration command or operational job,
 - HIGH Valkey request-path wiring and retirement of the legacy plaintext cache contract,
-- application orchestration/tokenization wiring for the protected Manticore adapter plus a production search-key provider,
+- application orchestration/tokenization wiring for the protected Manticore adapter, including an explicitly versioned language-aware analyzer, plus a production search-key provider,
 - encrypted authoritative-store request-path integration,
 - final cutover/rollback rehearsal.
 
