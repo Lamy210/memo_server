@@ -7,8 +7,7 @@ use tracing::error;
 
 use crate::{
     application::{
-        crypto::HighEncryptedMemoEnvelope,
-        crypto_cache::HighEncryptedMemoCache,
+        crypto::HighEncryptedMemoEnvelope, crypto_cache::HighEncryptedMemoCache,
         health::HealthProbe,
     },
     domain::memo::entity::Memo,
@@ -222,7 +221,6 @@ impl HealthProbe for RedisCache {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
