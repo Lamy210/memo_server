@@ -3,6 +3,7 @@ pub mod crypto_cache;
 pub mod crypto_migration;
 pub mod crypto_migration_batch;
 pub mod crypto_search;
+pub mod crypto_search_orchestration;
 pub mod crypto_search_projection;
 pub mod health;
 pub mod memo;
