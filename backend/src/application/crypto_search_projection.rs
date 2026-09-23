@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    application::crypto_search::{HighSearchToken, SEARCH_HIGH_SUITE_ID},
+    application::crypto_search::{
+        search_version_identifier_is_valid, HighSearchToken, MAX_SEARCH_VERSION_ID_CHARS,
+        SEARCH_HIGH_SUITE_ID,
+    },
     error::{AppError, AppResult},
 };
 
@@ -11,6 +14,7 @@ pub struct HighSearchProjectionDocument {
     pub memo_id: Uuid,
     pub owner_partition: Uuid,
     pub version: i32,
+    pub analysis_version: String,
     pub search_key_version: String,
     pub content_tokens: Vec<HighSearchToken>,
     pub tag_tokens: Vec<HighSearchToken>,
@@ -23,6 +27,7 @@ impl HighSearchProjectionDocument {
                 "HIGH search projection version must be positive".into(),
             ));
         }
+        validate_analysis_version(&self.analysis_version)?;
         validate_key_version(&self.search_key_version)?;
 
         for token in self.content_tokens.iter().chain(&self.tag_tokens) {
@@ -37,11 +42,15 @@ impl HighSearchProjectionDocument {
 pub struct HighSearchProjectionQuery {
     pub content_tokens: Vec<HighSearchToken>,
     pub tag_token: Option<HighSearchToken>,
+    pub analysis_version: Option<String>,
     pub search_key_version: Option<String>,
 }
 
 impl HighSearchProjectionQuery {
     pub fn validate(&self) -> AppResult<()> {
+        if let Some(analysis_version) = self.analysis_version.as_deref() {
+            validate_analysis_version(analysis_version)?;
+        }
         if let Some(key_version) = self.search_key_version.as_deref() {
             validate_key_version(key_version)?;
         }
@@ -58,12 +67,17 @@ impl HighSearchProjectionQuery {
             }
         }
 
-        if self.search_key_version.is_none()
-            && (!self.content_tokens.is_empty() || self.tag_token.is_some())
-        {
-            return Err(AppError::ValidationError(
-                "HIGH search query with tokens requires a search key version".into(),
-            ));
+        if !self.content_tokens.is_empty() || self.tag_token.is_some() {
+            if self.analysis_version.is_none() {
+                return Err(AppError::ValidationError(
+                    "HIGH search query with tokens requires an analysis version".into(),
+                ));
+            }
+            if self.search_key_version.is_none() {
+                return Err(AppError::ValidationError(
+                    "HIGH search query with tokens requires a search key version".into(),
+                ));
+            }
         }
 
         Ok(())
@@ -91,11 +105,20 @@ pub trait HighMemoSearchProjection: Send + Sync {
     async fn delete_document(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()>;
 }
 
+fn validate_analysis_version(analysis_version: &str) -> AppResult<()> {
+    if !search_version_identifier_is_valid(analysis_version) {
+        return Err(AppError::ValidationError(format!(
+            "HIGH search analysis version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_key_version(key_version: &str) -> AppResult<()> {
-    if key_version.trim().is_empty() {
-        return Err(AppError::ValidationError(
-            "HIGH search key version must not be empty".into(),
-        ));
+    if !search_version_identifier_is_valid(key_version) {
+        return Err(AppError::ValidationError(format!(
+            "HIGH search key version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
+        )));
     }
     Ok(())
 }
@@ -130,6 +153,7 @@ mod tests {
             memo_id: Uuid::new_v4(),
             owner_partition: Uuid::new_v4(),
             version: 1,
+            analysis_version: "analysis-v1".into(),
             search_key_version: "search-v1".into(),
             content_tokens: vec![token("search-v1", "ab")],
             tag_tokens: vec![token("search-v2", "cd")],
@@ -139,10 +163,11 @@ mod tests {
     }
 
     #[test]
-    fn tokenized_query_requires_explicit_key_version() {
+    fn tokenized_query_requires_explicit_analysis_and_key_versions() {
         let query = HighSearchProjectionQuery {
             content_tokens: vec![token("search-v1", "ab")],
             tag_token: None,
+            analysis_version: None,
             search_key_version: None,
         };
 
@@ -150,10 +175,23 @@ mod tests {
     }
 
     #[test]
+    fn projection_metadata_versions_reject_unsafe_identifiers() {
+        assert!(validate_analysis_version("analysis-v1").is_ok());
+        assert!(validate_key_version("search:key_v1.2").is_ok());
+        assert!(validate_analysis_version("analysis v1").is_err());
+        assert!(validate_key_version("search\nv1").is_err());
+        assert!(validate_analysis_version(
+            &"x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1)
+        )
+        .is_err());
+    }
+
+    #[test]
     fn empty_query_can_span_current_projection_documents() {
         let query = HighSearchProjectionQuery {
             content_tokens: vec![],
             tag_token: None,
+            analysis_version: None,
             search_key_version: None,
         };
 
