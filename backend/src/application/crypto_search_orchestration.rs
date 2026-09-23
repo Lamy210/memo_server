@@ -178,15 +178,15 @@ impl HighSearchProjectionService {
                 .await?;
             token.validate()?;
 
-            match operation_key_version {
-                Some(expected) if expected != &token.key_version => {
+            if let Some(expected) = operation_key_version.as_deref() {
+                if expected != token.key_version.as_str() {
                     return Err(AppError::ServiceUnavailable(
                         "HIGH search key version changed during one tokenization operation; retry"
                             .into(),
                     ));
                 }
-                Some(_) => {}
-                None => *operation_key_version = Some(token.key_version.clone()),
+            } else {
+                *operation_key_version = Some(token.key_version.clone());
             }
 
             tokens.push(token);
@@ -357,8 +357,11 @@ mod tests {
     async fn projection_deduplicates_terms_and_keeps_one_key_version() {
         let crypto = Arc::new(FakeCrypto::stable());
         let projection = Arc::new(FakeProjection::default());
-        let service =
-            HighSearchProjectionService::new(Arc::new(FakeAnalyzer), crypto.clone(), projection.clone());
+        let service = HighSearchProjectionService::new(
+            Arc::new(FakeAnalyzer),
+            crypto.clone(),
+            projection.clone(),
+        );
 
         service.replace_memo(&memo()).await.unwrap();
 
@@ -451,9 +454,6 @@ mod tests {
 
         service.delete_memo(owner, memo_id).await.unwrap();
 
-        assert_eq!(
-            *projection.deleted.lock().unwrap(),
-            Some((owner, memo_id))
-        );
+        assert_eq!(*projection.deleted.lock().unwrap(), Some((owner, memo_id)));
     }
 }
