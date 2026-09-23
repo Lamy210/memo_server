@@ -10,9 +10,12 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::{
-    application::crypto::{
-        require_read_suite, require_write_suite, HighEncryptedMemoEnvelope, HighMemoAad,
-        HighMemoCryptography, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID,
+    application::{
+        crypto::{
+            require_read_suite, require_write_suite, HighEncryptedMemoEnvelope, HighMemoAad,
+            HighMemoCryptography, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID,
+        },
+        crypto_migration::HighMemoStagingCryptography,
     },
     domain::memo::entity::Memo,
     error::{AppError, AppResult},
@@ -211,6 +214,17 @@ impl RingHighMemoCryptography {
             })?;
 
         deserialize_high_memo_payload(envelope, plaintext)
+    }
+}
+
+#[async_trait]
+impl HighMemoStagingCryptography for RingHighMemoCryptography {
+    async fn encrypt_for_staging(&self, memo: &Memo) -> AppResult<HighEncryptedMemoEnvelope> {
+        self.encrypt_memo_inner(memo).await
+    }
+
+    async fn decrypt_staged(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo> {
+        self.decrypt_memo_inner(envelope).await
     }
 }
 
@@ -414,6 +428,22 @@ mod tests {
         assert!(matches!(
             cryptography.encrypt_memo_inner(&memo).await,
             Err(AppError::ValidationError(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn planned_suite_is_available_only_to_non_authoritative_staging() {
+        let cryptography = cryptography();
+        let memo = Memo::new("title".into(), "content".into(), vec![], Uuid::new_v4());
+
+        let envelope = cryptography.encrypt_for_staging(&memo).await.unwrap();
+        let restored = cryptography.decrypt_staged(&envelope).await.unwrap();
+
+        assert_eq!(restored.id, memo.id);
+        assert_eq!(restored.title, memo.title);
+        assert!(matches!(
+            cryptography.encrypt_memo(&memo).await,
+            Err(AppError::ServiceUnavailable(_))
         ));
     }
 
