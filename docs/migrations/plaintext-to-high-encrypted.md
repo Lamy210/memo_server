@@ -120,10 +120,9 @@ This runbook does not authorize production execution yet. The following remain b
 - production key-wrapping/KMS provider,
 - deployment configuration and least-privilege KMS identity,
 - a guarded migration command or operational job,
-- ciphertext-only Valkey representation,
+- HIGH Valkey request-path wiring and retirement of the legacy plaintext cache contract,
 - protected HIGH search tokens in Manticore,
 - encrypted authoritative-store request-path integration,
 - final cutover/rollback rehearsal.
 
-`MEMO-HIGH-1` remains runtime-ineligible for normal CRUD until those dependencies are
-implemented and its inventory status is deliberately changed to DEPLOYED.
+The ciphertext-only Valkey adapter is implemented but deliberately not wired into normal CRUD yet. `MEMO-HIGH-1` remains runtime-ineligible until the remaining dependencies are implemented and its inventory status is deliberately changed to DEPLOYED.

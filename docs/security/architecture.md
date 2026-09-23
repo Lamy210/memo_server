@@ -19,7 +19,7 @@ The current application on `main` uses:
 - Rust / Actix Web backend
 - SvelteKit 2 / Svelte 5 frontend
 - MongoDB as the Compose/CI authoritative-store target with ScyllaDB retained as an explicit migration fallback
-- Valkey 9.1 as a disposable cache (runtime cutover complete; ciphertext-only cache representation remains part of the HIGH encryption migration)
+- Valkey 9.1 as a disposable cache (runtime cutover complete; a ciphertext-only HIGH envelope adapter is staged, while existing request paths still use the legacy plaintext cache contract)
 - Manticore Search as the Compose/CI rebuildable search projection with Elasticsearch retained as an explicit migration fallback
 - an independent JWT issuing authentication service boundary
 
@@ -304,6 +304,8 @@ Forbidden:
 - decrypted previews
 
 Persistence should be disabled unless there is a demonstrated operational need. If persistence is enabled, ciphertext-only invariants still apply.
+
+The staged HIGH cache port accepts only `HighEncryptedMemoEnvelope` values and derives cache keys internally from `owner_partition + memo_id`. Reads reject cached envelopes whose authenticated identity metadata does not match the requested cache key. This adapter is not yet wired into normal request paths; the legacy plaintext cache contract remains active until encrypted authoritative storage and protected search are ready for coordinated cutover.
 
 Manticore is a rebuildable projection, never a second source of truth.
 
