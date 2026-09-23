@@ -1092,6 +1092,32 @@ mod tests {
             .unwrap()
             .is_none());
 
+        let concurrent_encrypted = HighEncryptedMemoEnvelope {
+            memo_id: Uuid::new_v4(),
+            owner_partition: owner,
+            ciphertext: vec![0x44; 32],
+            nonce: vec![0x55; 12],
+            wrapped_dek: vec![0x66; 48],
+            version: 1,
+            crypto_suite_id: crate::application::crypto::MEMO_HIGH_SUITE_ID.into(),
+            key_version: "kms-key-v1".into(),
+            schema_version: crate::application::crypto::MEMO_HIGH_SCHEMA_VERSION,
+        };
+        let (first_stage, second_stage) = tokio::join!(
+            store.stage_encrypted_memo_for_migration(&concurrent_encrypted),
+            store.stage_encrypted_memo_for_migration(&concurrent_encrypted)
+        );
+        let outcomes = [first_stage.unwrap(), second_stage.unwrap()];
+        assert!(outcomes.contains(&MigrationImportResult::Inserted));
+        assert!(outcomes.contains(&MigrationImportResult::AlreadyPresent));
+        assert_eq!(
+            store
+                .count_staged_encrypted_memos_for_migration()
+                .await
+                .unwrap(),
+            2
+        );
+
         let mut divergent_encrypted = encrypted.clone();
         divergent_encrypted.ciphertext[0] ^= 0x01;
         assert!(matches!(
