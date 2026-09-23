@@ -85,11 +85,7 @@ impl HighMemoMigrationService {
             ));
         }
 
-        if let Some(existing) = self
-            .staging
-            .find_staged(memo.user_id, memo.id)
-            .await?
-        {
+        if let Some(existing) = self.staging.find_staged(memo.user_id, memo.id).await? {
             self.verify_envelope_matches_memo(memo, &existing).await?;
             return Ok(HighMemoMigrationResult::AlreadyPresentVerified);
         }
@@ -245,9 +241,8 @@ mod tests {
         }
 
         async fn decrypt_staged(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo> {
-            serde_json::from_slice(&envelope.ciphertext).map_err(|error| {
-                AppError::DatabaseError(format!("fake decrypt failed: {error}"))
-            })
+            serde_json::from_slice(&envelope.ciphertext)
+                .map_err(|error| AppError::DatabaseError(format!("fake decrypt failed: {error}")))
         }
     }
 
@@ -348,9 +343,10 @@ mod tests {
                 return Ok(None);
             }
 
-            Ok((self.winner.owner_partition == owner_partition
-                && self.winner.memo_id == memo_id)
-                .then(|| self.winner.clone()))
+            Ok(
+                (self.winner.owner_partition == owner_partition && self.winner.memo_id == memo_id)
+                    .then(|| self.winner.clone()),
+            )
         }
 
         async fn stage_if_absent(
