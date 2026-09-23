@@ -89,7 +89,7 @@ impl HighMemoMigrationService {
         }
 
         let envelope = self.cryptography.encrypt_for_staging(memo).await?;
-        validate_envelope_identity(memo, &envelope)?;
+        validate_generated_envelope_identity(memo, &envelope)?;
 
         let stage_result = self.staging.stage_if_absent(&envelope).await?;
 
@@ -126,7 +126,17 @@ impl HighMemoMigrationService {
         expected: &Memo,
         envelope: &HighEncryptedMemoEnvelope,
     ) -> AppResult<()> {
-        validate_envelope_identity(expected, envelope)?;
+        envelope.validate_structure()?;
+        if envelope.memo_id != expected.id
+            || envelope.owner_partition != expected.user_id
+            || envelope.version != expected.version
+        {
+            return Err(AppError::Conflict(format!(
+                "Encrypted migration target identity/version differs from authoritative memo {}",
+                expected.id
+            )));
+        }
+
         let decrypted = self.cryptography.decrypt_staged(envelope).await?;
 
         if memos_match_at_storage_precision(expected, &decrypted) {
@@ -140,7 +150,10 @@ impl HighMemoMigrationService {
     }
 }
 
-fn validate_envelope_identity(memo: &Memo, envelope: &HighEncryptedMemoEnvelope) -> AppResult<()> {
+fn validate_generated_envelope_identity(
+    memo: &Memo,
+    envelope: &HighEncryptedMemoEnvelope,
+) -> AppResult<()> {
     envelope.validate_structure()?;
 
     if envelope.memo_id != memo.id
