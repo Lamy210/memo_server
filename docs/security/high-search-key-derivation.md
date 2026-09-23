@@ -54,7 +54,26 @@ The provider-specific KMS key ID/ARN must remain configuration/provider state. T
 
 A provider must never let a mutable cloud alias silently change seed bytes while returning the same application `search_key_version`. The provider must pin or otherwise identify immutable provider key material internally and bump the application version whenever seed material changes.
 
-Application orchestration batches all content/tag terms for one document or query into one cryptographic operation. The ring adapter resolves the owner-scoped search key once for that batch and reuses only the in-memory HMAC key for its terms. Cross-operation caching remains a separate bounded-lifetime policy decision.
+Application orchestration batches all content/tag terms for one document or query into one cryptographic operation. The ring adapter resolves the owner-scoped search key once for that batch and reuses only the in-memory HMAC key for its terms.
+
+## Bounded derived-key cache
+
+A staged in-process cache may wrap the final `SearchKeyProvider`. It stores only the final per-owner derived search key plus its application-owned generation identifier. It does **not** cache the long-lived root or provider-resolved seed.
+
+The cache requires both:
+
+- a positive TTL,
+- a positive maximum entry count.
+
+Expired entries are lazily removed before cache lookup/insertion. Capacity eviction removes the earliest-expiring entry. Removing an entry drops its `Zeroizing` key storage. Rotation/deployment orchestration can explicitly invalidate one owner or clear the whole cache.
+
+The TTL is a **reuse TTL**, not by itself a hard wall-clock memory-residency guarantee: an idle expired entry can remain allocated until another cache operation, an explicit expiry sweep, cache clear, or process teardown. The provider therefore exposes an explicit expired-entry sweep boundary for runtime maintenance. A deployment that requires a tighter plaintext-key memory-residency window must schedule that sweep at an interval consistent with its threat model.
+
+The cache mutex is not held while awaiting the underlying provider. This prevents one slow KMS/provider call from serializing key resolution for unrelated owners. Concurrent misses for the same owner may therefore duplicate an idempotent provider call; once one result is cached, a concurrent resolver prefers the established cached generation and drops its unused resolved key.
+
+Invalidation and clear operations also advance a cache epoch. A key resolution that started before that epoch change is rejected when it returns and is never served or reinserted. This makes rotation/deployment invalidation a fail-closed fence against stale in-flight provider results.
+
+No production TTL, capacity, or sweep interval is selected by this staged contract. Those values must be chosen from the deployment threat model, provider latency/rate limits, and acceptable plaintext-key reuse/residency windows.
 
 ## Runtime boundary
 
@@ -63,7 +82,7 @@ This code remains staged and runtime-unreachable.
 Before SEARCH-HIGH-1 can become DEPLOYED:
 
 - implement and review a production seed provider,
-- define bounded cache/refresh behavior for resolved per-user search keys,
+- choose deployment TTL/capacity for the staged bounded derived-key cache and wire invalidation into the production rotation protocol,
 - prove rotation/reindex behavior,
 - complete protected projection reindex verification,
 - select and version the production Japanese/English analyzer,
