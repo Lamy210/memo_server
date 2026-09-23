@@ -71,6 +71,11 @@ pub(super) trait SearchKeySeedProvider: Send + Sync {
     /// provider-side HMAC/PRF operation. Long-lived root key material must not
     /// be returned to memo_server, stored in source control, or placed in
     /// ordinary application configuration.
+    ///
+    /// For a given owner and key_version, returned seed bytes must remain
+    /// stable. Any seed-material change is a key rotation and must return a new
+    /// application-owned key_version so projection/query generations cannot
+    /// silently diverge.
     async fn resolve_search_seed(&self, owner_partition: Uuid) -> AppResult<ResolvedSearchKeySeed>;
 }
 
