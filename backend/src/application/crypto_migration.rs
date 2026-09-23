@@ -42,6 +42,12 @@ pub trait HighEncryptedMemoStagingStore: Send + Sync {
         memo_id: Uuid,
     ) -> AppResult<Option<HighEncryptedMemoEnvelope>>;
 
+    /// Atomically insert an envelope only when the memo ID is absent.
+    ///
+    /// AlreadyPresent does not imply byte-for-byte envelope equality. Parallel
+    /// writers may produce different valid ciphertext for identical plaintext
+    /// because each encryption uses a fresh DEK and nonce. Callers must read
+    /// back, decrypt, and compare authoritative plaintext before accepting it.
     async fn stage_if_absent(
         &self,
         envelope: &HighEncryptedMemoEnvelope,
@@ -271,14 +277,8 @@ mod tests {
             envelope: &HighEncryptedMemoEnvelope,
         ) -> AppResult<EncryptedMemoStageResult> {
             let mut envelopes = self.envelopes.lock().unwrap();
-            if let Some(existing) = envelopes.get(&envelope.memo_id) {
-                if existing == envelope {
-                    return Ok(EncryptedMemoStageResult::AlreadyPresent);
-                }
-
-                return Err(AppError::Conflict(
-                    "fake staging store contains divergent envelope".into(),
-                ));
+            if envelopes.contains_key(&envelope.memo_id) {
+                return Ok(EncryptedMemoStageResult::AlreadyPresent);
             }
 
             envelopes.insert(envelope.memo_id, envelope.clone());
@@ -330,6 +330,69 @@ mod tests {
             HighMemoMigrationResult::AlreadyPresentVerified
         );
         assert_eq!(crypto.encrypt_calls.load(Ordering::Relaxed), 1);
+    }
+
+    struct RacingStagingStore {
+        winner: HighEncryptedMemoEnvelope,
+        visible: Mutex<bool>,
+    }
+
+    #[async_trait]
+    impl HighEncryptedMemoStagingStore for RacingStagingStore {
+        async fn find_staged(
+            &self,
+            owner_partition: Uuid,
+            memo_id: Uuid,
+        ) -> AppResult<Option<HighEncryptedMemoEnvelope>> {
+            if !*self.visible.lock().unwrap() {
+                return Ok(None);
+            }
+
+            Ok((self.winner.owner_partition == owner_partition
+                && self.winner.memo_id == memo_id)
+                .then(|| self.winner.clone()))
+        }
+
+        async fn stage_if_absent(
+            &self,
+            _envelope: &HighEncryptedMemoEnvelope,
+        ) -> AppResult<EncryptedMemoStageResult> {
+            *self.visible.lock().unwrap() = true;
+            Ok(EncryptedMemoStageResult::AlreadyPresent)
+        }
+
+        async fn count_staged(&self) -> AppResult<u64> {
+            Ok(u64::from(*self.visible.lock().unwrap()))
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_different_envelope_is_accepted_only_after_plaintext_verification() {
+        let memo = memo();
+        let mut winner = HighEncryptedMemoEnvelope {
+            memo_id: memo.id,
+            owner_partition: memo.user_id,
+            ciphertext: serde_json::to_vec(&memo).unwrap(),
+            nonce: vec![0x77; 12],
+            wrapped_dek: vec![0x88; 48],
+            version: memo.version,
+            crypto_suite_id: MEMO_HIGH_SUITE_ID.into(),
+            key_version: "test-key-v1".into(),
+            schema_version: MEMO_HIGH_SCHEMA_VERSION,
+        };
+        winner.nonce[0] ^= 0x01;
+
+        let crypto = Arc::new(FakeCryptography::new());
+        let store = Arc::new(RacingStagingStore {
+            winner,
+            visible: Mutex::new(false),
+        });
+        let service = HighMemoMigrationService::new(crypto, store);
+
+        assert_eq!(
+            service.stage_memo(&memo).await.unwrap(),
+            HighMemoMigrationResult::AlreadyPresentVerified
+        );
     }
 
     #[tokio::test]
