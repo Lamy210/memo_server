@@ -364,9 +364,7 @@ mod tests {
         assert!(validate_analysis_version(" ".into()).is_err());
         assert!(validate_analysis_version("analysis v1".into()).is_err());
         assert!(validate_analysis_version("analysis\0v1".into()).is_err());
-        assert!(
-            validate_analysis_version("x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1)).is_err()
-        );
+        assert!(validate_analysis_version("x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1)).is_err());
 
         assert_eq!(
             canonicalize_terms(vec!["snow".into(), "memo".into(), "snow".into()]).unwrap(),
