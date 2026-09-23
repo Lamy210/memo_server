@@ -126,6 +126,11 @@ assets:
       selection: SEARCH_BACKEND
       blind_token_deriver: staged
       search_key_provider: boundary_staged
+      owner_scoped_seed_provider: boundary_staged
+      per_user_hkdf_sha384: staged
+      derived_key_version_contract: "hkdf384-v1:<seed-version>"
+      key_resolution_batching: one_per_tokenization_operation
+      long_lived_search_root_process_exposure: forbidden
       production_search_key_provider: not_implemented
       protected_projection:
         adapter: staged
