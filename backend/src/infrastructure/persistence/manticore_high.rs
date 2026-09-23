@@ -53,6 +53,10 @@ impl HighManticoreClient {
     }
 
     async fn execute_raw_sql(&self, sql: &str, operation: &str) -> AppResult<()> {
+        self.execute_raw_sql_result(sql, operation).await.map(|_| ())
+    }
+
+    async fn execute_raw_sql_result(&self, sql: &str, operation: &str) -> AppResult<Value> {
         let response = self
             .client
             .post(format!("{}/sql?mode=raw", self.base_url))
@@ -95,7 +99,7 @@ impl HighManticoreClient {
             )));
         }
 
-        Ok(())
+        Ok(result)
     }
 
     async fn post_json(&self, endpoint: &str, body: &Value) -> AppResult<Value> {
@@ -284,19 +288,6 @@ impl HighManticoreClient {
         }))
     }
 
-    fn count_body() -> Value {
-        json!({
-            "table": TABLE_NAME,
-            "query": {
-                "match_all": {}
-            },
-            "_source": {
-                "excludes": ["*"]
-            },
-            "limit": 1
-        })
-    }
-
     async fn contains_metadata_inner(
         &self,
         metadata: &HighSearchProjectionMetadata,
@@ -310,8 +301,26 @@ impl HighManticoreClient {
 
     async fn count_documents_inner(&self) -> AppResult<u64> {
         self.ensure_table().await?;
-        let result = self.post_json("search", &Self::count_body()).await?;
-        search_total_u64(&result)
+        let result = self
+            .execute_raw_sql_result(
+                "SELECT COUNT(*) FROM memos_high_v1",
+                "protected projection exact count",
+            )
+            .await?;
+
+        result
+            .as_array()
+            .and_then(|sets| sets.first())
+            .and_then(|set| set.get("data"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("count(*)"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                AppError::DatabaseError(
+                    "Invalid HIGH Manticore exact count response format".to_string(),
+                )
+            })
     }
 
     fn delete_body(owner_partition: Uuid, memo_id: Uuid) -> Value {
