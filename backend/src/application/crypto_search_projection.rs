@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    application::crypto_search::{HighSearchToken, SEARCH_HIGH_SUITE_ID},
+    application::crypto_search::{
+        search_version_identifier_is_valid, HighSearchToken, MAX_SEARCH_VERSION_ID_CHARS,
+        SEARCH_HIGH_SUITE_ID,
+    },
     error::{AppError, AppResult},
 };
 
@@ -103,19 +106,19 @@ pub trait HighMemoSearchProjection: Send + Sync {
 }
 
 fn validate_analysis_version(analysis_version: &str) -> AppResult<()> {
-    if analysis_version.trim().is_empty() {
-        return Err(AppError::ValidationError(
-            "HIGH search analysis version must not be empty".into(),
-        ));
+    if !search_version_identifier_is_valid(analysis_version) {
+        return Err(AppError::ValidationError(format!(
+            "HIGH search analysis version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
+        )));
     }
     Ok(())
 }
 
 fn validate_key_version(key_version: &str) -> AppResult<()> {
-    if key_version.trim().is_empty() {
-        return Err(AppError::ValidationError(
-            "HIGH search key version must not be empty".into(),
-        ));
+    if !search_version_identifier_is_valid(key_version) {
+        return Err(AppError::ValidationError(format!(
+            "HIGH search key version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
+        )));
     }
     Ok(())
 }
@@ -169,6 +172,18 @@ mod tests {
         };
 
         assert!(query.validate().is_err());
+    }
+
+    #[test]
+    fn projection_metadata_versions_reject_unsafe_identifiers() {
+        assert!(validate_analysis_version("analysis-v1").is_ok());
+        assert!(validate_key_version("search:key_v1.2").is_ok());
+        assert!(validate_analysis_version("analysis v1").is_err());
+        assert!(validate_key_version("search\nv1").is_err());
+        assert!(validate_analysis_version(
+            &"x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1)
+        )
+        .is_err());
     }
 
     #[test]
