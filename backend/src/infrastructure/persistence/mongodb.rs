@@ -13,7 +13,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    application::{crypto::HighEncryptedMemoEnvelope, health::HealthProbe},
+    application::{
+        crypto::HighEncryptedMemoEnvelope,
+        crypto_migration::{EncryptedMemoStageResult, HighEncryptedMemoStagingStore},
+        health::HealthProbe,
+    },
     domain::memo::entity::Memo,
     error::{AppError, AppResult},
 };
@@ -672,6 +676,32 @@ fn transaction_topology_supported(hello: &Document) -> bool {
 
 fn order_memos_by_ids(ids: &[Uuid], by_id: &HashMap<Uuid, Memo>) -> Vec<Memo> {
     ids.iter().filter_map(|id| by_id.get(id).cloned()).collect()
+}
+
+#[async_trait]
+impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
+    async fn find_staged(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<Option<HighEncryptedMemoEnvelope>> {
+        self.find_staged_encrypted_memo_for_migration(owner_partition, memo_id)
+            .await
+    }
+
+    async fn stage_if_absent(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+    ) -> AppResult<EncryptedMemoStageResult> {
+        match self.stage_encrypted_memo_for_migration(envelope).await? {
+            MigrationImportResult::Inserted => Ok(EncryptedMemoStageResult::Inserted),
+            MigrationImportResult::AlreadyPresent => Ok(EncryptedMemoStageResult::AlreadyPresent),
+        }
+    }
+
+    async fn count_staged(&self) -> AppResult<u64> {
+        self.count_staged_encrypted_memos_for_migration().await
+    }
 }
 
 #[async_trait]
