@@ -16,6 +16,7 @@ use crate::{
     application::{
         crypto::HighEncryptedMemoEnvelope,
         crypto_migration::{EncryptedMemoStageResult, HighEncryptedMemoStagingStore},
+        crypto_migration_batch::PlaintextMemoMigrationSource,
         health::HealthProbe,
     },
     domain::memo::entity::Memo,
@@ -709,6 +710,45 @@ fn order_memos_by_ids(ids: &[Uuid], by_id: &HashMap<Uuid, Memo>) -> Vec<Memo> {
 }
 
 #[async_trait]
+impl PlaintextMemoMigrationSource for MongoDbAuthoritativeStore {
+    async fn count_source_memos(&self) -> AppResult<u64> {
+        self.memos
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| mongo_error("count plaintext MongoDB migration source memos", error))
+    }
+
+    async fn page_source_memos(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<Memo>> {
+        let limit = i64::try_from(limit).map_err(|_| {
+            AppError::DatabaseError("MongoDB migration page size is too large".into())
+        })?;
+        let filter = after
+            .map(|cursor| doc! { "_id": { "$gt": cursor.to_string() } })
+            .unwrap_or_else(|| doc! {});
+
+        let documents: Vec<MemoDocument> = self
+            .memos
+            .find(filter)
+            .sort(doc! { "_id": 1 })
+            .limit(limit)
+            .await
+            .map_err(|error| mongo_error("page plaintext MongoDB migration source memos", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read plaintext MongoDB migration source page", error))?;
+
+        documents
+            .into_iter()
+            .map(MemoDocument::try_into_memo)
+            .collect()
+    }
+}
+
+#[async_trait]
 impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
     async fn find_staged(
         &self,
@@ -1326,6 +1366,27 @@ mod tests {
             Err(AppError::NotFound(_))
         ));
         assert!(store.list_projection_intents().await.unwrap().is_empty());
+
+        assert_eq!(store.count_source_memos().await.unwrap(), 2);
+        let first_source_page = store.page_source_memos(None, 1).await.unwrap();
+        assert_eq!(first_source_page.len(), 1);
+        let second_source_page = store
+            .page_source_memos(Some(first_source_page[0].id), 1)
+            .await
+            .unwrap();
+        assert_eq!(second_source_page.len(), 1);
+        assert!(first_source_page[0].id < second_source_page[0].id);
+        assert!(store
+            .page_source_memos(Some(second_source_page[0].id), 1)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let mut paged_ids = vec![first_source_page[0].id, second_source_page[0].id];
+        let mut expected_ids = vec![migrated.id, second.id];
+        paged_ids.sort();
+        expected_ids.sort();
+        assert_eq!(paged_ids, expected_ids);
 
         cleanup_client
             .database(TEST_DATABASE_NAME)
