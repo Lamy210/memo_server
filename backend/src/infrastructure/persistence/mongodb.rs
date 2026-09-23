@@ -13,7 +13,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    application::{crypto::HighEncryptedMemoEnvelope, health::HealthProbe},
+    application::{
+        crypto::HighEncryptedMemoEnvelope,
+        crypto_migration::{EncryptedMemoStageResult, HighEncryptedMemoStagingStore},
+        health::HealthProbe,
+    },
     domain::memo::entity::Memo,
     error::{AppError, AppResult},
 };
@@ -461,38 +465,68 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("count MongoDB migration target memos", error))
     }
 
+    async fn insert_encrypted_memo_if_absent(
+        &self,
+        document: &EncryptedMemoDocument,
+    ) -> AppResult<bool> {
+        let update = doc! {
+            "$setOnInsert": {
+                "owner_partition": document.owner_partition.clone(),
+                "ciphertext": document.ciphertext.clone(),
+                "nonce": document.nonce.clone(),
+                "wrapped_dek": document.wrapped_dek.clone(),
+                "version": document.version,
+                "crypto_suite_id": document.crypto_suite_id.clone(),
+                "key_version": document.key_version.clone(),
+                "schema_version": document.schema_version,
+            }
+        };
+
+        let result = self
+            .encrypted_memos
+            .update_one(doc! { "_id": document.id.clone() }, update)
+            .upsert(true)
+            .await
+            .map_err(|error| mongo_error("stage MongoDB encrypted migration memo", error))?;
+
+        Ok(result.upserted_id.is_some())
+    }
+
     /// Stage one HIGH encrypted envelope in an isolated migration collection.
     ///
-    /// This collection is not authoritative and is not used by request paths.
-    /// Identical reruns are idempotent; divergent rows fail closed.
+    /// This concrete helper preserves envelope-level idempotency for direct
+    /// migration tooling: an identical envelope is AlreadyPresent, while a
+    /// different envelope for the same memo ID is a conflict.
     pub async fn stage_encrypted_memo_for_migration(
         &self,
         envelope: &HighEncryptedMemoEnvelope,
     ) -> AppResult<MigrationImportResult> {
         let document = EncryptedMemoDocument::try_from(envelope)?;
 
-        if let Some(existing) = self
+        if self.insert_encrypted_memo_if_absent(&document).await? {
+            return Ok(MigrationImportResult::Inserted);
+        }
+
+        let persisted = self
             .encrypted_memos
             .find_one(doc! { "_id": document.id.clone() })
             .await
-            .map_err(|error| mongo_error("inspect MongoDB encrypted migration target", error))?
-        {
-            if existing == document {
-                return Ok(MigrationImportResult::AlreadyPresent);
-            }
+            .map_err(|error| mongo_error("verify MongoDB encrypted migration target", error))?
+            .ok_or_else(|| {
+                AppError::DatabaseError(format!(
+                    "MongoDB encrypted migration target {} disappeared after staging",
+                    envelope.memo_id
+                ))
+            })?;
 
-            return Err(AppError::Conflict(format!(
+        if persisted == document {
+            Ok(MigrationImportResult::AlreadyPresent)
+        } else {
+            Err(AppError::Conflict(format!(
                 "MongoDB encrypted migration target already contains different memo {}",
                 envelope.memo_id
-            )));
+            )))
         }
-
-        self.encrypted_memos
-            .insert_one(document)
-            .await
-            .map_err(|error| mongo_error("stage MongoDB encrypted migration memo", error))?;
-
-        Ok(MigrationImportResult::Inserted)
     }
 
     pub async fn find_staged_encrypted_memo_for_migration(
@@ -672,6 +706,38 @@ fn transaction_topology_supported(hello: &Document) -> bool {
 
 fn order_memos_by_ids(ids: &[Uuid], by_id: &HashMap<Uuid, Memo>) -> Vec<Memo> {
     ids.iter().filter_map(|id| by_id.get(id).cloned()).collect()
+}
+
+#[async_trait]
+impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
+    async fn find_staged(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<Option<HighEncryptedMemoEnvelope>> {
+        self.find_staged_encrypted_memo_for_migration(owner_partition, memo_id)
+            .await
+    }
+
+    async fn stage_if_absent(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+    ) -> AppResult<EncryptedMemoStageResult> {
+        let document = EncryptedMemoDocument::try_from(envelope)?;
+        if self.insert_encrypted_memo_if_absent(&document).await? {
+            Ok(EncryptedMemoStageResult::Inserted)
+        } else {
+            // A concurrent migration may have staged a different valid
+            // envelope for the same plaintext because each writer uses a fresh
+            // DEK and nonce. The application service owns decrypt-and-compare
+            // verification before AlreadyPresent is accepted.
+            Ok(EncryptedMemoStageResult::AlreadyPresent)
+        }
+    }
+
+    async fn count_staged(&self) -> AppResult<u64> {
+        self.count_staged_encrypted_memos_for_migration().await
+    }
 }
 
 #[async_trait]
@@ -1038,6 +1104,32 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+
+        let concurrent_encrypted = HighEncryptedMemoEnvelope {
+            memo_id: Uuid::new_v4(),
+            owner_partition: owner,
+            ciphertext: vec![0x44; 32],
+            nonce: vec![0x55; 12],
+            wrapped_dek: vec![0x66; 48],
+            version: 1,
+            crypto_suite_id: crate::application::crypto::MEMO_HIGH_SUITE_ID.into(),
+            key_version: "kms-key-v1".into(),
+            schema_version: crate::application::crypto::MEMO_HIGH_SCHEMA_VERSION,
+        };
+        let (first_stage, second_stage) = tokio::join!(
+            store.stage_encrypted_memo_for_migration(&concurrent_encrypted),
+            store.stage_encrypted_memo_for_migration(&concurrent_encrypted)
+        );
+        let outcomes = [first_stage.unwrap(), second_stage.unwrap()];
+        assert!(outcomes.contains(&MigrationImportResult::Inserted));
+        assert!(outcomes.contains(&MigrationImportResult::AlreadyPresent));
+        assert_eq!(
+            store
+                .count_staged_encrypted_memos_for_migration()
+                .await
+                .unwrap(),
+            2
+        );
 
         let mut divergent_encrypted = encrypted.clone();
         divergent_encrypted.ciphertext[0] ^= 0x01;
