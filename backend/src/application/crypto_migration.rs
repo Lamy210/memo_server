@@ -358,7 +358,7 @@ mod tests {
         }
 
         async fn count_staged(&self) -> AppResult<u64> {
-            Ok(if *self.visible.lock().unwrap() { 1 } else { 0 })
+            Ok(u64::from(u8::from(*self.visible.lock().unwrap())))
         }
     }
 
