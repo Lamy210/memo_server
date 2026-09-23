@@ -71,6 +71,12 @@ impl fmt::Debug for GeneratedDataKey {
 pub(super) trait DataKeyProvider: Send + Sync {
     /// Generate a fresh 256-bit plaintext DEK plus the provider-wrapped copy
     /// that may be persisted with one memo version.
+    ///
+    /// `GeneratedDataKey::key_version` is an application-owned opaque routing
+    /// alias. Provider adapters must not copy a cloud account identifier,
+    /// provider key ID, ARN, or other provider locator into that field. Syntax
+    /// validation can reject paths/ARN-like values but cannot distinguish every
+    /// provider-specific UUID from a legitimate internal alias.
     async fn generate_data_key(&self, aad: &HighMemoAad) -> AppResult<GeneratedDataKey>;
 
     /// Unwrap one persisted DEK. Implementations must bind the same non-secret
