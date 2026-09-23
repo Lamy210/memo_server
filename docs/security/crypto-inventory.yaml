@@ -130,6 +130,15 @@ assets:
       per_user_hkdf_sha384: staged
       derived_key_version_contract: "hkdf384-v1:<seed-version>"
       key_resolution_batching: one_per_tokenization_operation
+      derived_key_cache: staged
+      cache_secret_scope: per_owner_derived_key_only
+      cache_bounds: ttl_and_max_entries_required
+      cache_ttl_semantics: reuse_ttl
+      cache_expiry_sweep: explicit_boundary_staged
+      cache_hard_residency_guarantee: not_claimed
+      cache_rotation_invalidation: explicit
+      cache_inflight_invalidation_fence: fail_closed_epoch
+      cache_single_flight: not_implemented
       long_lived_search_root_process_exposure: forbidden
       production_search_key_provider: not_implemented
       protected_projection:
