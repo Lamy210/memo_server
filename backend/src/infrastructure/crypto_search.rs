@@ -101,9 +101,7 @@ impl HighSearchTokenCryptography for RingHighSearchTokenCryptography {
 
         normalized_terms
             .iter()
-            .map(|term| {
-                Self::derive_with_key(owner_partition, term, &key, &resolved.key_version)
-            })
+            .map(|term| Self::derive_with_key(owner_partition, term, &key, &resolved.key_version))
             .collect()
     }
 }
