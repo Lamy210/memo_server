@@ -34,7 +34,10 @@ impl HighSearchToken {
             ));
         }
         if self.value.len() != SEARCH_HIGH_TOKEN_HEX_CHARS
-            || !self.value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !self
+                .value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
         {
             return Err(AppError::DatabaseError(
                 "HIGH search token must be a SHA-384-sized hexadecimal value".into(),
@@ -106,6 +109,10 @@ mod tests {
 
         let mut invalid = valid.clone();
         invalid.value.replace_range(0..1, "z");
+        assert!(invalid.validate().is_err());
+
+        let mut invalid = valid.clone();
+        invalid.value.replace_range(0..1, "A");
         assert!(invalid.validate().is_err());
 
         let mut invalid = valid;
