@@ -293,11 +293,7 @@ impl HighManticoreClient {
         })
     }
 
-    async fn delete_document_inner(
-        &self,
-        owner_partition: Uuid,
-        memo_id: Uuid,
-    ) -> AppResult<()> {
+    async fn delete_document_inner(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
         self.ensure_table().await?;
         let body = Self::delete_body(owner_partition, memo_id);
         self.post_json("delete", &body).await?;
@@ -417,10 +413,7 @@ mod tests {
             search_key_version: Some("search-v1".into()),
         };
 
-        let owner_hits = client
-            .search_memo_ids(owner, &query, 1, 20)
-            .await
-            .unwrap();
+        let owner_hits = client.search_memo_ids(owner, &query, 1, 20).await.unwrap();
         assert_eq!(owner_hits.total, 1);
         assert_eq!(owner_hits.memo_ids, vec![memo_id]);
 
@@ -431,21 +424,12 @@ mod tests {
         assert_eq!(other_owner_hits.total, 0);
         assert!(other_owner_hits.memo_ids.is_empty());
 
-        client
-            .delete_document(other_owner, memo_id)
-            .await
-            .unwrap();
-        let after_wrong_owner_delete = client
-            .search_memo_ids(owner, &query, 1, 20)
-            .await
-            .unwrap();
+        client.delete_document(other_owner, memo_id).await.unwrap();
+        let after_wrong_owner_delete = client.search_memo_ids(owner, &query, 1, 20).await.unwrap();
         assert_eq!(after_wrong_owner_delete.memo_ids, vec![memo_id]);
 
         client.delete_document(owner, memo_id).await.unwrap();
-        let after_owner_delete = client
-            .search_memo_ids(owner, &query, 1, 20)
-            .await
-            .unwrap();
+        let after_owner_delete = client.search_memo_ids(owner, &query, 1, 20).await.unwrap();
         assert_eq!(after_owner_delete.total, 0);
         assert!(after_owner_delete.memo_ids.is_empty());
 
