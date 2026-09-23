@@ -37,7 +37,7 @@ Every projected tokenized document carries an opaque global `analysis_version`.
 
 Tokenized queries carry the same version and Manticore filters on it. Changing normalization or segmentation therefore requires an explicit reindex rather than silently mixing old and new search semantics.
 
-The version must identify a global analyzer contract. It must not encode:
+The version is a bounded ASCII operational identifier and must identify a global analyzer contract. It must not encode:
 
 - detected content language,
 - user locale,
