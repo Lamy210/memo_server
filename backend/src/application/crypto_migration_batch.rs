@@ -384,10 +384,7 @@ mod tests {
             .lock()
             .unwrap()
             .insert(stale.id, fake_envelope(&stale));
-        let migration = Arc::new(HighMemoMigrationService::new(
-            Arc::new(FakeCrypto),
-            staging,
-        ));
+        let migration = Arc::new(HighMemoMigrationService::new(Arc::new(FakeCrypto), staging));
         let service = HighMemoBatchMigrationService::new(source, migration);
 
         assert!(matches!(
@@ -424,10 +421,7 @@ mod tests {
             count_calls: AtomicUsize::new(0),
         });
         let staging = Arc::new(FakeStaging::default());
-        let migration = Arc::new(HighMemoMigrationService::new(
-            Arc::new(FakeCrypto),
-            staging,
-        ));
+        let migration = Arc::new(HighMemoMigrationService::new(Arc::new(FakeCrypto), staging));
         let service = HighMemoBatchMigrationService::new(source, migration);
 
         assert!(matches!(
