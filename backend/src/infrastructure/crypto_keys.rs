@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use zeroize::Zeroizing;
 
 use crate::{
-    application::crypto::HighMemoAad,
+    application::crypto::{
+        memo_key_version_identifier_is_valid, HighMemoAad, MAX_MEMO_KEY_VERSION_ID_CHARS,
+    },
     error::{AppError, AppResult},
 };
 
@@ -45,10 +47,10 @@ impl GeneratedDataKey {
                 "Data-key provider returned an empty wrapped DEK".into(),
             ));
         }
-        if self.key_version.trim().is_empty() {
-            return Err(AppError::ServiceUnavailable(
-                "Data-key provider returned an empty key version".into(),
-            ));
+        if !memo_key_version_identifier_is_valid(&self.key_version) {
+            return Err(AppError::ServiceUnavailable(format!(
+                "Data-key provider key version must be 1..={MAX_MEMO_KEY_VERSION_ID_CHARS} ASCII identifier characters"
+            )));
         }
         Ok(())
     }
@@ -69,6 +71,12 @@ impl fmt::Debug for GeneratedDataKey {
 pub(super) trait DataKeyProvider: Send + Sync {
     /// Generate a fresh 256-bit plaintext DEK plus the provider-wrapped copy
     /// that may be persisted with one memo version.
+    ///
+    /// `GeneratedDataKey::key_version` is an application-owned opaque routing
+    /// alias. Provider adapters must not copy a cloud account identifier,
+    /// provider key ID, ARN, or other provider locator into that field. Syntax
+    /// validation can reject paths/ARN-like values but cannot distinguish every
+    /// provider-specific UUID from a legitimate internal alias.
     async fn generate_data_key(&self, aad: &HighMemoAad) -> AppResult<GeneratedDataKey>;
 
     /// Unwrap one persisted DEK. Implementations must bind the same non-secret
@@ -150,6 +158,20 @@ mod tests {
             key_version: " ".into(),
         };
         assert!(missing_version.validate().is_err());
+
+        let unsafe_version = GeneratedDataKey {
+            plaintext: SecretDataKey::new([0x01; DATA_KEY_BYTES]),
+            wrapped_dek: vec![0x02; 48],
+            key_version: "provider/key/arn".into(),
+        };
+        assert!(unsafe_version.validate().is_err());
+
+        let oversized_version = GeneratedDataKey {
+            plaintext: SecretDataKey::new([0x01; DATA_KEY_BYTES]),
+            wrapped_dek: vec![0x02; 48],
+            key_version: "x".repeat(MAX_MEMO_KEY_VERSION_ID_CHARS + 1),
+        };
+        assert!(oversized_version.validate().is_err());
     }
 
     #[test]

@@ -30,7 +30,7 @@ The target encrypted memo record may persist the following plaintext metadata.
 | `nonce` | yes | AEAD nonce | non-secret; suite-specific validation required |
 | `wrapped_dek` | yes | encrypted per-version DEK | never store plaintext DEK |
 | `crypto_suite_id` | yes | crypto agility | must resolve to a known non-rejected suite |
-| `key_version` | yes | unwrap/rotation routing | opaque key version, no key material |
+| `key_version` | yes | unwrap/rotation routing | bounded ASCII application-owned routing alias; provider adapters must not persist key material, cloud account identifiers, provider key IDs, or KMS ARNs; syntax validation alone cannot identify every provider-specific ID |
 | `schema_version` | yes | serialization/AAD compatibility | numeric or opaque schema identifier |
 | `operational_state` | conditional | lifecycle/repair state | must not contain user-authored labels/content |
 | `projection_state` | conditional | reconciliation progress | opaque operational state only |
