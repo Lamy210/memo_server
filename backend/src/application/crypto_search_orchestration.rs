@@ -18,12 +18,14 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HighSearchAnalyzedDocument {
+    pub analysis_version: String,
     pub content_terms: Vec<String>,
     pub tag_terms: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HighSearchAnalyzedQuery {
+    pub analysis_version: String,
     pub content_terms: Vec<String>,
     pub tag_term: Option<String>,
 }
@@ -71,6 +73,7 @@ impl HighSearchProjectionService {
         }
 
         let analyzed = self.analyzer.analyze_document(memo)?;
+        let analysis_version = validate_analysis_version(analyzed.analysis_version)?;
         let content_terms = canonicalize_terms(analyzed.content_terms)?;
         let tag_terms = canonicalize_terms(analyzed.tag_terms)?;
 
@@ -97,6 +100,7 @@ impl HighSearchProjectionService {
             memo_id: memo.id,
             owner_partition: memo.user_id,
             version: memo.version,
+            analysis_version,
             search_key_version,
             content_tokens,
             tag_tokens,
@@ -114,6 +118,7 @@ impl HighSearchProjectionService {
         limit: usize,
     ) -> AppResult<HighSearchProjectionPage> {
         let analyzed = self.analyzer.analyze_query(query, tag)?;
+        let analysis_version = validate_analysis_version(analyzed.analysis_version)?;
         let content_terms = canonicalize_terms(analyzed.content_terms)?;
         let tag_term = analyzed
             .tag_term
@@ -145,9 +150,11 @@ impl HighSearchProjectionService {
             None => None,
         };
 
+        let tokenized = !content_tokens.is_empty() || tag_token.is_some();
         let projection_query = HighSearchProjectionQuery {
             content_tokens,
             tag_token,
+            analysis_version: tokenized.then_some(analysis_version),
             search_key_version: key_version,
         };
         projection_query.validate()?;
@@ -196,6 +203,15 @@ impl HighSearchProjectionService {
     }
 }
 
+fn validate_analysis_version(analysis_version: String) -> AppResult<String> {
+    if analysis_version.trim().is_empty() || analysis_version.contains('\0') {
+        return Err(AppError::ValidationError(
+            "HIGH search analysis version must be non-empty and contain no NUL".into(),
+        ));
+    }
+    Ok(analysis_version)
+}
+
 fn canonicalize_terms(terms: Vec<String>) -> AppResult<Vec<String>> {
     let mut unique = BTreeSet::new();
     for term in terms {
@@ -227,6 +243,7 @@ mod tests {
     impl HighSearchTextAnalyzer for FakeAnalyzer {
         fn analyze_document(&self, _memo: &Memo) -> AppResult<HighSearchAnalyzedDocument> {
             Ok(HighSearchAnalyzedDocument {
+                analysis_version: "analysis-v1".into(),
                 content_terms: vec!["snow".into(), "memo".into(), "snow".into()],
                 tag_terms: vec!["tag".into(), "tag".into()],
             })
@@ -238,6 +255,7 @@ mod tests {
             tag: Option<&str>,
         ) -> AppResult<HighSearchAnalyzedQuery> {
             Ok(HighSearchAnalyzedQuery {
+                analysis_version: "analysis-v1".into(),
                 content_terms: if query.is_empty() {
                     vec![]
                 } else {
@@ -369,6 +387,7 @@ mod tests {
         assert_eq!(document.owner_partition, Uuid::from_u128(8));
         assert_eq!(document.memo_id, Uuid::from_u128(7));
         assert_eq!(document.version, 3);
+        assert_eq!(document.analysis_version, "analysis-v1");
         assert_eq!(document.search_key_version, "search-v1");
         assert_eq!(document.content_tokens.len(), 2);
         assert_eq!(document.tag_tokens.len(), 1);
@@ -414,6 +433,7 @@ mod tests {
         assert_eq!(captured_owner, owner);
         assert!(query.content_tokens.is_empty());
         assert!(query.tag_token.is_none());
+        assert!(query.analysis_version.is_none());
         assert!(query.search_key_version.is_none());
         assert_eq!((page, limit), (2, 25));
     }
@@ -438,6 +458,7 @@ mod tests {
         let (_, query, _, _) = projection.query.lock().unwrap().clone().unwrap();
         assert_eq!(query.content_tokens.len(), 1);
         assert!(query.tag_token.is_some());
+        assert_eq!(query.analysis_version.as_deref(), Some("analysis-v1"));
         assert_eq!(query.search_key_version.as_deref(), Some("search-v1"));
     }
 
