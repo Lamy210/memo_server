@@ -3,10 +3,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::{
-    application::crypto::HighEncryptedMemoEnvelope,
-    error::AppResult,
-};
+use crate::{application::crypto::HighEncryptedMemoEnvelope, error::AppResult};
 
 /// Ciphertext-only cache boundary for HIGH memos.
 ///
