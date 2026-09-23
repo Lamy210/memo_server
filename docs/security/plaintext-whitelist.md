@@ -110,8 +110,8 @@ Allowed:
 - memo ID / opaque owner partition required for authorization filtering
 - memo-derived opaque sort keys only when they reproduce an already-whitelisted opaque identifier
 - version/projection bookkeeping
-- `analysis_version` for normalization/tokenization compatibility; it must identify a global analyzer contract and must not encode detected language, user locale, or content-derived metadata
-- `search_key_version` for blind-token key-rotation routing; it is an opaque version identifier and must contain no key material
+- `analysis_version` for normalization/tokenization compatibility; it must identify a global analyzer contract, must not encode detected language, user locale, or content-derived metadata, and is restricted to a bounded ASCII operational identifier
+- `search_key_version` for blind-token key-rotation routing; it is a bounded ASCII opaque version identifier and must contain no key material
 - keyed blind tokens
 - non-content operational metadata explicitly approved here
 
