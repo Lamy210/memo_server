@@ -180,10 +180,7 @@ mod tests {
         assert!(validate_key_version("search:key_v1.2").is_ok());
         assert!(validate_analysis_version("analysis v1").is_err());
         assert!(validate_key_version("search\nv1").is_err());
-        assert!(validate_analysis_version(
-            &"x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1)
-        )
-        .is_err());
+        assert!(validate_analysis_version(&"x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1)).is_err());
     }
 
     #[test]
