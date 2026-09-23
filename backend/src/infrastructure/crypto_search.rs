@@ -230,4 +230,32 @@ mod tests {
             .all(|token| token.key_version == "test-search-v1"));
         assert_ne!(tokens[0].value, tokens[1].value);
     }
+
+    #[tokio::test]
+    async fn empty_token_batch_does_not_resolve_search_key() {
+        let keys = Arc::new(CountingSearchKeyProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let crypto = RingHighSearchTokenCryptography::new(keys.clone());
+
+        let tokens = crypto.derive_tokens(Uuid::new_v4(), &[]).await.unwrap();
+
+        assert!(tokens.is_empty());
+        assert_eq!(keys.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_token_batch_fails_before_search_key_resolution() {
+        let keys = Arc::new(CountingSearchKeyProvider {
+            calls: AtomicUsize::new(0),
+        });
+        let crypto = RingHighSearchTokenCryptography::new(keys.clone());
+        let terms = vec!["snow".to_string(), " invalid ".to_string()];
+
+        assert!(matches!(
+            crypto.derive_tokens(Uuid::new_v4(), &terms).await,
+            Err(AppError::ValidationError(_))
+        ));
+        assert_eq!(keys.calls.load(Ordering::Relaxed), 0);
+    }
 }
