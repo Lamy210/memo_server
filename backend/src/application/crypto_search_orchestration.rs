@@ -417,8 +417,11 @@ mod tests {
     async fn empty_query_avoids_key_resolution_and_preserves_owner_scope() {
         let crypto = Arc::new(FakeCrypto::stable());
         let projection = Arc::new(FakeProjection::default());
-        let service =
-            HighSearchProjectionService::new(Arc::new(FakeAnalyzer), crypto.clone(), projection.clone());
+        let service = HighSearchProjectionService::new(
+            Arc::new(FakeAnalyzer),
+            crypto.clone(),
+            projection.clone(),
+        );
         let owner = Uuid::from_u128(42);
 
         let page = service
@@ -442,8 +445,11 @@ mod tests {
     async fn tokenized_query_deduplicates_and_uses_one_key_version() {
         let crypto = Arc::new(FakeCrypto::stable());
         let projection = Arc::new(FakeProjection::default());
-        let service =
-            HighSearchProjectionService::new(Arc::new(FakeAnalyzer), crypto.clone(), projection.clone());
+        let service = HighSearchProjectionService::new(
+            Arc::new(FakeAnalyzer),
+            crypto.clone(),
+            projection.clone(),
+        );
         let owner = Uuid::from_u128(42);
 
         service
