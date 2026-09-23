@@ -16,6 +16,7 @@ use crate::{
 
 pub(super) const SEARCH_KEY_BYTES: usize = 48;
 const SEARCH_KEY_SEED_BYTES: usize = 48;
+const SEARCH_KEY_DERIVATION_VERSION: &str = "hkdf384-v1";
 const SEARCH_KEY_DERIVATION_SALT: &[u8] = b"memo_server:search:root:v1\0";
 const SEARCH_USER_KEY_INFO: &[u8] = b"memo_server:search:user-key:v1\0";
 
@@ -155,10 +156,20 @@ impl SearchKeyProvider for HkdfSearchKeyProvider {
         let seed = self.seeds.resolve_search_seed(owner_partition).await?;
         seed.validate()?;
 
+        let key_version = format!(
+            "{SEARCH_KEY_DERIVATION_VERSION}:{}",
+            seed.key_version
+        );
+        if !search_version_identifier_is_valid(&key_version) {
+            return Err(AppError::ServiceUnavailable(format!(
+                "Derived search-key version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
+            )));
+        }
+
         let salt = hkdf::Salt::new(hkdf::HKDF_SHA384, SEARCH_KEY_DERIVATION_SALT);
         let prk = salt.extract(seed.plaintext.expose());
         let owner: &[u8] = owner_partition.as_bytes();
-        let info = [SEARCH_USER_KEY_INFO, seed.key_version.as_bytes(), owner];
+        let info = [SEARCH_USER_KEY_INFO, key_version.as_bytes(), owner];
         let okm = prk.expand(&info, hkdf::HKDF_SHA384).map_err(|_| {
             AppError::InternalServerError("Failed to derive HIGH per-user search key".into())
         })?;
@@ -170,7 +181,7 @@ impl SearchKeyProvider for HkdfSearchKeyProvider {
 
         let resolved = ResolvedSearchKey {
             plaintext: SecretSearchKey::new(key_bytes),
-            key_version: seed.key_version,
+            key_version,
         };
         resolved.validate()?;
         Ok(resolved)
@@ -261,7 +272,7 @@ mod tests {
         let second = provider.resolve_search_key(owner).await.unwrap();
 
         assert_eq!(first.plaintext.expose(), second.plaintext.expose());
-        assert_eq!(first.key_version, "search-seed-v1");
+        assert_eq!(first.key_version, "hkdf384-v1:search-seed-v1");
     }
 
     #[tokio::test]
