@@ -718,11 +718,7 @@ impl PlaintextMemoMigrationSource for MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("count plaintext MongoDB migration source memos", error))
     }
 
-    async fn page_source_memos(
-        &self,
-        after: Option<Uuid>,
-        limit: usize,
-    ) -> AppResult<Vec<Memo>> {
+    async fn page_source_memos(&self, after: Option<Uuid>, limit: usize) -> AppResult<Vec<Memo>> {
         let limit = i64::try_from(limit).map_err(|_| {
             AppError::DatabaseError("MongoDB migration page size is too large".into())
         })?;
