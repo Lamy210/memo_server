@@ -16,7 +16,7 @@ use crate::{
 };
 
 const TABLE_NAME: &str = "memos_high_v1";
-const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos_high_v1 (id uuid, content_tokens text indexed, tag_tokens text indexed, owner_partition string, version int, search_key_version string, memo_sort_key string) dict='keywords_32k'";
+const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos_high_v1 (id uuid, content_tokens text indexed, tag_tokens text indexed, owner_partition string, version int, analysis_version string, search_key_version string, memo_sort_key string) dict='keywords_32k'";
 
 pub struct HighManticoreClient {
     client: Client,
@@ -135,6 +135,7 @@ impl HighManticoreClient {
                 "tag_tokens": join_tokens(&document.tag_tokens),
                 "owner_partition": document.owner_partition.to_string(),
                 "version": document.version,
+                "analysis_version": document.analysis_version,
                 "search_key_version": document.search_key_version,
                 "memo_sort_key": document.memo_id.to_string(),
             }
@@ -155,6 +156,14 @@ impl HighManticoreClient {
                 "owner_partition": owner_partition.to_string()
             }
         })];
+
+        if let Some(analysis_version) = query.analysis_version.as_deref() {
+            must.push(json!({
+                "equals": {
+                    "analysis_version": analysis_version
+                }
+            }));
+        }
 
         if let Some(key_version) = query.search_key_version.as_deref() {
             must.push(json!({
@@ -393,6 +402,7 @@ mod tests {
             memo_id,
             owner_partition: owner,
             version: 1,
+            analysis_version: "analysis-v1".into(),
             search_key_version: "search-v1".into(),
             content_tokens: vec![blind_content.clone()],
             tag_tokens: vec![blind_tag.clone()],
@@ -403,6 +413,7 @@ mod tests {
         let query = HighSearchProjectionQuery {
             content_tokens: vec![blind_content],
             tag_token: Some(blind_tag),
+            analysis_version: Some("analysis-v1".into()),
             search_key_version: Some("search-v1".into()),
         };
 
@@ -453,6 +464,7 @@ mod tests {
             memo_id: Uuid::new_v4(),
             owner_partition: Uuid::new_v4(),
             version: 4,
+            analysis_version: "analysis-v1".into(),
             search_key_version: "search-v1".into(),
             content_tokens: vec![token("search-v1", "ab")],
             tag_tokens: vec![token("search-v1", "cd")],
@@ -470,6 +482,7 @@ mod tests {
                 "tag_tokens".to_string(),
                 "owner_partition".to_string(),
                 "version".to_string(),
+                "analysis_version".to_string(),
                 "search_key_version".to_string(),
                 "memo_sort_key".to_string(),
             ])
@@ -486,6 +499,7 @@ mod tests {
         let query = HighSearchProjectionQuery {
             content_tokens: vec![token("search-v1", "ab")],
             tag_token: Some(token("search-v1", "cd")),
+            analysis_version: Some("analysis-v1".into()),
             search_key_version: Some("search-v1".into()),
         };
 
@@ -493,6 +507,7 @@ mod tests {
         let serialized = serde_json::to_string(&body).unwrap();
 
         assert!(serialized.contains(&owner.to_string()));
+        assert!(serialized.contains("analysis-v1"));
         assert!(serialized.contains("search-v1"));
         assert!(serialized.contains(&token("search-v1", "ab").value));
         assert!(serialized.contains(&token("search-v1", "cd").value));
@@ -520,6 +535,7 @@ mod tests {
         let query = HighSearchProjectionQuery {
             content_tokens: vec![],
             tag_token: None,
+            analysis_version: None,
             search_key_version: None,
         };
 
