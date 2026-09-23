@@ -34,6 +34,7 @@ blind token
 - long-lived search-root key material is not part of the `SearchKeyProvider` contract,
 - the seed provider receives `owner_partition` and must return an owner-scoped seed,
 - per-user search keys are deterministic for the same owner and seed version,
+- persisted derived-key versions include the HKDF protocol version (for example `hkdf384-v1:<seed-version>`) so derivation changes cannot masquerade as the same generation,
 - owner changes produce different derived keys,
 - the same owner + `search_key_version` must resolve to stable seed material,
 - changing seed material requires a new application-owned `search_key_version` and projection reindex,
@@ -49,7 +50,7 @@ A managed KMS HMAC/PRF operation can implement the seed-provider boundary withou
 
 For example, a provider may compute a SHA-384 HMAC over a domain-separated owner identifier and return the 48-byte MAC as the owner-scoped seed. memo_server then applies HKDF-SHA-384 locally for protocol separation before using the result as the blind-token HMAC key.
 
-The provider-specific KMS key ID/ARN must remain configuration/provider state. The persisted `search_key_version` is an application-owned rotation alias, not a cloud resource locator.
+The provider-specific KMS key ID/ARN must remain configuration/provider state. The seed provider returns an application-owned seed rotation alias, not a cloud resource locator. The persisted projection `search_key_version` is the derived generation identifier `hkdf384-v1:<seed-version>`, binding both seed rotation and local derivation protocol.
 
 A provider must never let a mutable cloud alias silently change seed bytes while returning the same application `search_key_version`. The provider must pin or otherwise identify immutable provider key material internally and bump the application version whenever seed material changes.
 
