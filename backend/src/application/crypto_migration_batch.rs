@@ -21,11 +21,7 @@ pub trait PlaintextMemoMigrationSource: Send + Sync {
     ///
     /// The final production migration pass still requires writes to be frozen;
     /// paging is a bounded-memory traversal contract, not a live CDC protocol.
-    async fn page_source_memos(
-        &self,
-        after: Option<Uuid>,
-        limit: usize,
-    ) -> AppResult<Vec<Memo>>;
+    async fn page_source_memos(&self, after: Option<Uuid>, limit: usize) -> AppResult<Vec<Memo>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -343,10 +339,7 @@ mod tests {
     fn service(memos: Vec<Memo>) -> HighMemoBatchMigrationService {
         let source = Arc::new(FakeSource::new(memos));
         let staging = Arc::new(FakeStaging::default());
-        let migration = Arc::new(HighMemoMigrationService::new(
-            Arc::new(FakeCrypto),
-            staging,
-        ));
+        let migration = Arc::new(HighMemoMigrationService::new(Arc::new(FakeCrypto), staging));
         HighMemoBatchMigrationService::new(source, migration)
     }
 
