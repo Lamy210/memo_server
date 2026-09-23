@@ -468,35 +468,58 @@ impl MongoDbAuthoritativeStore {
     /// Stage one HIGH encrypted envelope in an isolated migration collection.
     ///
     /// This collection is not authoritative and is not used by request paths.
-    /// Identical reruns are idempotent; divergent rows fail closed.
+    /// The upsert is insert-only: concurrent identical writers converge on one
+    /// document, while divergent same-ID envelopes are detected after the
+    /// atomic insert-if-absent operation and fail closed.
     pub async fn stage_encrypted_memo_for_migration(
         &self,
         envelope: &HighEncryptedMemoEnvelope,
     ) -> AppResult<MigrationImportResult> {
         let document = EncryptedMemoDocument::try_from(envelope)?;
+        let update = doc! {
+            "$setOnInsert": {
+                "owner_partition": document.owner_partition.clone(),
+                "ciphertext": document.ciphertext.clone(),
+                "nonce": document.nonce.clone(),
+                "wrapped_dek": document.wrapped_dek.clone(),
+                "version": document.version,
+                "crypto_suite_id": document.crypto_suite_id.clone(),
+                "key_version": document.key_version.clone(),
+                "schema_version": document.schema_version,
+            }
+        };
 
-        if let Some(existing) = self
+        let result = self
+            .encrypted_memos
+            .update_one(doc! { "_id": document.id.clone() }, update)
+            .upsert(true)
+            .await
+            .map_err(|error| mongo_error("stage MongoDB encrypted migration memo", error))?;
+
+        let persisted = self
             .encrypted_memos
             .find_one(doc! { "_id": document.id.clone() })
             .await
-            .map_err(|error| mongo_error("inspect MongoDB encrypted migration target", error))?
-        {
-            if existing == document {
-                return Ok(MigrationImportResult::AlreadyPresent);
-            }
+            .map_err(|error| mongo_error("verify MongoDB encrypted migration target", error))?
+            .ok_or_else(|| {
+                AppError::DatabaseError(format!(
+                    "MongoDB encrypted migration target {} disappeared after staging",
+                    envelope.memo_id
+                ))
+            })?;
 
+        if persisted != document {
             return Err(AppError::Conflict(format!(
                 "MongoDB encrypted migration target already contains different memo {}",
                 envelope.memo_id
             )));
         }
 
-        self.encrypted_memos
-            .insert_one(document)
-            .await
-            .map_err(|error| mongo_error("stage MongoDB encrypted migration memo", error))?;
-
-        Ok(MigrationImportResult::Inserted)
+        Ok(if result.upserted_id.is_some() {
+            MigrationImportResult::Inserted
+        } else {
+            MigrationImportResult::AlreadyPresent
+        })
     }
 
     pub async fn find_staged_encrypted_memo_for_migration(
