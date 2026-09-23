@@ -1,0 +1,33 @@
+name: Generate analyzer lock
+
+on:
+  push:
+    branches:
+      - security/high-search-icu-analyzer
+
+permissions:
+  contents: write
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Generate Cargo lockfile
+        working-directory: backend
+        run: cargo generate-lockfile
+
+      - name: Commit lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- backend/Cargo.lock; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/Cargo.lock
+          git commit -m "build: lock ICU4X analyzer dependencies"
+          git push
