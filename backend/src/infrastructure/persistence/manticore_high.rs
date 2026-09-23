@@ -7,9 +7,9 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_projection::{
-            HighMemoSearchProjection, HighSearchProjectionDocument,
-            HighSearchProjectionMetadata, HighSearchProjectionMigrationInspector,
-            HighSearchProjectionPage, HighSearchProjectionQuery,
+            HighMemoSearchProjection, HighSearchProjectionDocument, HighSearchProjectionMetadata,
+            HighSearchProjectionMigrationInspector, HighSearchProjectionPage,
+            HighSearchProjectionQuery,
         },
         health::HealthProbe,
     },
@@ -403,10 +403,7 @@ impl HighMemoSearchProjection for HighManticoreClient {
 
 #[async_trait]
 impl HighSearchProjectionMigrationInspector for HighManticoreClient {
-    async fn contains_metadata(
-        &self,
-        metadata: &HighSearchProjectionMetadata,
-    ) -> AppResult<bool> {
+    async fn contains_metadata(&self, metadata: &HighSearchProjectionMetadata) -> AppResult<bool> {
         self.contains_metadata_inner(metadata).await
     }
 
