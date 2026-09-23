@@ -5,7 +5,8 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search::{
-            validate_normalized_search_term, HighSearchToken, HighSearchTokenCryptography,
+            search_version_identifier_is_valid, validate_normalized_search_term, HighSearchToken,
+            HighSearchTokenCryptography, MAX_SEARCH_VERSION_ID_CHARS,
         },
         crypto_search_projection::{
             HighMemoSearchProjection, HighSearchProjectionDocument, HighSearchProjectionPage,
@@ -202,10 +203,10 @@ impl HighSearchProjectionService {
 }
 
 fn validate_analysis_version(analysis_version: String) -> AppResult<String> {
-    if analysis_version.trim().is_empty() || analysis_version.contains('\0') {
-        return Err(AppError::ValidationError(
-            "HIGH search analysis version must be non-empty and contain no NUL".into(),
-        ));
+    if !search_version_identifier_is_valid(&analysis_version) {
+        return Err(AppError::ValidationError(format!(
+            "HIGH search analysis version must be 1..={MAX_SEARCH_VERSION_ID_CHARS} ASCII identifier characters"
+        )));
     }
     Ok(analysis_version)
 }
@@ -361,7 +362,11 @@ mod tests {
     fn analysis_version_and_normalized_terms_fail_closed() {
         assert!(validate_analysis_version("analysis-v1".into()).is_ok());
         assert!(validate_analysis_version(" ".into()).is_err());
+        assert!(validate_analysis_version("analysis v1".into()).is_err());
         assert!(validate_analysis_version("analysis\0v1".into()).is_err());
+        assert!(
+            validate_analysis_version("x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1)).is_err()
+        );
 
         assert_eq!(
             canonicalize_terms(vec!["snow".into(), "memo".into(), "snow".into()]).unwrap(),
