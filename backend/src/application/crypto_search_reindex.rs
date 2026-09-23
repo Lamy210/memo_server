@@ -1,12 +1,8 @@
 use std::sync::Arc;
 
-use uuid::Uuid;
-
 use crate::{
     application::{
-        crypto_migration_batch::{
-            validate_page, validate_page_size, PlaintextMemoMigrationSource,
-        },
+        crypto_migration_batch::{validate_page, validate_page_size, PlaintextMemoMigrationSource},
         crypto_search_orchestration::HighSearchProjectionService,
         crypto_search_projection::HighSearchProjectionMigrationInspector,
     },
@@ -161,6 +157,7 @@ mod tests {
 
     use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
+    use uuid::Uuid;
 
     use super::*;
     use crate::{
@@ -397,7 +394,10 @@ mod tests {
         ) -> AppResult<Vec<Memo>> {
             let call = self.page_calls.fetch_add(1, Ordering::Relaxed);
             let current = memo(1, if call >= 2 { 2 } else { 1 });
-            Ok((limit > 0 && after.is_none()).then_some(current).into_iter().collect())
+            Ok((limit > 0 && after.is_none())
+                .then_some(current)
+                .into_iter()
+                .collect())
         }
     }
 
