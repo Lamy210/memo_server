@@ -135,6 +135,8 @@ assets:
         analysis_version_required: true
         manticore_version: 29.9.0
         integration_gate: configured
+        reindex_verification: staged
+        reindex_write_freeze_required: true
       legacy_plaintext_projection_active: true
       runtime_eligible: false
     migration_status: in_progress

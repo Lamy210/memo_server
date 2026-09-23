@@ -5,5 +5,6 @@ pub mod crypto_migration_batch;
 pub mod crypto_search;
 pub mod crypto_search_orchestration;
 pub mod crypto_search_projection;
+pub mod crypto_search_reindex;
 pub mod health;
 pub mod memo;

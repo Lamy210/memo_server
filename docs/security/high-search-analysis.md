@@ -84,6 +84,26 @@ Any future feature that changes which plaintext terms are generated must:
 4. include a reindex plan,
 5. document any additional leakage.
 
+## Reindex verification
+
+The protected projection migration uses a bounded-memory two-pass reindex.
+
+1. Page the authoritative plaintext source by memo ID.
+2. Analyze and blind-tokenize each memo through the normal protected-search orchestration.
+3. Replace the protected Manticore row.
+4. Immediately verify only the whitelisted routing/version metadata for that row.
+5. Re-page the authoritative source without mutating the projection.
+6. Recompute the expected metadata and verify each source memo still matches.
+7. Require final protected-projection cardinality to equal authoritative-source cardinality.
+
+The cardinality check uses Manticore SQL `SELECT COUNT(*)` rather than JSON `hits.total`. Manticore can report `total_relation=gte` for non-exact JSON totals, while the migration gate requires an exact count.
+
+This detects missing rows, target-only stale rows, source version changes between passes, analyzer-version changes, and search-key-version changes that would otherwise make a partial reindex look successful.
+
+The inspector never returns blind tokens or memo plaintext. It checks exact metadata predicates inside Manticore and exposes only a boolean match result plus total projection count.
+
+The final production reindex still requires the authoritative source to be write-frozen. This is a convergence verifier, not change-data capture.
+
 ## Runtime status
 
 This contract is not wired into normal request-path search yet.
@@ -92,7 +112,7 @@ Runtime cutover still requires:
 
 - a production language-aware analyzer,
 - a production search-key provider,
-- protected projection backfill/reindex verification,
+- an operator-guarded invocation of the staged protected projection reindex/verification service,
 - an explicit search-key rotation protocol that prevents old/new key-version query gaps (for example generation-based reindex plus atomic switch or verified dual-read),
 - an explicit analysis-version migration protocol for tokenizer/normalizer changes,
 - request-path orchestration wiring,
