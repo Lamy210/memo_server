@@ -132,6 +132,7 @@ assets:
         table: memos_high_v1
         semantic_plaintext_fields: forbidden
         owner_scoped_delete: true
+        analysis_version_required: true
         manticore_version: 29.9.0
         integration_gate: configured
       legacy_plaintext_projection_active: true
