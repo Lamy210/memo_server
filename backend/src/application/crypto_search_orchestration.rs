@@ -120,10 +120,7 @@ impl HighSearchProjectionService {
         let analyzed = self.analyzer.analyze_query(query, tag)?;
         let analysis_version = validate_analysis_version(analyzed.analysis_version)?;
         let content_terms = canonicalize_terms(analyzed.content_terms)?;
-        let tag_term = analyzed
-            .tag_term
-            .map(validate_single_term)
-            .transpose()?;
+        let tag_term = analyzed.tag_term.map(validate_single_term).transpose()?;
 
         if !query.is_empty() && content_terms.is_empty() {
             return Err(AppError::ValidationError(
@@ -235,9 +232,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::*;
-    use crate::application::crypto_search::{
-        SEARCH_HIGH_SUITE_ID, SEARCH_HIGH_TOKEN_BYTES,
-    };
+    use crate::application::crypto_search::{SEARCH_HIGH_SUITE_ID, SEARCH_HIGH_TOKEN_BYTES};
 
     struct FakeAnalyzer;
 
@@ -295,10 +290,7 @@ mod tests {
             _owner_partition: Uuid,
             normalized_term: &str,
         ) -> AppResult<HighSearchToken> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(normalized_term.to_string());
+            self.calls.lock().unwrap().push(normalized_term.to_string());
 
             let pair = match normalized_term {
                 "memo" => "ab",
@@ -327,10 +319,7 @@ mod tests {
 
     #[async_trait]
     impl HighMemoSearchProjection for FakeProjection {
-        async fn replace_document(
-            &self,
-            document: &HighSearchProjectionDocument,
-        ) -> AppResult<()> {
+        async fn replace_document(&self, document: &HighSearchProjectionDocument) -> AppResult<()> {
             *self.document.lock().unwrap() = Some(document.clone());
             Ok(())
         }
@@ -349,11 +338,7 @@ mod tests {
             })
         }
 
-        async fn delete_document(
-            &self,
-            owner_partition: Uuid,
-            memo_id: Uuid,
-        ) -> AppResult<()> {
+        async fn delete_document(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
             *self.deleted.lock().unwrap() = Some((owner_partition, memo_id));
             Ok(())
         }
