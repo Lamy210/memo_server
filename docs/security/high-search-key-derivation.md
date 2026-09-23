@@ -35,7 +35,8 @@ blind token
 - the seed provider receives `owner_partition` and must return an owner-scoped seed,
 - per-user search keys are deterministic for the same owner and seed version,
 - owner changes produce different derived keys,
-- seed/key rotation changes the derived search key and therefore requires projection reindex,
+- the same owner + `search_key_version` must resolve to stable seed material,
+- changing seed material requires a new application-owned `search_key_version` and projection reindex,
 - plaintext key/seed material uses zeroizing wrappers,
 - debug formatting redacts key/seed bytes,
 - search keys remain independent from memo-encryption DEKs,
@@ -49,6 +50,8 @@ A managed KMS HMAC/PRF operation can implement the seed-provider boundary withou
 For example, a provider may compute a SHA-384 HMAC over a domain-separated owner identifier and return the 48-byte MAC as the owner-scoped seed. memo_server then applies HKDF-SHA-384 locally for protocol separation before using the result as the blind-token HMAC key.
 
 The provider-specific KMS key ID/ARN must remain configuration/provider state. The persisted `search_key_version` is an application-owned rotation alias, not a cloud resource locator.
+
+A provider must never let a mutable cloud alias silently change seed bytes while returning the same application `search_key_version`. The provider must pin or otherwise identify immutable provider key material internally and bump the application version whenever seed material changes.
 
 Application orchestration batches all content/tag terms for one document or query into one cryptographic operation. The ring adapter resolves the owner-scoped search key once for that batch and reuses only the in-memory HMAC key for its terms. Cross-operation caching remains a separate bounded-lifetime policy decision.
 
