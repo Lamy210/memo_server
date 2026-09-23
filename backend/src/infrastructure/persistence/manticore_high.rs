@@ -53,7 +53,9 @@ impl HighManticoreClient {
     }
 
     async fn execute_raw_sql(&self, sql: &str, operation: &str) -> AppResult<()> {
-        self.execute_raw_sql_result(sql, operation).await.map(|_| ())
+        self.execute_raw_sql_result(sql, operation)
+            .await
+            .map(|_| ())
     }
 
     async fn execute_raw_sql_result(&self, sql: &str, operation: &str) -> AppResult<Value> {
