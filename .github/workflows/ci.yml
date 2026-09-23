@@ -104,6 +104,42 @@ jobs:
         if: always()
         run: docker rm -f memo-mongodb-ci >/dev/null 2>&1 || true
 
+      - name: Start Manticore Search
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run -d --name memo-manticore-ci -p 9308:9308 \
+            manticoresearch/manticore:29.9.0
+
+          ready=0
+          for _ in $(seq 1 60); do
+            if curl -fsS -X POST \
+              -H 'Content-Type: text/plain' \
+              --data 'SELECT 1' \
+              'http://127.0.0.1:9308/sql?mode=raw' >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$ready" -ne 1 ]]; then
+            docker logs memo-manticore-ci >&2 || true
+            exit 1
+          fi
+
+      - name: HIGH Manticore integration
+        env:
+          MANTICORE_TEST_URL: http://127.0.0.1:9308
+        run: |
+          cargo test --locked high_manticore_preserves_owner_scope_and_blind_tokens \
+            -- --ignored --nocapture
+
+      - name: Stop Manticore Search
+        if: always()
+        run: docker rm -f memo-manticore-ci >/dev/null 2>&1 || true
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
