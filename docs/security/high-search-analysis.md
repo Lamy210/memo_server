@@ -96,6 +96,8 @@ The protected projection migration uses a bounded-memory two-pass reindex.
 6. Recompute the expected metadata and verify each source memo still matches.
 7. Require final protected-projection cardinality to equal authoritative-source cardinality.
 
+The cardinality check uses Manticore SQL `SELECT COUNT(*)` rather than JSON `hits.total`. Manticore can report `total_relation=gte` for non-exact JSON totals, while the migration gate requires an exact count.
+
 This detects missing rows, target-only stale rows, source version changes between passes, analyzer-version changes, and search-key-version changes that would otherwise make a partial reindex look successful.
 
 The inspector never returns blind tokens or memo plaintext. It checks exact metadata predicates inside Manticore and exposes only a boolean match result plus total projection count.
