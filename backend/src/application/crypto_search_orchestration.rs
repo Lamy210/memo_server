@@ -199,6 +199,7 @@ impl HighSearchProjectionService {
             tokens.push(token);
         }
 
+        tokens.sort_by(|left, right| left.value.cmp(&right.value));
         Ok(tokens)
     }
 }
@@ -369,6 +370,19 @@ mod tests {
             updated_at: Utc.timestamp_millis_opt(1_700_000_001_000).unwrap(),
             version: 3,
         }
+    }
+
+    #[test]
+    fn analysis_version_and_normalized_terms_fail_closed() {
+        assert!(validate_analysis_version("analysis-v1".into()).is_ok());
+        assert!(validate_analysis_version(" ".into()).is_err());
+        assert!(validate_analysis_version("analysis\0v1".into()).is_err());
+
+        assert_eq!(
+            canonicalize_terms(vec!["snow".into(), "memo".into(), "snow".into()]).unwrap(),
+            vec!["memo".to_string(), "snow".to_string()]
+        );
+        assert!(canonicalize_terms(vec![" snow".into()]).is_err());
     }
 
     #[tokio::test]
