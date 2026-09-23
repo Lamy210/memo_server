@@ -1,6 +1,7 @@
 //src/infrastructure/persistence/mod.rs
 pub mod elasticsearch;
 pub mod manticore;
+pub mod manticore_high;
 pub mod mongodb;
 pub mod ports;
 pub mod redis;
