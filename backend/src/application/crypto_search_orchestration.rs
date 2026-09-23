@@ -9,8 +9,8 @@ use crate::{
             HighSearchTokenCryptography, MAX_SEARCH_VERSION_ID_CHARS,
         },
         crypto_search_projection::{
-            HighMemoSearchProjection, HighSearchProjectionDocument, HighSearchProjectionPage,
-            HighSearchProjectionQuery,
+            HighMemoSearchProjection, HighSearchProjectionDocument, HighSearchProjectionMetadata,
+            HighSearchProjectionPage, HighSearchProjectionQuery,
         },
     },
     domain::memo::entity::Memo,
@@ -66,7 +66,29 @@ impl HighSearchProjectionService {
         }
     }
 
-    pub async fn replace_memo(&self, memo: &Memo) -> AppResult<()> {
+    pub async fn replace_memo(&self, memo: &Memo) -> AppResult<HighSearchProjectionMetadata> {
+        let document = self.build_projection_document(memo).await?;
+        let metadata = HighSearchProjectionMetadata::from(&document);
+        self.projection.replace_document(&document).await?;
+        Ok(metadata)
+    }
+
+    /// Recompute the expected whitelisted projection metadata without writing.
+    ///
+    /// Migration verification uses this to detect source version changes,
+    /// analyzer-version changes, or search-key rotation between passes.
+    pub async fn expected_metadata_for_memo(
+        &self,
+        memo: &Memo,
+    ) -> AppResult<HighSearchProjectionMetadata> {
+        let document = self.build_projection_document(memo).await?;
+        Ok(HighSearchProjectionMetadata::from(&document))
+    }
+
+    async fn build_projection_document(
+        &self,
+        memo: &Memo,
+    ) -> AppResult<HighSearchProjectionDocument> {
         if !memo.validate() {
             return Err(AppError::ValidationError(
                 "Memo violates domain invariants before HIGH search projection".into(),
@@ -107,7 +129,7 @@ impl HighSearchProjectionService {
             tag_tokens,
         };
         document.validate()?;
-        self.projection.replace_document(&document).await
+        Ok(document)
     }
 
     pub async fn search_memo_ids(

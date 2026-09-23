@@ -39,6 +39,40 @@ impl HighSearchProjectionDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HighSearchProjectionMetadata {
+    pub memo_id: Uuid,
+    pub owner_partition: Uuid,
+    pub version: i32,
+    pub analysis_version: String,
+    pub search_key_version: String,
+}
+
+impl HighSearchProjectionMetadata {
+    pub fn validate(&self) -> AppResult<()> {
+        if self.version <= 0 {
+            return Err(AppError::ValidationError(
+                "HIGH search projection metadata version must be positive".into(),
+            ));
+        }
+        validate_analysis_version(&self.analysis_version)?;
+        validate_key_version(&self.search_key_version)?;
+        Ok(())
+    }
+}
+
+impl From<&HighSearchProjectionDocument> for HighSearchProjectionMetadata {
+    fn from(document: &HighSearchProjectionDocument) -> Self {
+        Self {
+            memo_id: document.memo_id,
+            owner_partition: document.owner_partition,
+            version: document.version,
+            analysis_version: document.analysis_version.clone(),
+            search_key_version: document.search_key_version.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HighSearchProjectionQuery {
     pub content_tokens: Vec<HighSearchToken>,
     pub tag_token: Option<HighSearchToken>,
@@ -88,6 +122,17 @@ impl HighSearchProjectionQuery {
 pub struct HighSearchProjectionPage {
     pub memo_ids: Vec<Uuid>,
     pub total: usize,
+}
+
+#[async_trait]
+pub trait HighSearchProjectionMigrationInspector: Send + Sync {
+    /// Check whether exactly one protected projection row matches the expected
+    /// whitelisted operational metadata. Blind tokens and plaintext are never
+    /// returned through this migration-only boundary.
+    async fn contains_metadata(&self, metadata: &HighSearchProjectionMetadata) -> AppResult<bool>;
+
+    /// Count all rows in the isolated protected projection.
+    async fn count_documents(&self) -> AppResult<u64>;
 }
 
 #[async_trait]

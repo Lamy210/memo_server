@@ -9,7 +9,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-const MAX_MIGRATION_PAGE_SIZE: usize = 1_000;
+pub(crate) const MAX_MIGRATION_PAGE_SIZE: usize = 1_000;
 
 #[async_trait]
 pub trait PlaintextMemoMigrationSource: Send + Sync {
@@ -154,7 +154,7 @@ impl HighMemoBatchMigrationService {
     }
 }
 
-fn validate_page_size(page_size: usize) -> AppResult<()> {
+pub(crate) fn validate_page_size(page_size: usize) -> AppResult<()> {
     if !(1..=MAX_MIGRATION_PAGE_SIZE).contains(&page_size) {
         return Err(AppError::ValidationError(format!(
             "HIGH migration page size must be between 1 and {MAX_MIGRATION_PAGE_SIZE}"
@@ -163,7 +163,7 @@ fn validate_page_size(page_size: usize) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_page(page: &[Memo], after: Option<Uuid>, limit: usize) -> AppResult<()> {
+pub(crate) fn validate_page(page: &[Memo], after: Option<Uuid>, limit: usize) -> AppResult<()> {
     if page.len() > limit {
         return Err(AppError::DatabaseError(format!(
             "HIGH migration source returned {} memo(s), exceeding requested page size {limit}",

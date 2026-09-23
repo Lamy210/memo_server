@@ -7,8 +7,9 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_projection::{
-            HighMemoSearchProjection, HighSearchProjectionDocument, HighSearchProjectionPage,
-            HighSearchProjectionQuery,
+            HighMemoSearchProjection, HighSearchProjectionDocument,
+            HighSearchProjectionMetadata, HighSearchProjectionMigrationInspector,
+            HighSearchProjectionPage, HighSearchProjectionQuery,
         },
         health::HealthProbe,
     },
@@ -232,18 +233,7 @@ impl HighManticoreClient {
         let body = Self::search_body(owner_partition, query, page, limit)?;
         let result = self.post_json("search", &body).await?;
 
-        let total = result["hits"]["total"]
-            .as_u64()
-            .ok_or_else(|| {
-                AppError::DatabaseError("Invalid HIGH Manticore search total".to_string())
-            })
-            .and_then(|value| {
-                usize::try_from(value).map_err(|_| {
-                    AppError::DatabaseError(
-                        "HIGH Manticore search total exceeds platform limits".to_string(),
-                    )
-                })
-            })?;
+        let total = parse_search_total(&result)?;
 
         let hits = result["hits"]["hits"].as_array().ok_or_else(|| {
             AppError::DatabaseError("Invalid HIGH Manticore search response format".to_string())
@@ -269,6 +259,59 @@ impl HighManticoreClient {
             .collect::<AppResult<Vec<_>>>()?;
 
         Ok(HighSearchProjectionPage { memo_ids, total })
+    }
+
+    fn metadata_match_body(metadata: &HighSearchProjectionMetadata) -> AppResult<Value> {
+        metadata.validate()?;
+
+        Ok(json!({
+            "table": TABLE_NAME,
+            "query": {
+                "bool": {
+                    "must": [
+                        { "equals": { "owner_partition": metadata.owner_partition.to_string() } },
+                        { "equals": { "memo_sort_key": metadata.memo_id.to_string() } },
+                        { "equals": { "version": metadata.version } },
+                        { "equals": { "analysis_version": metadata.analysis_version } },
+                        { "equals": { "search_key_version": metadata.search_key_version } }
+                    ]
+                }
+            },
+            "_source": {
+                "excludes": ["*"]
+            },
+            "limit": 1
+        }))
+    }
+
+    fn count_body() -> Value {
+        json!({
+            "table": TABLE_NAME,
+            "query": {
+                "match_all": {}
+            },
+            "_source": {
+                "excludes": ["*"]
+            },
+            "limit": 1
+        })
+    }
+
+    async fn contains_metadata_inner(
+        &self,
+        metadata: &HighSearchProjectionMetadata,
+    ) -> AppResult<bool> {
+        self.ensure_table().await?;
+        let result = self
+            .post_json("search", &Self::metadata_match_body(metadata)?)
+            .await?;
+        Ok(parse_search_total(&result)? == 1)
+    }
+
+    async fn count_documents_inner(&self) -> AppResult<u64> {
+        self.ensure_table().await?;
+        let result = self.post_json("search", &Self::count_body()).await?;
+        search_total_u64(&result)
     }
 
     fn delete_body(owner_partition: Uuid, memo_id: Uuid) -> Value {
@@ -304,6 +347,19 @@ impl HighManticoreClient {
         self.execute_raw_sql("SELECT 1", "health check").await?;
         Ok(true)
     }
+}
+
+fn search_total_u64(result: &Value) -> AppResult<u64> {
+    result["hits"]["total"]
+        .as_u64()
+        .ok_or_else(|| AppError::DatabaseError("Invalid HIGH Manticore search total".to_string()))
+}
+
+fn parse_search_total(result: &Value) -> AppResult<usize> {
+    let total = search_total_u64(result)?;
+    usize::try_from(total).map_err(|_| {
+        AppError::DatabaseError("HIGH Manticore search total exceeds platform limits".to_string())
+    })
 }
 
 fn join_tokens(tokens: &[crate::application::crypto_search::HighSearchToken]) -> String {
@@ -342,6 +398,20 @@ impl HighMemoSearchProjection for HighManticoreClient {
 
     async fn delete_document(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
         self.delete_document_inner(owner_partition, memo_id).await
+    }
+}
+
+#[async_trait]
+impl HighSearchProjectionMigrationInspector for HighManticoreClient {
+    async fn contains_metadata(
+        &self,
+        metadata: &HighSearchProjectionMetadata,
+    ) -> AppResult<bool> {
+        self.contains_metadata_inner(metadata).await
+    }
+
+    async fn count_documents(&self) -> AppResult<u64> {
+        self.count_documents_inner().await
     }
 }
 
@@ -406,6 +476,13 @@ mod tests {
 
         client.replace_document(&document).await.unwrap();
 
+        let metadata = HighSearchProjectionMetadata::from(&document);
+        assert!(client.contains_metadata(&metadata).await.unwrap());
+        assert_eq!(client.count_documents().await.unwrap(), 1);
+        let mut wrong_version = metadata.clone();
+        wrong_version.version += 1;
+        assert!(!client.contains_metadata(&wrong_version).await.unwrap());
+
         let query = HighSearchProjectionQuery {
             content_tokens: vec![blind_content],
             tag_token: Some(blind_tag),
@@ -432,6 +509,7 @@ mod tests {
         let after_owner_delete = client.search_memo_ids(owner, &query, 1, 20).await.unwrap();
         assert_eq!(after_owner_delete.total, 0);
         assert!(after_owner_delete.memo_ids.is_empty());
+        assert_eq!(client.count_documents().await.unwrap(), 0);
 
         client
             .execute_raw_sql(
