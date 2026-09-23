@@ -465,17 +465,10 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("count MongoDB migration target memos", error))
     }
 
-    /// Stage one HIGH encrypted envelope in an isolated migration collection.
-    ///
-    /// This collection is not authoritative and is not used by request paths.
-    /// The upsert is insert-only: concurrent identical writers converge on one
-    /// document, while divergent same-ID envelopes are detected after the
-    /// atomic insert-if-absent operation and fail closed.
-    pub async fn stage_encrypted_memo_for_migration(
+    async fn insert_encrypted_memo_if_absent(
         &self,
-        envelope: &HighEncryptedMemoEnvelope,
-    ) -> AppResult<MigrationImportResult> {
-        let document = EncryptedMemoDocument::try_from(envelope)?;
+        document: &EncryptedMemoDocument,
+    ) -> AppResult<bool> {
         let update = doc! {
             "$setOnInsert": {
                 "owner_partition": document.owner_partition.clone(),
@@ -496,6 +489,24 @@ impl MongoDbAuthoritativeStore {
             .await
             .map_err(|error| mongo_error("stage MongoDB encrypted migration memo", error))?;
 
+        Ok(result.upserted_id.is_some())
+    }
+
+    /// Stage one HIGH encrypted envelope in an isolated migration collection.
+    ///
+    /// This concrete helper preserves envelope-level idempotency for direct
+    /// migration tooling: an identical envelope is AlreadyPresent, while a
+    /// different envelope for the same memo ID is a conflict.
+    pub async fn stage_encrypted_memo_for_migration(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+    ) -> AppResult<MigrationImportResult> {
+        let document = EncryptedMemoDocument::try_from(envelope)?;
+
+        if self.insert_encrypted_memo_if_absent(&document).await? {
+            return Ok(MigrationImportResult::Inserted);
+        }
+
         let persisted = self
             .encrypted_memos
             .find_one(doc! { "_id": document.id.clone() })
@@ -508,18 +519,14 @@ impl MongoDbAuthoritativeStore {
                 ))
             })?;
 
-        if persisted != document {
-            return Err(AppError::Conflict(format!(
+        if persisted == document {
+            Ok(MigrationImportResult::AlreadyPresent)
+        } else {
+            Err(AppError::Conflict(format!(
                 "MongoDB encrypted migration target already contains different memo {}",
                 envelope.memo_id
-            )));
+            )))
         }
-
-        Ok(if result.upserted_id.is_some() {
-            MigrationImportResult::Inserted
-        } else {
-            MigrationImportResult::AlreadyPresent
-        })
     }
 
     pub async fn find_staged_encrypted_memo_for_migration(
@@ -716,9 +723,15 @@ impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
         &self,
         envelope: &HighEncryptedMemoEnvelope,
     ) -> AppResult<EncryptedMemoStageResult> {
-        match self.stage_encrypted_memo_for_migration(envelope).await? {
-            MigrationImportResult::Inserted => Ok(EncryptedMemoStageResult::Inserted),
-            MigrationImportResult::AlreadyPresent => Ok(EncryptedMemoStageResult::AlreadyPresent),
+        let document = EncryptedMemoDocument::try_from(envelope)?;
+        if self.insert_encrypted_memo_if_absent(&document).await? {
+            Ok(EncryptedMemoStageResult::Inserted)
+        } else {
+            // A concurrent migration may have staged a different valid
+            // envelope for the same plaintext because each writer uses a fresh
+            // DEK and nonce. The application service owns decrypt-and-compare
+            // verification before AlreadyPresent is accepted.
+            Ok(EncryptedMemoStageResult::AlreadyPresent)
         }
     }
 
