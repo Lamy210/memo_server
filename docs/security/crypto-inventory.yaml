@@ -127,6 +127,14 @@ assets:
       blind_token_deriver: staged
       search_key_provider: boundary_staged
       production_search_key_provider: not_implemented
+      protected_projection:
+        adapter: staged
+        table: memos_high_v1
+        semantic_plaintext_fields: forbidden
+        owner_scoped_delete: true
+        manticore_version: 29.9.0
+        integration_gate: configured
+      legacy_plaintext_projection_active: true
       runtime_eligible: false
     migration_status: in_progress
     owner: memo-search
