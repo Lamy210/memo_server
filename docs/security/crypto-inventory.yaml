@@ -151,6 +151,15 @@ assets:
         runtime_wired: false
       search_key_provider: boundary_staged
       owner_scoped_seed_provider: boundary_staged
+      managed_prf_seed_adapter: staged
+      managed_prf_algorithm: HMAC-SHA-384
+      managed_prf_output_bytes: 48
+      managed_prf_input: domain_versioned_seed_generation_owner_partition
+      managed_prf_seed_version_contract: "prf384-v1:<provider-seed-version>"
+      persisted_derived_key_version_contract: "hkdf384-v1:prf384-v1:<provider-seed-version>"
+      managed_prf_plaintext_content_exposure: forbidden
+      provider_specific_prf_client: not_implemented
+      provider_key_binding: immutable_required
       per_user_hkdf_sha384: staged
       derived_key_version_contract: "hkdf384-v1:<seed-version>"
       key_resolution_batching: one_per_tokenization_operation
