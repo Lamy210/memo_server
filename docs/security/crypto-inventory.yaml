@@ -132,6 +132,7 @@ assets:
         unicode_word_break: "17.0"
         normalization: nfkc_casefold_nfkc
         content_segmentation: dictionary_word_like
+        plaintext_term_pre_deduplication: true
         tag_semantics: normalized_exact_term
         dependency_versions_exact_pinned: true
         representative_corpus_validation: pending
