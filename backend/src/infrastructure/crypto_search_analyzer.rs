@@ -116,9 +116,25 @@ impl HighSearchTextAnalyzer for IcuHighSearchTextAnalyzer {
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
+    use serde::Deserialize;
     use uuid::Uuid;
 
     use super::*;
+
+    #[derive(Debug, Deserialize)]
+    struct AnalyzerCorpus {
+        analysis_version: String,
+        cases: Vec<AnalyzerCorpusCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct AnalyzerCorpusCase {
+        name: String,
+        query: String,
+        tag: Option<String>,
+        expected_content_terms: Vec<String>,
+        expected_tag_term: Option<String>,
+    }
 
     fn memo(title: &str, content: &str, tags: Vec<&str>) -> Memo {
         Memo {
@@ -130,6 +146,39 @@ mod tests {
             created_at: Utc.timestamp_millis_opt(1_700_000_000_000).unwrap(),
             updated_at: Utc.timestamp_millis_opt(1_700_000_001_000).unwrap(),
             version: 3,
+        }
+    }
+
+    #[test]
+    fn synthetic_conformance_corpus_matches_versioned_analyzer_contract() {
+        let corpus: AnalyzerCorpus = serde_json::from_str(include_str!(
+            "../../testdata/high_search_analysis_corpus_v1.json"
+        ))
+        .unwrap();
+        let analyzer = IcuHighSearchTextAnalyzer::new();
+
+        assert_eq!(corpus.analysis_version, ICU_HIGH_SEARCH_ANALYSIS_VERSION);
+
+        for case in corpus.cases {
+            let analyzed = analyzer
+                .analyze_query(&case.query, case.tag.as_deref())
+                .unwrap_or_else(|error| panic!("corpus case {} failed: {error}", case.name));
+
+            assert_eq!(
+                analyzed.analysis_version, corpus.analysis_version,
+                "analysis version mismatch for corpus case {}",
+                case.name
+            );
+            assert_eq!(
+                analyzed.content_terms, case.expected_content_terms,
+                "content terms mismatch for corpus case {}",
+                case.name
+            );
+            assert_eq!(
+                analyzed.tag_term, case.expected_tag_term,
+                "tag term mismatch for corpus case {}",
+                case.name
+            );
         }
     }
 

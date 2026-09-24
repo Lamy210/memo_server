@@ -103,7 +103,9 @@ The second NFKC pass makes compatibility normalization explicit after case foldi
 
 ICU4X's dictionary word segmenter supplies compiled dictionary handling for complex scripts including Japanese, while non-complex text follows its Unicode word-boundary implementation. The dependency versions are exact-pinned because a tokenizer/data upgrade can alter blind-token inputs even when application code does not change.
 
-This remains a **production candidate**, not an activated production analyzer. Before runtime cutover, representative Japanese and English memo/query corpora must be checked for index/query compatibility and acceptable recall. Any change to ICU version, normalization order, segmentation mode, filtering, or tag semantics requires a new global `analysis_version` and a verified reindex.
+This remains a **production candidate**, not an activated production analyzer. A versioned synthetic conformance corpus at `backend/testdata/high_search_analysis_corpus_v1.json` locks known normalization/segmentation cases to the analyzer generation and is executed by unit tests. It intentionally contains only repository-owned synthetic strings and is safe to commit.
+
+The synthetic corpus is a compatibility regression gate, **not** representative production-corpus approval. Before runtime cutover, representative Japanese and English memo/query corpora must still be checked for index/query compatibility, recall, term-count distribution, and normalized-term-size distribution. Any change to ICU version, normalization order, segmentation mode, filtering, tag semantics, or expected conformance output requires an explicit review; changes to token semantics require a new global `analysis_version` and a verified reindex.
 
 References:
 

@@ -142,6 +142,11 @@ assets:
           production_values: pending_corpus_validation
         tag_semantics: normalized_exact_term
         dependency_versions_exact_pinned: true
+        synthetic_conformance_corpus:
+          version: v1
+          path: backend/testdata/high_search_analysis_corpus_v1.json
+          unit_test_gate: true
+          user_data: forbidden
         representative_corpus_validation: pending
         runtime_wired: false
       search_key_provider: boundary_staged
