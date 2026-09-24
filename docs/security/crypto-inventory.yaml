@@ -160,6 +160,8 @@ assets:
       managed_prf_plaintext_content_exposure: forbidden
       provider_specific_prf_client: aws_kms_staged
       aws_kms_sdk_version: "1.114.0"
+      aws_kms_build_feature: aws-kms-search
+      aws_kms_default_build_enabled: false
       aws_kms_operation: GenerateMac
       aws_kms_key_spec: HMAC_384
       aws_kms_mac_algorithm: HMAC_SHA_384
