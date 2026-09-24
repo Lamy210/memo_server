@@ -327,7 +327,7 @@ mod tests {
             Arc::new(FakeAnalyzer),
             Arc::new(FakeCrypto),
             projection.clone(),
-            HighSearchAnalysisBudget::new(64, 16, 256).unwrap(),
+            HighSearchAnalysisBudget::new(1_048_576, 8_192, 64, 16, 256).unwrap(),
         ));
         HighSearchReindexService::new(source, projection_service, projection)
     }
