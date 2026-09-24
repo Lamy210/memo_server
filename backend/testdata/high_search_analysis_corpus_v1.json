@@ -1,0 +1,40 @@
+{
+  "analysis_version": "icu4x-2.3.0-uax29-17-nfkc-fold-dict-v1",
+  "cases": [
+    {
+      "name": "english_fullwidth_casefold",
+      "query": "ＨＥＬＬＯ　World",
+      "tag": null,
+      "expected_content_terms": ["hello", "world"],
+      "expected_tag_term": null
+    },
+    {
+      "name": "japanese_dictionary_segmentation",
+      "query": "こんにちは世界",
+      "tag": null,
+      "expected_content_terms": ["こんにちは", "世界"],
+      "expected_tag_term": null
+    },
+    {
+      "name": "punctuation_only",
+      "query": "...！？",
+      "tag": null,
+      "expected_content_terms": [],
+      "expected_tag_term": null
+    },
+    {
+      "name": "repeated_terms_deduplicate",
+      "query": "Snow snow SNOW",
+      "tag": null,
+      "expected_content_terms": ["snow"],
+      "expected_tag_term": null
+    },
+    {
+      "name": "exact_tag_nfkc_casefold",
+      "query": "hello",
+      "tag": "ＴＡＧ",
+      "expected_content_terms": ["hello"],
+      "expected_tag_term": "tag"
+    }
+  ]
+}
