@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub(super) const SEARCH_KEY_BYTES: usize = 48;
-const SEARCH_KEY_SEED_BYTES: usize = 48;
+pub(super) const SEARCH_KEY_SEED_BYTES: usize = 48;
 const SEARCH_KEY_DERIVATION_VERSION: &str = "hkdf384-v1";
 const SEARCH_KEY_DERIVATION_SALT: &[u8] = b"memo_server:search:root:v1\0";
 const SEARCH_USER_KEY_INFO: &[u8] = b"memo_server:search:user-key:v1\0";
