@@ -46,13 +46,15 @@ blind token
 
 ## Managed-KMS direction
 
-A managed KMS HMAC/PRF operation can implement the seed-provider boundary without exporting the long-lived KMS key.
+A staged `ManagedPrfSearchKeySeedProvider` now adapts a managed HMAC/PRF operation into the seed-provider boundary without exporting the long-lived KMS/HSM key.
 
-For example, a provider may compute a SHA-384 HMAC over a domain-separated owner identifier and return the 48-byte MAC as the owner-scoped seed. memo_server then applies HKDF-SHA-384 locally for protocol separation before using the result as the blind-token HMAC key.
+The adapter sends only a canonical message containing the protocol domain, the versioned PRF seed generation, and the opaque `owner_partition`. The returned seed generation is `prf384-v1:<provider-seed-version>`, so a future PRF protocol change cannot silently produce different seed bytes under the same version. It accepts only a 48-byte HMAC-SHA-384 result and wraps that output in zeroizing seed storage. Memo plaintext, normalized search terms, and blind tokens never cross this managed-PRF boundary.
 
-The provider-specific KMS key ID/ARN must remain configuration/provider state. The seed provider returns an application-owned seed rotation alias, not a cloud resource locator. The persisted projection `search_key_version` is the derived generation identifier `hkdf384-v1:<seed-version>`, binding both seed rotation and local derivation protocol.
+memo_server then applies HKDF-SHA-384 locally for a second protocol-separation layer before using the result as the blind-token HMAC key.
 
-A provider must never let a mutable cloud alias silently change seed bytes while returning the same application `search_key_version`. The provider must pin or otherwise identify immutable provider key material internally and bump the application version whenever seed material changes.
+The provider-specific KMS key ID/ARN must remain configuration/provider state. The provider-specific client receives an application-owned provider-seed rotation alias, not a cloud resource locator. The managed adapter promotes it to `prf384-v1:<provider-seed-version>`; HKDF then produces the persisted projection generation `hkdf384-v1:prf384-v1:<provider-seed-version>`, binding provider rotation, managed-PRF protocol, and local HKDF protocol.
+
+A provider-specific PRF client must never let a mutable cloud alias silently change seed bytes while returning the same application `search_key_version`. It must bind to immutable provider key material (or otherwise detect provider-key revision changes) and require a new application seed version whenever that material changes. The generic adapter intentionally does not persist a cloud key ID/ARN/version.
 
 Application orchestration batches all content/tag terms for one document or query into one cryptographic operation. The ring adapter resolves the owner-scoped search key once for that batch and reuses only the in-memory HMAC key for its terms.
 
@@ -81,7 +83,7 @@ This code remains staged and runtime-unreachable.
 
 Before SEARCH-HIGH-1 can become DEPLOYED:
 
-- implement and review a production seed provider,
+- implement and review a provider-specific managed PRF client (cloud KMS/HSM) behind the staged adapter,
 - choose deployment TTL/capacity for the staged bounded derived-key cache and wire invalidation into the production rotation protocol,
 - prove rotation/reindex behavior,
 - complete protected projection reindex verification,
