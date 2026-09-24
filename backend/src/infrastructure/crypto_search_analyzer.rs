@@ -2,6 +2,8 @@
 // Plaintext terms exist only in process memory before blind-token derivation.
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
+
 use icu_casemap::CaseMapper;
 use icu_normalizer::ComposingNormalizer;
 use icu_segmenter::{options::WordBreakInvariantOptions, WordSegmenter};
@@ -14,8 +16,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-pub(crate) const ICU_HIGH_SEARCH_ANALYSIS_VERSION: &str =
-    "icu4x-2.3.0-uax29-17-nfkc-fold-dict-v1";
+pub(crate) const ICU_HIGH_SEARCH_ANALYSIS_VERSION: &str = "icu4x-2.3.0-uax29-17-nfkc-fold-dict-v1";
 
 #[derive(Debug, Default)]
 pub(crate) struct IcuHighSearchTextAnalyzer;
@@ -52,18 +53,18 @@ impl IcuHighSearchTextAnalyzer {
             return Ok(Vec::new());
         };
 
-        let mut terms = Vec::new();
+        let mut terms = BTreeSet::new();
         for (end, word_type) in boundaries {
             if word_type.is_word_like() {
                 let term = &normalized[start..end];
                 if !term.is_empty() {
-                    terms.push(term.to_string());
+                    terms.insert(term.to_string());
                 }
             }
             start = end;
         }
 
-        Ok(terms)
+        Ok(terms.into_iter().collect())
     }
 
     fn normalize_exact_term(input: &str) -> AppResult<Option<String>> {
@@ -82,13 +83,13 @@ impl HighSearchTextAnalyzer for IcuHighSearchTextAnalyzer {
 
         let mut content_terms = Self::segment_words(&memo.title)?;
         content_terms.extend(Self::segment_words(&memo.content)?);
+        content_terms.sort();
+        content_terms.dedup();
 
         let mut tag_terms = Vec::with_capacity(memo.tags.len());
         for tag in &memo.tags {
             let normalized = Self::normalize_exact_term(tag)?.ok_or_else(|| {
-                AppError::ValidationError(
-                    "HIGH search tag became empty after normalization".into(),
-                )
+                AppError::ValidationError("HIGH search tag became empty after normalization".into())
             })?;
             tag_terms.push(normalized);
         }
@@ -102,10 +103,7 @@ impl HighSearchTextAnalyzer for IcuHighSearchTextAnalyzer {
 
     fn analyze_query(&self, query: &str, tag: Option<&str>) -> AppResult<HighSearchAnalyzedQuery> {
         let content_terms = Self::segment_words(query)?;
-        let tag_term = tag
-            .map(Self::normalize_exact_term)
-            .transpose()?
-            .flatten();
+        let tag_term = tag.map(Self::normalize_exact_term).transpose()?.flatten();
 
         Ok(HighSearchAnalyzedQuery {
             analysis_version: ICU_HIGH_SEARCH_ANALYSIS_VERSION.into(),
@@ -192,6 +190,15 @@ mod tests {
         assert_eq!(document.analysis_version, query.analysis_version);
         assert_eq!(query.content_terms, vec!["hello".to_string()]);
         assert_eq!(query.tag_term.as_deref(), Some("tag"));
+    }
+
+    #[test]
+    fn analyzer_deduplicates_repeated_plaintext_terms_before_crypto_boundary() {
+        let analyzed = IcuHighSearchTextAnalyzer::new()
+            .analyze_document(&memo("Snow Snow", "snow snow snow", vec!["Tag"]))
+            .unwrap();
+
+        assert_eq!(analyzed.content_terms, vec!["snow".to_string()]);
     }
 
     #[test]
