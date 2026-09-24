@@ -1,0 +1,33 @@
+name: Generate AWS KMS lock
+
+on:
+  push:
+    branches:
+      - security/high-search-aws-kms-prf
+
+permissions:
+  contents: write
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve AWS KMS dependency
+        working-directory: backend
+        run: cargo fetch
+
+      - name: Commit lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- backend/Cargo.lock; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/Cargo.lock
+          git commit -m "build: lock AWS KMS HIGH search dependencies"
+          git push
