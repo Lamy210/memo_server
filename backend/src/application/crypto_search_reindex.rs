@@ -167,7 +167,8 @@ mod tests {
                 SEARCH_HIGH_TOKEN_BYTES,
             },
             crypto_search_orchestration::{
-                HighSearchAnalyzedDocument, HighSearchAnalyzedQuery, HighSearchTextAnalyzer,
+                HighSearchAnalysisBudget, HighSearchAnalyzedDocument, HighSearchAnalyzedQuery,
+                HighSearchTextAnalyzer,
             },
             crypto_search_projection::{
                 HighMemoSearchProjection, HighSearchProjectionDocument,
@@ -326,6 +327,7 @@ mod tests {
             Arc::new(FakeAnalyzer),
             Arc::new(FakeCrypto),
             projection.clone(),
+            HighSearchAnalysisBudget::new(64, 16, 256).unwrap(),
         ));
         HighSearchReindexService::new(source, projection_service, projection)
     }
