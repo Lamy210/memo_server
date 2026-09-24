@@ -1,6 +1,6 @@
 # HIGH Search Analysis Contract
 
-Status: staged application contract; production analyzer not selected  
+Status: ICU4X production candidate staged; corpus/cutover validation pending  
 Last reviewed: 2026-09-23
 
 ## Purpose
@@ -59,18 +59,42 @@ The application orchestration:
 
 Deduplication intentionally avoids storing repeated blind tokens solely to preserve plaintext term frequency. SEARCH-HIGH-1 still leaks equality and cross-document frequency for equal blind tokens and is not zero knowledge.
 
-## Language-aware analyzer requirement
+## Language-aware analyzer candidate
 
-Unicode default word boundaries are a useful baseline, but they are not sufficient as the sole production word-segmentation policy for all supported languages.
+The staged production candidate uses ICU4X components pinned exactly to 2.3.0:
 
-Unicode Standard Annex #29 explicitly notes that reliable word-boundary detection for languages including Japanese and Chinese requires more sophisticated, typically dictionary-based, handling. Therefore `unicode-segmentation::unicode_words()` alone is not accepted as the production analyzer for this project.
+- `icu_segmenter = =2.3.0`
+- `icu_normalizer = =2.3.0`
+- `icu_casemap = =2.3.0`
+
+The global analyzer generation is:
+
+`icu4x-2.3.0-uax29-17-nfkc-fold-dict-v1`
+
+Its pipeline is deterministic:
+
+1. reject NUL,
+2. Unicode NFKC,
+3. locale-independent Unicode case fold,
+4. NFKC again,
+5. trim surrounding whitespace,
+6. ICU dictionary word segmentation for content/title,
+7. retain only word-like segments,
+8. deduplicate normalized content terms in memory before the cryptographic boundary,
+9. keep normalized tags as exact terms rather than segmenting them.
+
+The second NFKC pass makes compatibility normalization explicit after case folding. Title and content use identical segmentation and are merged into one protected content-token set; no plaintext title/content distinction reaches Manticore. Pre-deduplication is semantics-preserving because application orchestration already canonicalizes to unique normalized terms, but it reduces transient memory and HMAC work for highly repetitive memo content.
+
+ICU4X's dictionary word segmenter supplies compiled dictionary handling for complex scripts including Japanese, while non-complex text follows its Unicode word-boundary implementation. The dependency versions are exact-pinned because a tokenizer/data upgrade can alter blind-token inputs even when application code does not change.
+
+This remains a **production candidate**, not an activated production analyzer. Before runtime cutover, representative Japanese and English memo/query corpora must be checked for index/query compatibility and acceptable recall. Any change to ICU version, normalization order, segmentation mode, filtering, or tag semantics requires a new global `analysis_version` and a verified reindex.
 
 References:
 
 - Unicode UAX #29: https://www.unicode.org/reports/tr29/
-- unicode-segmentation: https://docs.rs/unicode-segmentation/
-
-The production analyzer selection must be measured against representative Japanese and English memo/search corpora before cutover.
+- ICU4X word segmentation: https://docs.rs/icu_segmenter/2.3.0/icu_segmenter/struct.WordSegmenter.html
+- ICU4X normalization: https://docs.rs/icu_normalizer/2.3.0/icu_normalizer/
+- ICU4X case mapping: https://docs.rs/icu_casemap/2.3.0/icu_casemap/
 
 ## Search semantics
 
@@ -110,7 +134,7 @@ This contract is not wired into normal request-path search yet.
 
 Runtime cutover still requires:
 
-- a production language-aware analyzer,
+- representative-corpus validation and approval of the staged ICU4X analyzer,
 - a production search-key provider,
 - an operator-guarded invocation of the staged protected projection reindex/verification service,
 - an explicit search-key rotation protocol that prevents old/new key-version query gaps (for example generation-based reindex plus atomic switch or verified dual-read),
