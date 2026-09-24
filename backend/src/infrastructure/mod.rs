@@ -4,6 +4,7 @@ pub(crate) mod crypto_keys;
 pub mod crypto_search;
 pub(crate) mod crypto_search_analyzer;
 pub(crate) mod crypto_search_keys;
+pub(crate) mod crypto_search_seed_provider;
 pub mod persistence;
 pub mod reconciliation;
 pub mod repositories;
