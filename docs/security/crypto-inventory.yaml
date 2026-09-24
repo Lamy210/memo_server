@@ -133,6 +133,13 @@ assets:
         normalization: nfkc_casefold_nfkc
         content_segmentation: dictionary_word_like
         plaintext_term_pre_deduplication: true
+        application_work_budget:
+          required: true
+          document_unique_terms: caller_configured
+          query_unique_terms: caller_configured
+          normalized_term_bytes: caller_configured
+          fail_before_crypto: true
+          production_values: pending_corpus_validation
         tag_semantics: normalized_exact_term
         dependency_versions_exact_pinned: true
         representative_corpus_validation: pending

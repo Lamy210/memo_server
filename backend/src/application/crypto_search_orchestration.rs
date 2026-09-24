@@ -41,6 +41,36 @@ pub trait HighSearchTextAnalyzer: Send + Sync {
     fn analyze_query(&self, query: &str, tag: Option<&str>) -> AppResult<HighSearchAnalyzedQuery>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighSearchAnalysisBudget {
+    max_document_content_terms: usize,
+    max_query_content_terms: usize,
+    max_normalized_term_bytes: usize,
+}
+
+impl HighSearchAnalysisBudget {
+    pub fn new(
+        max_document_content_terms: usize,
+        max_query_content_terms: usize,
+        max_normalized_term_bytes: usize,
+    ) -> AppResult<Self> {
+        if max_document_content_terms == 0
+            || max_query_content_terms == 0
+            || max_normalized_term_bytes == 0
+        {
+            return Err(AppError::ValidationError(
+                "HIGH search analysis budget values must all be greater than zero".into(),
+            ));
+        }
+
+        Ok(Self {
+            max_document_content_terms,
+            max_query_content_terms,
+            max_normalized_term_bytes,
+        })
+    }
+}
+
 /// Application orchestration for the protected HIGH search projection.
 ///
 /// This service is intentionally independent of Manticore, HMAC, and concrete
@@ -51,6 +81,7 @@ pub struct HighSearchProjectionService {
     analyzer: Arc<dyn HighSearchTextAnalyzer>,
     cryptography: Arc<dyn HighSearchTokenCryptography>,
     projection: Arc<dyn HighMemoSearchProjection>,
+    budget: HighSearchAnalysisBudget,
 }
 
 impl HighSearchProjectionService {
@@ -58,11 +89,13 @@ impl HighSearchProjectionService {
         analyzer: Arc<dyn HighSearchTextAnalyzer>,
         cryptography: Arc<dyn HighSearchTokenCryptography>,
         projection: Arc<dyn HighMemoSearchProjection>,
+        budget: HighSearchAnalysisBudget,
     ) -> Self {
         Self {
             analyzer,
             cryptography,
             projection,
+            budget,
         }
     }
 
@@ -97,8 +130,18 @@ impl HighSearchProjectionService {
 
         let analyzed = self.analyzer.analyze_document(memo)?;
         let analysis_version = validate_analysis_version(analyzed.analysis_version)?;
-        let content_terms = canonicalize_terms(analyzed.content_terms)?;
-        let tag_terms = canonicalize_terms(analyzed.tag_terms)?;
+        let content_terms = canonicalize_terms(
+            analyzed.content_terms,
+            self.budget.max_document_content_terms,
+            self.budget.max_normalized_term_bytes,
+            "document content",
+        )?;
+        let tag_terms = canonicalize_terms(
+            analyzed.tag_terms,
+            crate::domain::memo::entity::MAX_MEMO_TAGS,
+            self.budget.max_normalized_term_bytes,
+            "document tags",
+        )?;
 
         if content_terms.is_empty() {
             return Err(AppError::ValidationError(
@@ -144,8 +187,16 @@ impl HighSearchProjectionService {
     ) -> AppResult<HighSearchProjectionPage> {
         let analyzed = self.analyzer.analyze_query(query, tag)?;
         let analysis_version = validate_analysis_version(analyzed.analysis_version)?;
-        let content_terms = canonicalize_terms(analyzed.content_terms)?;
-        let tag_term = analyzed.tag_term.map(validate_single_term).transpose()?;
+        let content_terms = canonicalize_terms(
+            analyzed.content_terms,
+            self.budget.max_query_content_terms,
+            self.budget.max_normalized_term_bytes,
+            "query content",
+        )?;
+        let tag_term = analyzed
+            .tag_term
+            .map(|term| validate_single_term(term, self.budget.max_normalized_term_bytes))
+            .transpose()?;
 
         if !query.is_empty() && content_terms.is_empty() {
             return Err(AppError::ValidationError(
@@ -235,18 +286,40 @@ fn validate_analysis_version(analysis_version: String) -> AppResult<String> {
     Ok(analysis_version)
 }
 
-fn canonicalize_terms(terms: Vec<String>) -> AppResult<Vec<String>> {
+fn canonicalize_terms(
+    terms: Vec<String>,
+    max_terms: usize,
+    max_term_bytes: usize,
+    context: &str,
+) -> AppResult<Vec<String>> {
     let mut unique = BTreeSet::new();
     for term in terms {
         validate_normalized_search_term(&term)?;
+        validate_term_size(&term, max_term_bytes, context)?;
         unique.insert(term);
+
+        if unique.len() > max_terms {
+            return Err(AppError::ValidationError(format!(
+                "HIGH search {context} exceeds configured unique-term budget of {max_terms}"
+            )));
+        }
     }
     Ok(unique.into_iter().collect())
 }
 
-fn validate_single_term(term: String) -> AppResult<String> {
+fn validate_single_term(term: String, max_term_bytes: usize) -> AppResult<String> {
     validate_normalized_search_term(&term)?;
+    validate_term_size(&term, max_term_bytes, "tag")?;
     Ok(term)
+}
+
+fn validate_term_size(term: &str, max_term_bytes: usize, context: &str) -> AppResult<()> {
+    if term.len() > max_term_bytes {
+        return Err(AppError::ValidationError(format!(
+            "HIGH search {context} term exceeds configured byte budget of {max_term_bytes}"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -283,6 +356,26 @@ mod tests {
                     vec!["snow".into(), "snow".into()]
                 },
                 tag_term: tag.map(|_| "tag".into()),
+            })
+        }
+    }
+
+    struct OverBudgetQueryAnalyzer;
+
+    impl HighSearchTextAnalyzer for OverBudgetQueryAnalyzer {
+        fn analyze_document(&self, _memo: &Memo) -> AppResult<HighSearchAnalyzedDocument> {
+            unreachable!("query budget test does not analyze documents")
+        }
+
+        fn analyze_query(
+            &self,
+            _query: &str,
+            _tag: Option<&str>,
+        ) -> AppResult<HighSearchAnalyzedQuery> {
+            Ok(HighSearchAnalyzedQuery {
+                analysis_version: "analysis-v1".into(),
+                content_terms: vec!["memo".into(), "snow".into()],
+                tag_term: None,
             })
         }
     }
@@ -369,6 +462,10 @@ mod tests {
         }
     }
 
+    fn budget() -> HighSearchAnalysisBudget {
+        HighSearchAnalysisBudget::new(64, 16, 256).unwrap()
+    }
+
     fn memo() -> Memo {
         Memo {
             id: Uuid::from_u128(7),
@@ -391,10 +488,45 @@ mod tests {
         assert!(validate_analysis_version("x".repeat(MAX_SEARCH_VERSION_ID_CHARS + 1)).is_err());
 
         assert_eq!(
-            canonicalize_terms(vec!["snow".into(), "memo".into(), "snow".into()]).unwrap(),
+            canonicalize_terms(
+                vec!["snow".into(), "memo".into(), "snow".into()],
+                2,
+                16,
+                "test",
+            )
+            .unwrap(),
             vec!["memo".to_string(), "snow".to_string()]
         );
-        assert!(canonicalize_terms(vec![" snow".into()]).is_err());
+        assert!(canonicalize_terms(vec![" snow".into()], 1, 16, "test").is_err());
+        assert!(canonicalize_terms(vec!["one".into(), "two".into()], 1, 16, "test").is_err());
+        assert!(canonicalize_terms(vec!["oversized".into()], 1, 4, "test").is_err());
+    }
+
+    #[test]
+    fn analysis_budget_requires_positive_bounds() {
+        assert!(HighSearchAnalysisBudget::new(0, 1, 1).is_err());
+        assert!(HighSearchAnalysisBudget::new(1, 0, 1).is_err());
+        assert!(HighSearchAnalysisBudget::new(1, 1, 0).is_err());
+        assert!(HighSearchAnalysisBudget::new(1, 1, 1).is_ok());
+    }
+
+    #[tokio::test]
+    async fn document_budget_fails_before_crypto_or_projection() {
+        let crypto = Arc::new(FakeCrypto::stable());
+        let projection = Arc::new(FakeProjection::default());
+        let service = HighSearchProjectionService::new(
+            Arc::new(FakeAnalyzer),
+            crypto.clone(),
+            projection.clone(),
+            HighSearchAnalysisBudget::new(1, 16, 256).unwrap(),
+        );
+
+        assert!(matches!(
+            service.replace_memo(&memo()).await,
+            Err(AppError::ValidationError(_))
+        ));
+        assert!(crypto.calls.lock().unwrap().is_empty());
+        assert!(projection.document.lock().unwrap().is_none());
     }
 
     #[tokio::test]
@@ -405,6 +537,7 @@ mod tests {
             Arc::new(FakeAnalyzer),
             crypto.clone(),
             projection.clone(),
+            budget(),
         );
 
         service.replace_memo(&memo()).await.unwrap();
@@ -430,6 +563,7 @@ mod tests {
             Arc::new(FakeAnalyzer),
             Arc::new(FakeCrypto::rotating()),
             projection.clone(),
+            budget(),
         );
 
         assert!(matches!(
@@ -440,6 +574,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn query_budget_fails_before_crypto_or_projection() {
+        let crypto = Arc::new(FakeCrypto::stable());
+        let projection = Arc::new(FakeProjection::default());
+        let service = HighSearchProjectionService::new(
+            Arc::new(OverBudgetQueryAnalyzer),
+            crypto.clone(),
+            projection.clone(),
+            HighSearchAnalysisBudget::new(64, 1, 256).unwrap(),
+        );
+
+        assert!(matches!(
+            service
+                .search_memo_ids(Uuid::from_u128(42), "two terms", None, 1, 20)
+                .await,
+            Err(AppError::ValidationError(_))
+        ));
+        assert!(crypto.calls.lock().unwrap().is_empty());
+        assert!(projection.query.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn empty_query_avoids_key_resolution_and_preserves_owner_scope() {
         let crypto = Arc::new(FakeCrypto::stable());
         let projection = Arc::new(FakeProjection::default());
@@ -447,6 +602,7 @@ mod tests {
             Arc::new(FakeAnalyzer),
             crypto.clone(),
             projection.clone(),
+            budget(),
         );
         let owner = Uuid::from_u128(42);
 
@@ -475,6 +631,7 @@ mod tests {
             Arc::new(FakeAnalyzer),
             crypto.clone(),
             projection.clone(),
+            budget(),
         );
         let owner = Uuid::from_u128(42);
 
@@ -501,6 +658,7 @@ mod tests {
             Arc::new(FakeAnalyzer),
             Arc::new(FakeCrypto::stable()),
             projection.clone(),
+            budget(),
         );
         let owner = Uuid::from_u128(11);
         let memo_id = Uuid::from_u128(12);

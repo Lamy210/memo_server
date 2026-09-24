@@ -52,12 +52,28 @@ The application orchestration:
 
 - validates analyzer output before HMAC,
 - deduplicates normalized terms before token derivation,
+- applies an application-owned work budget before invoking cryptography,
+- limits unique document content terms,
+- limits unique query content terms,
+- limits normalized term byte length for content and tags,
 - sorts only the resulting opaque blind-token values before projection, rather than persisting plaintext-derived term ordering,
 - rejects empty content-term sets for projected memos,
 - never logs normalized terms,
 - rejects mixed search-key versions within one projection/search operation.
 
 Deduplication intentionally avoids storing repeated blind tokens solely to preserve plaintext term frequency. SEARCH-HIGH-1 still leaks equality and cross-document frequency for equal blind tokens and is not zero knowledge.
+
+### Analysis work budget
+
+`HighSearchProjectionService` requires an explicit `HighSearchAnalysisBudget`. No production numerical defaults are embedded in the service. The caller must supply positive limits for:
+
+- unique normalized content terms per document,
+- unique normalized content terms per query,
+- bytes per normalized term.
+
+Document tags remain additionally bounded by the memo-domain tag-count invariant. These checks happen after normalization/canonicalization but before blind-token derivation, so an analyzer implementation cannot bypass the budget and force unbounded HMAC/KMS/projection work.
+
+The budget is an operational admission-control policy rather than token semantics: changing only a budget does not change blind tokens for inputs that remain accepted, so it does not by itself require a new `analysis_version`. However all indexing, reindex, and query workers in one deployment must use the same reviewed budget policy. Production values must be selected from representative corpus measurements and projection-size/load testing rather than guessed defaults.
 
 ## Language-aware analyzer candidate
 
