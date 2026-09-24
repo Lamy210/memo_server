@@ -80,9 +80,10 @@ Its pipeline is deterministic:
 5. trim surrounding whitespace,
 6. ICU dictionary word segmentation for content/title,
 7. retain only word-like segments,
-8. keep normalized tags as exact terms rather than segmenting them.
+8. deduplicate normalized content terms in memory before the cryptographic boundary,
+9. keep normalized tags as exact terms rather than segmenting them.
 
-The second NFKC pass makes compatibility normalization explicit after case folding. Title and content use identical segmentation and are merged into one protected content-token set; no plaintext title/content distinction reaches Manticore.
+The second NFKC pass makes compatibility normalization explicit after case folding. Title and content use identical segmentation and are merged into one protected content-token set; no plaintext title/content distinction reaches Manticore. Pre-deduplication is semantics-preserving because application orchestration already canonicalizes to unique normalized terms, but it reduces transient memory and HMAC work for highly repetitive memo content.
 
 ICU4X's dictionary word segmenter supplies compiled dictionary handling for complex scripts including Japanese, while non-complex text follows its Unicode word-boundary implementation. The dependency versions are exact-pinned because a tokenizer/data upgrade can alter blind-token inputs even when application code does not change.
 
