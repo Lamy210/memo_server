@@ -2,11 +2,7 @@
 #![allow(dead_code)]
 
 use async_trait::async_trait;
-use aws_sdk_kms::{
-    primitives::Blob,
-    types::MacAlgorithmSpec,
-    Client,
-};
+use aws_sdk_kms::{primitives::Blob, types::MacAlgorithmSpec, Client};
 use zeroize::Zeroizing;
 
 use crate::error::{AppError, AppResult};
@@ -51,9 +47,7 @@ impl ManagedSearchSeedPrfClient for AwsKmsSearchSeedPrfClient {
             .send()
             .await
             .map_err(|_| {
-                AppError::ServiceUnavailable(
-                    "AWS KMS HIGH search PRF GenerateMac failed".into(),
-                )
+                AppError::ServiceUnavailable("AWS KMS HIGH search PRF GenerateMac failed".into())
             })?;
 
         if response.key_id() != Some(self.key_arn.as_str()) {
@@ -138,10 +132,9 @@ mod tests {
 
     #[test]
     fn rejects_malformed_key_resource() {
-        assert!(validate_pinned_kms_key_arn(
-            "arn:aws:kms:ap-northeast-1:111122223333:key/"
-        )
-        .is_err());
+        assert!(
+            validate_pinned_kms_key_arn("arn:aws:kms:ap-northeast-1:111122223333:key/").is_err()
+        );
         assert!(validate_pinned_kms_key_arn(
             "arn:aws:kms:ap-northeast-1:111122223333:key/key/extra"
         )
