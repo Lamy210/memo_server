@@ -125,6 +125,17 @@ assets:
       legacy_server_index: Elasticsearch
       selection: SEARCH_BACKEND
       blind_token_deriver: staged
+      analyzer:
+        implementation: icu4x_dictionary
+        implementation_version: "2.3.0"
+        analysis_version: "icu4x-2.3.0-uax29-17-nfkc-fold-dict-v1"
+        unicode_word_break: "17.0"
+        normalization: nfkc_casefold_nfkc
+        content_segmentation: dictionary_word_like
+        tag_semantics: normalized_exact_term
+        dependency_versions_exact_pinned: true
+        representative_corpus_validation: pending
+        runtime_wired: false
       search_key_provider: boundary_staged
       owner_scoped_seed_provider: boundary_staged
       per_user_hkdf_sha384: staged
