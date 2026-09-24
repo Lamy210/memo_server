@@ -67,11 +67,13 @@ Deduplication intentionally avoids storing repeated blind tokens solely to prese
 
 `HighSearchProjectionService` requires an explicit `HighSearchAnalysisBudget`. No production numerical defaults are embedded in the service. The caller must supply positive limits for:
 
+- raw UTF-8 bytes across title/content/tags per document,
+- raw UTF-8 bytes across query/tag per search,
 - unique normalized content terms per document,
 - unique normalized content terms per query,
 - bytes per normalized term.
 
-Document tags remain additionally bounded by the memo-domain tag-count invariant. These checks happen after normalization/canonicalization but before blind-token derivation, so an analyzer implementation cannot bypass the budget and force unbounded HMAC/KMS/projection work.
+The raw-input byte checks execute **before** the analyzer, bounding NFKC/case-fold/dictionary-segmentation input. Document tags remain additionally bounded by the memo-domain tag-count invariant. Term-count and normalized-term-size checks execute after normalization/canonicalization but before blind-token derivation. Together, these layers prevent an analyzer implementation or token-dense plaintext from bypassing application admission control and forcing unbounded analyzer or HMAC/KMS/projection work.
 
 The budget is an operational admission-control policy rather than token semantics: changing only a budget does not change blind tokens for inputs that remain accepted, so it does not by itself require a new `analysis_version`. However all indexing, reindex, and query workers in one deployment must use the same reviewed budget policy. Production values must be selected from representative corpus measurements and projection-size/load testing rather than guessed defaults.
 
