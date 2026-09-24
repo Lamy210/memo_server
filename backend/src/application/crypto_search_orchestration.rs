@@ -43,6 +43,8 @@ pub trait HighSearchTextAnalyzer: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HighSearchAnalysisBudget {
+    max_document_input_bytes: usize,
+    max_query_input_bytes: usize,
     max_document_content_terms: usize,
     max_query_content_terms: usize,
     max_normalized_term_bytes: usize,
@@ -50,11 +52,15 @@ pub struct HighSearchAnalysisBudget {
 
 impl HighSearchAnalysisBudget {
     pub fn new(
+        max_document_input_bytes: usize,
+        max_query_input_bytes: usize,
         max_document_content_terms: usize,
         max_query_content_terms: usize,
         max_normalized_term_bytes: usize,
     ) -> AppResult<Self> {
-        if max_document_content_terms == 0
+        if max_document_input_bytes == 0
+            || max_query_input_bytes == 0
+            || max_document_content_terms == 0
             || max_query_content_terms == 0
             || max_normalized_term_bytes == 0
         {
@@ -64,10 +70,42 @@ impl HighSearchAnalysisBudget {
         }
 
         Ok(Self {
+            max_document_input_bytes,
+            max_query_input_bytes,
             max_document_content_terms,
             max_query_content_terms,
             max_normalized_term_bytes,
         })
+    }
+
+    fn validate_document_input(&self, memo: &Memo) -> AppResult<()> {
+        let mut total = memo
+            .title
+            .len()
+            .checked_add(memo.content.len())
+            .ok_or_else(|| {
+                AppError::ValidationError(
+                    "HIGH search document input byte count overflowed".into(),
+                )
+            })?;
+        for tag in &memo.tags {
+            total = total.checked_add(tag.len()).ok_or_else(|| {
+                AppError::ValidationError(
+                    "HIGH search document input byte count overflowed".into(),
+                )
+            })?;
+        }
+        validate_raw_input_size(total, self.max_document_input_bytes, "document")
+    }
+
+    fn validate_query_input(&self, query: &str, tag: Option<&str>) -> AppResult<()> {
+        let total = query
+            .len()
+            .checked_add(tag.map_or(0, str::len))
+            .ok_or_else(|| {
+                AppError::ValidationError("HIGH search query input byte count overflowed".into())
+            })?;
+        validate_raw_input_size(total, self.max_query_input_bytes, "query")
     }
 }
 
@@ -128,6 +166,7 @@ impl HighSearchProjectionService {
             ));
         }
 
+        self.budget.validate_document_input(memo)?;
         let analyzed = self.analyzer.analyze_document(memo)?;
         let analysis_version = validate_analysis_version(analyzed.analysis_version)?;
         let content_terms = canonicalize_terms(
@@ -185,6 +224,7 @@ impl HighSearchProjectionService {
         page: usize,
         limit: usize,
     ) -> AppResult<HighSearchProjectionPage> {
+        self.budget.validate_query_input(query, tag)?;
         let analyzed = self.analyzer.analyze_query(query, tag)?;
         let analysis_version = validate_analysis_version(analyzed.analysis_version)?;
         let content_terms = canonicalize_terms(
@@ -322,6 +362,16 @@ fn validate_term_size(term: &str, max_term_bytes: usize, context: &str) -> AppRe
     Ok(())
 }
 
+fn validate_raw_input_size(size: usize, max_bytes: usize, context: &str) -> AppResult<()> {
+    if size > max_bytes {
+        return Err(AppError::ValidationError(format!(
+            "HIGH search {context} raw input exceeds configured byte budget of {max_bytes}"
+        )));
+    }
+    Ok(())
+}
+
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -357,6 +407,22 @@ mod tests {
                 },
                 tag_term: tag.map(|_| "tag".into()),
             })
+        }
+    }
+
+    struct PanicAnalyzer;
+
+    impl HighSearchTextAnalyzer for PanicAnalyzer {
+        fn analyze_document(&self, _memo: &Memo) -> AppResult<HighSearchAnalyzedDocument> {
+            panic!("raw document budget must fail before analyzer invocation")
+        }
+
+        fn analyze_query(
+            &self,
+            _query: &str,
+            _tag: Option<&str>,
+        ) -> AppResult<HighSearchAnalyzedQuery> {
+            panic!("raw query budget must fail before analyzer invocation")
         }
     }
 
@@ -463,7 +529,7 @@ mod tests {
     }
 
     fn budget() -> HighSearchAnalysisBudget {
-        HighSearchAnalysisBudget::new(64, 16, 256).unwrap()
+        HighSearchAnalysisBudget::new(1_048_576, 8_192, 64, 16, 256).unwrap()
     }
 
     fn memo() -> Memo {
@@ -504,10 +570,52 @@ mod tests {
 
     #[test]
     fn analysis_budget_requires_positive_bounds() {
-        assert!(HighSearchAnalysisBudget::new(0, 1, 1).is_err());
-        assert!(HighSearchAnalysisBudget::new(1, 0, 1).is_err());
-        assert!(HighSearchAnalysisBudget::new(1, 1, 0).is_err());
-        assert!(HighSearchAnalysisBudget::new(1, 1, 1).is_ok());
+        assert!(HighSearchAnalysisBudget::new(0, 1, 1, 1, 1).is_err());
+        assert!(HighSearchAnalysisBudget::new(1, 0, 1, 1, 1).is_err());
+        assert!(HighSearchAnalysisBudget::new(1, 1, 0, 1, 1).is_err());
+        assert!(HighSearchAnalysisBudget::new(1, 1, 1, 0, 1).is_err());
+        assert!(HighSearchAnalysisBudget::new(1, 1, 1, 1, 0).is_err());
+        assert!(HighSearchAnalysisBudget::new(1, 1, 1, 1, 1).is_ok());
+    }
+
+    #[tokio::test]
+    async fn raw_document_budget_fails_before_analyzer_crypto_or_projection() {
+        let crypto = Arc::new(FakeCrypto::stable());
+        let projection = Arc::new(FakeProjection::default());
+        let service = HighSearchProjectionService::new(
+            Arc::new(PanicAnalyzer),
+            crypto.clone(),
+            projection.clone(),
+            HighSearchAnalysisBudget::new(1, 8_192, 64, 16, 256).unwrap(),
+        );
+
+        assert!(matches!(
+            service.replace_memo(&memo()).await,
+            Err(AppError::ValidationError(_))
+        ));
+        assert!(crypto.calls.lock().unwrap().is_empty());
+        assert!(projection.document.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn raw_query_budget_fails_before_analyzer_crypto_or_projection() {
+        let crypto = Arc::new(FakeCrypto::stable());
+        let projection = Arc::new(FakeProjection::default());
+        let service = HighSearchProjectionService::new(
+            Arc::new(PanicAnalyzer),
+            crypto.clone(),
+            projection.clone(),
+            HighSearchAnalysisBudget::new(1_048_576, 1, 64, 16, 256).unwrap(),
+        );
+
+        assert!(matches!(
+            service
+                .search_memo_ids(Uuid::from_u128(42), "too large", Some("tag"), 1, 20)
+                .await,
+            Err(AppError::ValidationError(_))
+        ));
+        assert!(crypto.calls.lock().unwrap().is_empty());
+        assert!(projection.query.lock().unwrap().is_none());
     }
 
     #[tokio::test]
@@ -518,7 +626,7 @@ mod tests {
             Arc::new(FakeAnalyzer),
             crypto.clone(),
             projection.clone(),
-            HighSearchAnalysisBudget::new(1, 16, 256).unwrap(),
+            HighSearchAnalysisBudget::new(1_048_576, 8_192, 1, 16, 256).unwrap(),
         );
 
         assert!(matches!(
@@ -581,7 +689,7 @@ mod tests {
             Arc::new(OverBudgetQueryAnalyzer),
             crypto.clone(),
             projection.clone(),
-            HighSearchAnalysisBudget::new(64, 1, 256).unwrap(),
+            HighSearchAnalysisBudget::new(1_048_576, 8_192, 64, 1, 256).unwrap(),
         );
 
         assert!(matches!(
