@@ -126,6 +126,7 @@ async fn build_aws_kms_prf_client(
 
     let kms = aws_sdk_kms::Client::new(&sdk_config);
     let client = AwsKmsSearchSeedPrfClient::new(kms, key_arn.clone())?;
+    client.verify_key_configuration().await?;
     Ok(Arc::new(client))
 }
 
