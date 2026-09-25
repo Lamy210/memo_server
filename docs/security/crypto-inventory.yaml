@@ -161,6 +161,9 @@ assets:
         cache_ttl_required_positive: true
         cache_max_entries_required_positive: true
         cache_sweep_required_positive: true
+        analysis_document_term_budget_required_positive: true
+        analysis_query_term_budget_required_positive: true
+        analysis_term_byte_budget_required_positive: true
         production_defaults: forbidden
         request_path_wiring: false
       search_key_provider: boundary_staged
