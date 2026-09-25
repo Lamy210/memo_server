@@ -7,7 +7,9 @@ use zeroize::Zeroizing;
 
 use crate::error::{AppError, AppResult};
 
-use super::crypto_search_seed_provider::ManagedSearchSeedPrfClient;
+use super::crypto_search_seed_provider::{
+    ManagedPrfClientBinding, ManagedSearchSeedPrfClient, MANAGED_PRF_PROVIDER_AWS_KMS,
+};
 
 const MAX_KMS_KEY_ARN_BYTES: usize = 2048;
 const HMAC_SHA384_BYTES: usize = 48;
@@ -27,6 +29,13 @@ impl AwsKmsSearchSeedPrfClient {
 
 #[async_trait]
 impl ManagedSearchSeedPrfClient for AwsKmsSearchSeedPrfClient {
+    fn binding(&self) -> ManagedPrfClientBinding<'_> {
+        ManagedPrfClientBinding {
+            provider: MANAGED_PRF_PROVIDER_AWS_KMS,
+            immutable_key_reference: &self.key_arn,
+        }
+    }
+
     async fn hmac_sha384(&self, message: &[u8]) -> AppResult<Zeroizing<Vec<u8>>> {
         if message.is_empty() {
             return Err(AppError::ServiceUnavailable(
