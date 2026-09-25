@@ -114,7 +114,6 @@ fn rejects_mongodb_database_name_at_64_bytes() {
 fn supports_explicit_manticore_search_backend() {
     let config = AppConfig::from_vars([
         ("AUTH_MODE".to_string(), "development".to_string()),
-        ("AUTHORITATIVE_BACKEND".to_string(), "mongodb".to_string()),
         ("SEARCH_BACKEND".to_string(), "manticore".to_string()),
         (
             "MANTICORE_URL".to_string(),
@@ -147,6 +146,7 @@ fn rejects_unknown_search_backend() {
 fn high_search_aws_vars() -> Vec<(String, String)> {
     vec![
         ("AUTH_MODE".to_string(), "development".to_string()),
+        ("AUTHORITATIVE_BACKEND".to_string(), "mongodb".to_string()),
         ("SEARCH_BACKEND".to_string(), "manticore".to_string()),
         ("HIGH_SEARCH_MODE".to_string(), "aws-kms".to_string()),
         (
