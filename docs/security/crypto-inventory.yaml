@@ -166,6 +166,14 @@ assets:
         analysis_term_byte_budget_required_positive: true
         production_defaults: forbidden
         request_path_wiring: false
+      runtime_composition:
+        stack_factory: staged
+        managed_prf_client_injection: required_when_enabled
+        analyzer: icu4x_dictionary
+        owner_key_derivation: hkdf_sha384
+        derived_key_cache: bounded
+        protected_projection: manticore
+        request_path_installed: false
       search_key_provider: boundary_staged
       owner_scoped_seed_provider: boundary_staged
       managed_prf_seed_adapter: staged
