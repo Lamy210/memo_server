@@ -154,6 +154,7 @@ assets:
         explicit_enable_value: aws-kms
         aws_kms_build_feature_required: aws-kms-search
         build_feature_mismatch_behavior: fail_closed
+        mongodb_authoritative_required_when_enabled: true
         manticore_required_when_enabled: true
         pinned_kms_key_arn_required: true
         aws_region_required_and_arn_matched: true
