@@ -73,28 +73,51 @@ impl ManagedSearchSeedPrfClient for AwsKmsSearchSeedPrfClient {
 }
 
 fn validate_pinned_kms_key_arn(key_arn: &str) -> AppResult<()> {
-    if key_arn.is_empty()
-        || key_arn.len() > MAX_KMS_KEY_ARN_BYTES
-        || key_arn.trim() != key_arn
-        || !key_arn.starts_with("arn:")
-        || !key_arn.contains(":kms:")
-        || !key_arn.contains(":key/")
-        || key_arn.contains(":alias/")
-        || key_arn.starts_with("alias/")
-    {
-        return Err(AppError::ServiceUnavailable(
-            "AWS KMS HIGH search PRF requires a pinned KMS key ARN, not an alias".into(),
-        ));
-    }
+    let parts: Vec<&str> = key_arn.splitn(6, ':').collect();
+    let partition_valid = parts.get(1).is_some_and(|partition| {
+        !partition.is_empty()
+            && partition
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !partition.starts_with('-')
+            && !partition.ends_with('-')
+    });
+    let region_valid = parts.get(3).is_some_and(|region| {
+        !region.is_empty()
+            && region
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !region.starts_with('-')
+            && !region.ends_with('-')
+    });
+    let account_valid = parts.get(4).is_some_and(|account| {
+        account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    let resource_valid = parts.get(5).is_some_and(|resource| {
+        resource.strip_prefix("key/").is_some_and(|key_id| {
+            !key_id.is_empty()
+                && !key_id.contains('/')
+                && key_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    });
 
-    let Some((_, resource)) = key_arn.rsplit_once(":key/") else {
+    let valid = !key_arn.is_empty()
+        && key_arn.len() <= MAX_KMS_KEY_ARN_BYTES
+        && key_arn.trim() == key_arn
+        && parts.len() == 6
+        && parts[0] == "arn"
+        && partition_valid
+        && parts[2] == "kms"
+        && region_valid
+        && account_valid
+        && resource_valid;
+
+    if !valid {
         return Err(AppError::ServiceUnavailable(
-            "AWS KMS HIGH search PRF key ARN is malformed".into(),
-        ));
-    };
-    if resource.is_empty() || resource.contains('/') || resource.chars().any(char::is_whitespace) {
-        return Err(AppError::ServiceUnavailable(
-            "AWS KMS HIGH search PRF key ARN is malformed".into(),
+            "AWS KMS HIGH search PRF requires a structurally valid pinned KMS key ARN, not an alias"
+                .into(),
         ));
     }
 
@@ -118,26 +141,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_aliases_and_unpinned_identifiers() {
+    fn rejects_aliases_unpinned_and_structurally_invalid_identifiers() {
         for invalid in [
             "",
             "alias/memo-search",
             "1234abcd-12ab-34cd-56ef-1234567890ab",
             "arn:aws:kms:ap-northeast-1:111122223333:alias/memo-search",
             " arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+            "arn:AWS:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+            "arn:aws:not-kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+            "arn:aws:kms:AP-NORTHEAST-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+            "arn:aws:kms:ap-northeast-1:not-an-account:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+            "arn:aws:kms:ap-northeast-1:111122223333:key/",
+            "arn:aws:kms:ap-northeast-1:111122223333:key/key/extra",
+            "arn:aws:kms:ap-northeast-1:111122223333:key/key with space",
         ] {
             assert!(validate_pinned_kms_key_arn(invalid).is_err(), "{invalid}");
         }
-    }
-
-    #[test]
-    fn rejects_malformed_key_resource() {
-        assert!(
-            validate_pinned_kms_key_arn("arn:aws:kms:ap-northeast-1:111122223333:key/").is_err()
-        );
-        assert!(validate_pinned_kms_key_arn(
-            "arn:aws:kms:ap-northeast-1:111122223333:key/key/extra"
-        )
-        .is_err());
     }
 }
