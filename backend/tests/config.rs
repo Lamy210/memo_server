@@ -272,6 +272,10 @@ fn high_search_aws_kms_rejects_aliases_bare_ids_and_region_mismatch() {
         "1234abcd-12ab-34cd-56ef-1234567890ab",
         "arn:aws:kms:ap-northeast-1:111122223333:alias/memo-search",
         "arn:aws:kms:us-east-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+        "arn:AWS:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+        "arn:aws:kms:ap-northeast-1:not-an-account:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+        "arn:aws:kms:ap-northeast-1:111122223333:key/key/extra",
+        " arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
     ] {
         let mut vars = high_search_aws_vars();
         vars.iter_mut()
