@@ -10,8 +10,9 @@ use crate::{
     application::{health::HealthService, memo::service::MemoService},
     config::AppConfig,
     infrastructure::{
-        auth::AuthService, persistence::stack::PersistenceStack,
-        reconciliation::ProjectionReconciler, repositories::memo::MemoRepositoryImpl,
+        auth::AuthService, high_search_aws_runtime::HighSearchRuntimeHandle,
+        persistence::stack::PersistenceStack, reconciliation::ProjectionReconciler,
+        repositories::memo::MemoRepositoryImpl,
     },
     interfaces::routes::configure_routes,
 };
@@ -21,10 +22,16 @@ const MAX_JSON_PAYLOAD_BYTES: usize = 512 * 1024;
 pub struct Application {
     port: u16,
     server: actix_web::dev::Server,
+    high_search_runtime: HighSearchRuntimeHandle,
 }
 
 impl Application {
     pub async fn build(config: AppConfig) -> io::Result<Self> {
+        let high_search_runtime =
+            HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri)
+                .await
+                .map_err(|error| io::Error::other(error.to_string()))?;
+
         let persistence = PersistenceStack::build(&config)
             .await
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -63,7 +70,11 @@ impl Application {
         .bind(("0.0.0.0", port))?
         .run();
 
-        Ok(Self { port, server })
+        Ok(Self {
+            port,
+            server,
+            high_search_runtime,
+        })
     }
 
     pub fn port(&self) -> u16 {
@@ -71,6 +82,14 @@ impl Application {
     }
 
     pub async fn run_until_stopped(self) -> io::Result<()> {
-        self.server.await
+        let Self {
+            server,
+            high_search_runtime,
+            ..
+        } = self;
+
+        let result = server.await;
+        drop(high_search_runtime);
+        result
     }
 }

@@ -56,7 +56,7 @@ The provider-specific KMS key ID/ARN must remain configuration/provider state. T
 
 A provider-specific PRF client must never let a mutable cloud alias silently change seed bytes while returning the same application `search_key_version`. It must bind to immutable provider key material (or otherwise detect provider-key revision changes) and require a new application seed version whenever that material changes. The generic adapter intentionally does not persist a cloud key ID/ARN/version.
 
-A staged AWS KMS implementation uses `GenerateMac` with `HMAC_SHA_384` through `aws-sdk-kms = 1.114.0`. It accepts only a pinned KMS **key ARN**; alias identifiers and bare key IDs are rejected so alias retargeting cannot silently change seed material. The adapter requests only HMAC-SHA-384, checks that the response reports the same key ARN and MAC algorithm, and returns only the raw MAC bytes through the zeroizing managed-PRF boundary. AWS credentials, Region selection, and the key ARN remain deployment configuration and are not persisted in memo/search metadata.
+A staged AWS KMS implementation uses `GenerateMac` with `HMAC_SHA_384` through `aws-sdk-kms = 1.114.0`. Startup uses `aws-config = 1.12.0` only when HIGH search is enabled, explicitly pins the SDK Region to the Region already validated against the KMS key ARN, and leaves credentials to the standard refreshable AWS credential-provider chain. It accepts only a pinned KMS **key ARN**; alias identifiers and bare key IDs are rejected so alias retargeting cannot silently change seed material. The adapter requests only HMAC-SHA-384, checks that the response reports the same key ARN and MAC algorithm, and returns only the raw MAC bytes through the zeroizing managed-PRF boundary. AWS credentials, Region selection, and the key ARN remain deployment configuration and are not persisted in memo/search metadata.
 
 Application orchestration batches all content/tag terms for one document or query into one cryptographic operation. The ring adapter resolves the owner-scoped search key once for that batch and reuses only the in-memory HMAC key for its terms.
 
@@ -149,13 +149,19 @@ The sequence is:
 
 If reindex or the pre-cutover permit check fails, the derived-key cache is cleared again while the permit is still held and the operation remains failed. If cleanup also fails, the result is promoted to service-unavailable with both failures recorded in the error text. The protocol does not itself change provider configuration or switch request routing; those remain caller/operator responsibilities, but the permit now spans that caller-owned cutover window instead of being dropped immediately after reindex.
 
+## Staged startup wiring
+
+`HighSearchRuntimeHandle` now owns provider/startup composition without exposing HIGH search to routes. When HIGH search is disabled it returns an empty handle and does not load AWS configuration. When `HIGH_SEARCH_MODE=aws-kms` is selected, it loads AWS shared configuration with the already-validated Region explicitly overridden, constructs one shared KMS client, binds it to the pinned key ARN, and builds `HighSearchRuntimeStack`.
+
+The handle retains the stack for the application lifetime and runs the configured derived-key expiry sweep with a weak runtime reference. Dropping the handle aborts that maintenance task. The runtime is still not installed into request handling, so startup composition alone does not activate protected search or change the legacy search path.
+
 ## Runtime boundary
 
-This code remains staged and runtime-unreachable.
+The provider/runtime stack is now startup-composed when explicitly enabled, but remains request-path-inactive.
 
 Before SEARCH-HIGH-1 can become DEPLOYED:
 
-- provision/review the staged AWS KMS HMAC_384 key, IAM/key policy, credentials/Region configuration, and startup wiring,
+- provision/review the staged AWS KMS HMAC_384 key and IAM/key policy, and validate deployment credential-provider behavior,
 - choose deployment TTL/capacity for the staged bounded derived-key cache and wire invalidation into the production rotation protocol,
 - prove rotation/reindex behavior,
 - complete protected projection reindex verification,
