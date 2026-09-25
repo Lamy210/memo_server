@@ -19,9 +19,21 @@ use super::crypto_search_keys::{
 
 const SEARCH_SEED_PRF_VERSION: &str = "prf384-v1";
 const SEARCH_SEED_PRF_DOMAIN: &[u8] = b"memo_server:search:seed-prf:v1\0";
+pub(crate) const MANAGED_PRF_PROVIDER_AWS_KMS: &str = "aws-kms";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ManagedPrfClientBinding<'a> {
+    pub(crate) provider: &'static str,
+    pub(crate) immutable_key_reference: &'a str,
+}
 
 #[async_trait]
 pub(crate) trait ManagedSearchSeedPrfClient: Send + Sync {
+    /// Identify the provider and immutable key reference actually used by this
+    /// client so higher-level composition can bind runtime configuration to the
+    /// concrete cryptographic key.
+    fn binding(&self) -> ManagedPrfClientBinding<'_>;
+
     /// Compute HMAC-SHA-384 with provider-managed, non-exportable key material.
     ///
     /// The concrete implementation must be bound to immutable provider key
@@ -131,6 +143,13 @@ mod tests {
 
     #[async_trait]
     impl ManagedSearchSeedPrfClient for FakeManagedPrfClient {
+        fn binding(&self) -> ManagedPrfClientBinding<'_> {
+            ManagedPrfClientBinding {
+                provider: "test",
+                immutable_key_reference: "test-key",
+            }
+        }
+
         async fn hmac_sha384(&self, message: &[u8]) -> AppResult<Zeroizing<Vec<u8>>> {
             self.messages.lock().unwrap().push(message.to_vec());
             Ok(Zeroizing::new(
@@ -143,6 +162,13 @@ mod tests {
 
     #[async_trait]
     impl ManagedSearchSeedPrfClient for WrongLengthPrfClient {
+        fn binding(&self) -> ManagedPrfClientBinding<'_> {
+            ManagedPrfClientBinding {
+                provider: "test",
+                immutable_key_reference: "test-key",
+            }
+        }
+
         async fn hmac_sha384(&self, _message: &[u8]) -> AppResult<Zeroizing<Vec<u8>>> {
             Ok(Zeroizing::new(vec![0xAB; SEARCH_KEY_SEED_BYTES - 1]))
         }
