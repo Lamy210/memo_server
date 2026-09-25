@@ -21,7 +21,7 @@ const SEARCH_SEED_PRF_VERSION: &str = "prf384-v1";
 const SEARCH_SEED_PRF_DOMAIN: &[u8] = b"memo_server:search:seed-prf:v1\0";
 
 #[async_trait]
-pub(super) trait ManagedSearchSeedPrfClient: Send + Sync {
+pub(crate) trait ManagedSearchSeedPrfClient: Send + Sync {
     /// Compute HMAC-SHA-384 with provider-managed, non-exportable key material.
     ///
     /// The concrete implementation must be bound to immutable provider key
