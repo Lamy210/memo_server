@@ -82,6 +82,8 @@ pub enum ConfigError {
     InvalidHighSearchMode(String),
     #[error("HIGH_SEARCH_MODE=aws-kms requires SEARCH_BACKEND=manticore")]
     HighSearchRequiresManticore,
+    #[error("HIGH_SEARCH_MODE=aws-kms requires the binary to be built with feature `aws-kms-search`")]
+    HighSearchBuildFeatureUnavailable,
     #[error("{0} is required when HIGH_SEARCH_MODE=aws-kms")]
     MissingHighSearchSetting(&'static str),
     #[error("{0} is invalid for HIGH_SEARCH_MODE=aws-kms: `{1}`")]
@@ -237,14 +239,20 @@ fn parse_high_search_config(
                 "HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS",
             )?;
 
-            Ok(HighSearchConfig::AwsKms {
+            let config = HighSearchConfig::AwsKms {
                 key_arn,
                 region,
                 provider_seed_version,
                 cache_ttl_seconds,
                 cache_max_entries,
                 cache_sweep_seconds,
-            })
+            };
+
+            if !cfg!(feature = "aws-kms-search") {
+                return Err(ConfigError::HighSearchBuildFeatureUnavailable);
+            }
+
+            Ok(config)
         }
         _ => Err(ConfigError::InvalidHighSearchMode(mode)),
     }
