@@ -19,8 +19,7 @@ use super::{
         CachingSearchKeyProvider, HkdfSearchKeyProvider, SearchKeyCachePolicy, SearchKeyProvider,
     },
     crypto_search_seed_provider::{
-        ManagedPrfSearchKeySeedProvider, ManagedSearchSeedPrfClient,
-        MANAGED_PRF_PROVIDER_AWS_KMS,
+        ManagedPrfSearchKeySeedProvider, ManagedSearchSeedPrfClient, MANAGED_PRF_PROVIDER_AWS_KMS,
     },
     persistence::manticore_high::HighManticoreClient,
 };
@@ -160,7 +159,9 @@ mod tests {
 
     #[async_trait]
     impl ManagedSearchSeedPrfClient for TestManagedPrfClient {
-        fn binding(&self) -> super::super::crypto_search_seed_provider::ManagedPrfClientBinding<'_> {
+        fn binding(
+            &self,
+        ) -> super::super::crypto_search_seed_provider::ManagedPrfClientBinding<'_> {
             super::super::crypto_search_seed_provider::ManagedPrfClientBinding {
                 provider: self.provider,
                 immutable_key_reference: &self.key_reference,
