@@ -129,7 +129,7 @@ HighSearchProjectionService
 protected Manticore projection
 ```
 
-Disabled configuration returns no stack and does not require provider dependencies. Enabled configuration fails closed when its managed PRF client is absent. The factory revalidates cache policy and analysis work budgets even though configuration parsing already validates them.
+Disabled configuration returns no stack and does not require provider dependencies. Enabled configuration fails closed when its managed PRF client is absent. It also compares the client's declared provider and immutable key reference with the configured AWS KMS key ARN, preventing dependency injection from silently binding SEARCH-HIGH-1 to a different provider or key. The factory revalidates cache policy and analysis work budgets even though configuration parsing already validates them.
 
 The stack also exposes explicit cache sweep, owner invalidation, and global clear operations so later startup/rotation wiring does not need to reach through cryptographic internals.
 
