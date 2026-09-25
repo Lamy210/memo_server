@@ -25,6 +25,40 @@ impl AwsKmsSearchSeedPrfClient {
 
         Ok(Self { client, key_arn })
     }
+
+    pub(super) async fn verify_key_configuration(&self) -> AppResult<()> {
+        let response = self
+            .client
+            .describe_key()
+            .key_id(&self.key_arn)
+            .send()
+            .await
+            .map_err(|_| {
+                AppError::ServiceUnavailable(
+                    "AWS KMS HIGH search DescribeKey preflight failed".into(),
+                )
+            })?;
+        let metadata = response.key_metadata().ok_or_else(|| {
+            AppError::ServiceUnavailable(
+                "AWS KMS HIGH search DescribeKey omitted key metadata".into(),
+            )
+        })?;
+        let mac_algorithms: Vec<&str> = metadata
+            .mac_algorithms()
+            .iter()
+            .map(|algorithm| algorithm.as_str())
+            .collect();
+
+        validate_kms_search_key_metadata(
+            &self.key_arn,
+            metadata.arn(),
+            metadata.enabled(),
+            metadata.key_spec().map(|value| value.as_str()),
+            metadata.key_usage().map(|value| value.as_str()),
+            metadata.key_state().map(|value| value.as_str()),
+            &mac_algorithms,
+        )
+    }
 }
 
 #[async_trait]
@@ -88,6 +122,44 @@ impl ManagedSearchSeedPrfClient for AwsKmsSearchSeedPrfClient {
     }
 }
 
+fn validate_kms_search_key_metadata(
+    expected_arn: &str,
+    actual_arn: Option<&str>,
+    enabled: bool,
+    key_spec: Option<&str>,
+    key_usage: Option<&str>,
+    key_state: Option<&str>,
+    mac_algorithms: &[&str],
+) -> AppResult<()> {
+    if actual_arn != Some(expected_arn) {
+        return Err(AppError::ServiceUnavailable(
+            "AWS KMS HIGH search DescribeKey identity mismatch".into(),
+        ));
+    }
+    if !enabled || key_state != Some("Enabled") {
+        return Err(AppError::ServiceUnavailable(
+            "AWS KMS HIGH search key is not enabled".into(),
+        ));
+    }
+    if key_spec != Some("HMAC_384") {
+        return Err(AppError::ServiceUnavailable(
+            "AWS KMS HIGH search key must use KeySpec HMAC_384".into(),
+        ));
+    }
+    if key_usage != Some("GENERATE_VERIFY_MAC") {
+        return Err(AppError::ServiceUnavailable(
+            "AWS KMS HIGH search key must use GENERATE_VERIFY_MAC".into(),
+        ));
+    }
+    if !mac_algorithms.contains(&"HMAC_SHA_384") {
+        return Err(AppError::ServiceUnavailable(
+            "AWS KMS HIGH search key does not advertise HMAC_SHA_384".into(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_pinned_kms_key_arn(key_arn: &str) -> AppResult<()> {
     let parts: Vec<&str> = key_arn.splitn(6, ':').collect();
     let partition_valid = parts.get(1).is_some_and(|partition| {
@@ -146,6 +218,79 @@ mod tests {
 
     const KEY_ARN: &str =
         "arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+
+    fn valid_metadata() -> AppResult<()> {
+        validate_kms_search_key_metadata(
+            KEY_ARN,
+            Some(KEY_ARN),
+            true,
+            Some("HMAC_384"),
+            Some("GENERATE_VERIFY_MAC"),
+            Some("Enabled"),
+            &["HMAC_SHA_384"],
+        )
+    }
+
+    #[test]
+    fn accepts_enabled_hmac384_generate_verify_key_metadata() {
+        assert!(valid_metadata().is_ok());
+    }
+
+    #[test]
+    fn rejects_mismatched_or_unusable_kms_key_metadata() {
+        assert!(validate_kms_search_key_metadata(
+            KEY_ARN,
+            Some(
+                "arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            ),
+            true,
+            Some("HMAC_384"),
+            Some("GENERATE_VERIFY_MAC"),
+            Some("Enabled"),
+            &["HMAC_SHA_384"],
+        )
+        .is_err());
+        assert!(validate_kms_search_key_metadata(
+            KEY_ARN,
+            Some(KEY_ARN),
+            false,
+            Some("HMAC_384"),
+            Some("GENERATE_VERIFY_MAC"),
+            Some("Disabled"),
+            &["HMAC_SHA_384"],
+        )
+        .is_err());
+        assert!(validate_kms_search_key_metadata(
+            KEY_ARN,
+            Some(KEY_ARN),
+            true,
+            Some("HMAC_256"),
+            Some("GENERATE_VERIFY_MAC"),
+            Some("Enabled"),
+            &["HMAC_SHA_256"],
+        )
+        .is_err());
+        assert!(validate_kms_search_key_metadata(
+            KEY_ARN,
+            Some(KEY_ARN),
+            true,
+            Some("HMAC_384"),
+            Some("SIGN_VERIFY"),
+            Some("Enabled"),
+            &["HMAC_SHA_384"],
+        )
+        .is_err());
+        assert!(validate_kms_search_key_metadata(
+            KEY_ARN,
+            Some(KEY_ARN),
+            true,
+            Some("HMAC_384"),
+            Some("GENERATE_VERIFY_MAC"),
+            Some("Enabled"),
+            &[],
+        )
+        .is_err());
+    }
 
     #[test]
     fn accepts_pinned_kms_key_arn() {
