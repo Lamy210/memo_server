@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 default-run = "memo_app_backend"
 
+[features]
+default = []
+aws-kms-search = ["dep:aws-sdk-kms"]
+
 [dependencies]
 tokio = { version = "1.36.0", features = ["full"] }
 actix-web = "4.5.1"
@@ -27,6 +31,7 @@ reqwest = { version = "0.12.28", default-features = false, features = ["json", "
 ring = "0.17.14"
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto"] }
 zeroize = "1.9.0"
+aws-sdk-kms = { version = "=1.114.0", optional = true }
 icu_segmenter = "=2.3.0"
 icu_normalizer = "=2.3.0"
 icu_casemap = "=2.3.0"

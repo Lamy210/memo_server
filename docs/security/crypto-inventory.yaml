@@ -158,7 +158,16 @@ assets:
       managed_prf_seed_version_contract: "prf384-v1:<provider-seed-version>"
       persisted_derived_key_version_contract: "hkdf384-v1:prf384-v1:<provider-seed-version>"
       managed_prf_plaintext_content_exposure: forbidden
-      provider_specific_prf_client: not_implemented
+      provider_specific_prf_client: aws_kms_staged
+      aws_kms_sdk_version: "1.114.0"
+      aws_kms_build_feature: aws-kms-search
+      aws_kms_default_build_enabled: false
+      aws_kms_operation: GenerateMac
+      aws_kms_key_spec: HMAC_384
+      aws_kms_mac_algorithm: HMAC_SHA_384
+      aws_kms_key_identifier: pinned_key_arn_only
+      aws_kms_alias_identifier: forbidden
+      aws_kms_response_identity_check: required
       provider_key_binding: immutable_required
       per_user_hkdf_sha384: staged
       derived_key_version_contract: "hkdf384-v1:<seed-version>"

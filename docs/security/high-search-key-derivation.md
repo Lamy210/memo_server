@@ -56,6 +56,8 @@ The provider-specific KMS key ID/ARN must remain configuration/provider state. T
 
 A provider-specific PRF client must never let a mutable cloud alias silently change seed bytes while returning the same application `search_key_version`. It must bind to immutable provider key material (or otherwise detect provider-key revision changes) and require a new application seed version whenever that material changes. The generic adapter intentionally does not persist a cloud key ID/ARN/version.
 
+A staged AWS KMS implementation uses `GenerateMac` with `HMAC_SHA_384` through `aws-sdk-kms = 1.114.0`. It accepts only a pinned KMS **key ARN**; alias identifiers and bare key IDs are rejected so alias retargeting cannot silently change seed material. The adapter requests only HMAC-SHA-384, checks that the response reports the same key ARN and MAC algorithm, and returns only the raw MAC bytes through the zeroizing managed-PRF boundary. AWS credentials, Region selection, and the key ARN remain deployment configuration and are not persisted in memo/search metadata.
+
 Application orchestration batches all content/tag terms for one document or query into one cryptographic operation. The ring adapter resolves the owner-scoped search key once for that batch and reuses only the in-memory HMAC key for its terms.
 
 ## Bounded derived-key cache
@@ -83,7 +85,7 @@ This code remains staged and runtime-unreachable.
 
 Before SEARCH-HIGH-1 can become DEPLOYED:
 
-- implement and review a provider-specific managed PRF client (cloud KMS/HSM) behind the staged adapter,
+- provision/review the staged AWS KMS HMAC_384 key, IAM/key policy, credentials/Region configuration, and startup wiring,
 - choose deployment TTL/capacity for the staged bounded derived-key cache and wire invalidation into the production rotation protocol,
 - prove rotation/reindex behavior,
 - complete protected projection reindex verification,
