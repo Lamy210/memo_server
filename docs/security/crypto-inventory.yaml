@@ -170,6 +170,17 @@ assets:
         aws_region_source: explicit_validated_config
         aws_credentials_source: standard_provider_chain
         aws_client_construction: once_per_application_startup
+        aws_kms_startup_preflight: DescribeKey
+        aws_kms_startup_required_properties:
+          - pinned_arn_match
+          - enabled
+          - key_state_enabled
+          - key_spec_hmac_384
+          - key_usage_generate_verify_mac
+          - mac_algorithm_hmac_sha_384
+        aws_kms_required_permissions:
+          - kms:DescribeKey
+          - kms:GenerateMac
         cache_sweeper_lifetime: application_owned
         disabled_mode_aws_config_load: forbidden
         request_path_wiring: false
