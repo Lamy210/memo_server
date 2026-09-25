@@ -22,6 +22,11 @@ pub struct HighSearchReindexStats {
 ///
 /// This is migration orchestration only. Runtime search cutover remains a
 /// separate operator-controlled action after analyzer/key-provider readiness.
+#[async_trait::async_trait]
+pub trait HighSearchReindexRunner: Send + Sync {
+    async fn reindex_all(&self, page_size: usize) -> AppResult<HighSearchReindexStats>;
+}
+
 pub struct HighSearchReindexService {
     source: Arc<dyn PlaintextMemoMigrationSource>,
     projection: Arc<HighSearchProjectionService>,
@@ -142,6 +147,13 @@ impl HighSearchReindexService {
         }
 
         Ok(visited)
+    }
+}
+
+#[async_trait::async_trait]
+impl HighSearchReindexRunner for HighSearchReindexService {
+    async fn reindex_all(&self, page_size: usize) -> AppResult<HighSearchReindexStats> {
+        HighSearchReindexService::reindex_all(self, page_size).await
     }
 }
 
