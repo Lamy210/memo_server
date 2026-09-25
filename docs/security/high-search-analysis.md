@@ -65,7 +65,7 @@ Deduplication intentionally avoids storing repeated blind tokens solely to prese
 
 ### Analysis work budget
 
-`HighSearchProjectionService` requires an explicit `HighSearchAnalysisBudget`. No production numerical defaults are embedded in the service. The caller must supply positive limits for:
+`HighSearchProjectionService` requires an explicit `HighSearchAnalysisBudget`. No production numerical defaults are embedded in the service. Runtime configuration supplies these values explicitly as `HIGH_SEARCH_MAX_DOCUMENT_CONTENT_TERMS`, `HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS`, and `HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES`. The caller must supply positive limits for:
 
 - unique normalized content terms per document,
 - unique normalized content terms per query,
