@@ -13,6 +13,7 @@ const DEFAULT_PORT: u16 = 8080;
 const MAX_SEARCH_VERSION_ID_CHARS: usize = 128;
 const HIGH_SEARCH_PRF_PREFIX: &str = "prf384-v1:";
 const HIGH_SEARCH_HKDF_PREFIX: &str = "hkdf384-v1:";
+const MAX_KMS_KEY_ARN_BYTES: usize = 2048;
 
 // MongoDB database names on Unix/Linux must not contain NUL, space, double quote,
 // dollar sign, dot, forward slash, or backslash.
@@ -325,19 +326,36 @@ fn validate_high_search_kms_key_arn(
     expected_region: &str,
 ) -> Result<(), ConfigError> {
     let parts: Vec<&str> = key_arn.splitn(6, ':').collect();
-    let valid = parts.len() == 6
+    let partition_valid = parts.get(1).is_some_and(|partition| {
+        !partition.is_empty()
+            && partition
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !partition.starts_with('-')
+            && !partition.ends_with('-')
+    });
+    let account_valid = parts.get(4).is_some_and(|account| {
+        account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    let resource_valid = parts.get(5).is_some_and(|resource| {
+        resource.strip_prefix("key/").is_some_and(|key_id| {
+            !key_id.is_empty()
+                && !key_id.contains('/')
+                && key_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    });
+
+    let valid = key_arn.len() <= MAX_KMS_KEY_ARN_BYTES
+        && key_arn.trim() == key_arn
+        && parts.len() == 6
         && parts[0] == "arn"
-        && !parts[1].is_empty()
+        && partition_valid
         && parts[2] == "kms"
         && parts[3] == expected_region
-        && !parts[4].is_empty()
-        && parts[5].starts_with("key/")
-        && !parts[5].starts_with("alias/")
-        && parts[5].strip_prefix("key/").is_some_and(|resource| {
-            !resource.is_empty()
-                && !resource.contains('/')
-                && !resource.chars().any(char::is_whitespace)
-        });
+        && account_valid
+        && resource_valid;
 
     if !valid {
         return Err(ConfigError::InvalidHighSearchSetting(
