@@ -79,6 +79,22 @@ Invalidation and clear operations also advance a cache epoch. A key resolution t
 
 No production TTL, capacity, or sweep interval is selected by this staged contract. Those values must be chosen from the deployment threat model, provider latency/rate limits, and acceptable plaintext-key reuse/residency windows.
 
+## Fail-closed configuration contract
+
+HIGH protected search remains disabled unless `HIGH_SEARCH_MODE=aws-kms` is explicitly selected. Merely supplying KMS/cache variables does not activate it.
+
+When `aws-kms` is selected, configuration parsing requires all of the following before application startup can proceed:
+
+- `SEARCH_BACKEND=manticore`,
+- `HIGH_SEARCH_AWS_KMS_KEY_ARN` as a pinned KMS key ARN, never an alias or bare key ID,
+- `HIGH_SEARCH_AWS_REGION`, matching the Region encoded by the KMS key ARN,
+- `HIGH_SEARCH_SEED_VERSION`, constrained so the final `hkdf384-v1:prf384-v1:<provider-seed-version>` identifier remains within the persisted version bound,
+- positive `HIGH_SEARCH_KEY_CACHE_TTL_SECONDS`,
+- positive `HIGH_SEARCH_KEY_CACHE_MAX_ENTRIES`,
+- positive `HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS`.
+
+There are deliberately no production defaults for key-cache TTL, capacity, or sweep cadence. These values remain an explicit deployment/security decision. This configuration contract does not itself wire HIGH search into request handling.
+
 ## Runtime boundary
 
 This code remains staged and runtime-unreachable.
