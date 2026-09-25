@@ -51,6 +51,9 @@ pub enum HighSearchConfig {
         cache_ttl_seconds: u64,
         cache_max_entries: usize,
         cache_sweep_seconds: u64,
+        max_document_content_terms: usize,
+        max_query_content_terms: usize,
+        max_normalized_term_bytes: usize,
     },
 }
 
@@ -241,6 +244,18 @@ fn parse_high_search_config(
                 vars,
                 "HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS",
             )?;
+            let max_document_content_terms = parse_positive_high_search_setting::<usize>(
+                vars,
+                "HIGH_SEARCH_MAX_DOCUMENT_CONTENT_TERMS",
+            )?;
+            let max_query_content_terms = parse_positive_high_search_setting::<usize>(
+                vars,
+                "HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS",
+            )?;
+            let max_normalized_term_bytes = parse_positive_high_search_setting::<usize>(
+                vars,
+                "HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES",
+            )?;
 
             let config = HighSearchConfig::AwsKms {
                 key_arn,
@@ -249,6 +264,9 @@ fn parse_high_search_config(
                 cache_ttl_seconds,
                 cache_max_entries,
                 cache_sweep_seconds,
+                max_document_content_terms,
+                max_query_content_terms,
+                max_normalized_term_bytes,
             };
 
             if !cfg!(feature = "aws-kms-search") {
