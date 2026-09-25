@@ -99,6 +99,40 @@ When `aws-kms` is selected, configuration parsing requires all of the following 
 
 There are deliberately no production defaults for key-cache TTL, capacity, sweep cadence, or analysis work budgets. These values remain an explicit deployment/security decision. A fully valid AWS KMS configuration is still rejected when the running binary lacks the `aws-kms-search` build feature, preventing configuration from claiming a capability that was compiled out. This configuration contract does not itself wire HIGH search into request handling.
 
+## Staged runtime composition
+
+`HighSearchRuntimeStack` composes the accepted pieces behind one boundary without installing them into request handling:
+
+```text
+HighSearchConfig
++ managed PRF client
+        |
+        v
+ManagedPrfSearchKeySeedProvider
+        |
+        v
+HKDF-SHA-384 owner key
+        |
+        v
+bounded derived-key cache
+        |
+        v
+HMAC-SHA-384 blind-token cryptography
+        ^
+        |
+ICU4X analyzer
+        |
+        v
+HighSearchProjectionService
+        |
+        v
+protected Manticore projection
+```
+
+Disabled configuration returns no stack and does not require provider dependencies. Enabled configuration fails closed when its managed PRF client is absent. The factory revalidates cache policy and analysis work budgets even though configuration parsing already validates them.
+
+The stack also exposes explicit cache sweep, owner invalidation, and global clear operations so later startup/rotation wiring does not need to reach through cryptographic internals.
+
 ## Runtime boundary
 
 This code remains staged and runtime-unreachable.
