@@ -85,6 +85,7 @@ HIGH protected search remains disabled unless `HIGH_SEARCH_MODE=aws-kms` is expl
 
 When `aws-kms` is selected, configuration parsing requires all of the following before application startup can proceed:
 
+- the binary was built with the `aws-kms-search` Cargo feature,
 - `SEARCH_BACKEND=manticore`,
 - `HIGH_SEARCH_AWS_KMS_KEY_ARN` as a pinned KMS key ARN, never an alias or bare key ID,
 - `HIGH_SEARCH_AWS_REGION`, matching the Region encoded by the KMS key ARN,
@@ -93,7 +94,7 @@ When `aws-kms` is selected, configuration parsing requires all of the following 
 - positive `HIGH_SEARCH_KEY_CACHE_MAX_ENTRIES`,
 - positive `HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS`.
 
-There are deliberately no production defaults for key-cache TTL, capacity, or sweep cadence. These values remain an explicit deployment/security decision. This configuration contract does not itself wire HIGH search into request handling.
+There are deliberately no production defaults for key-cache TTL, capacity, or sweep cadence. These values remain an explicit deployment/security decision. A fully valid AWS KMS configuration is still rejected when the running binary lacks the `aws-kms-search` build feature, preventing configuration from claiming a capability that was compiled out. This configuration contract does not itself wire HIGH search into request handling.
 
 ## Runtime boundary
 
