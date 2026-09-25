@@ -84,6 +84,8 @@ pub enum ConfigError {
     InvalidSearchBackend(String),
     #[error("HIGH_SEARCH_MODE must be `disabled` or `aws-kms`, got `{0}`")]
     InvalidHighSearchMode(String),
+    #[error("HIGH_SEARCH_MODE=aws-kms requires AUTHORITATIVE_BACKEND=mongodb")]
+    HighSearchRequiresMongoDb,
     #[error("HIGH_SEARCH_MODE=aws-kms requires SEARCH_BACKEND=manticore")]
     HighSearchRequiresManticore,
     #[error(
@@ -169,7 +171,8 @@ impl AppConfig {
                 .unwrap_or_else(|| DEFAULT_MANTICORE_URI.to_string()),
         };
 
-        let high_search = parse_high_search_config(&vars, search_backend)?;
+        let high_search =
+            parse_high_search_config(&vars, authoritative_backend, search_backend)?;
 
         let port = match vars.get("PORT") {
             Some(value) => value
@@ -209,6 +212,7 @@ impl AppConfig {
 
 fn parse_high_search_config(
     vars: &HashMap<String, String>,
+    authoritative_backend: AuthoritativeBackend,
     search_backend: SearchBackend,
 ) -> Result<HighSearchConfig, ConfigError> {
     let mode = vars
@@ -219,6 +223,9 @@ fn parse_high_search_config(
     match mode.as_str() {
         "disabled" => Ok(HighSearchConfig::Disabled),
         "aws-kms" => {
+            if authoritative_backend != AuthoritativeBackend::MongoDb {
+                return Err(ConfigError::HighSearchRequiresMongoDb);
+            }
             if search_backend != SearchBackend::Manticore {
                 return Err(ConfigError::HighSearchRequiresManticore);
             }
