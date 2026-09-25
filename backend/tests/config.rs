@@ -114,6 +114,7 @@ fn rejects_mongodb_database_name_at_64_bytes() {
 fn supports_explicit_manticore_search_backend() {
     let config = AppConfig::from_vars([
         ("AUTH_MODE".to_string(), "development".to_string()),
+        ("AUTHORITATIVE_BACKEND".to_string(), "mongodb".to_string()),
         ("SEARCH_BACKEND".to_string(), "manticore".to_string()),
         (
             "MANTICORE_URL".to_string(),
@@ -234,6 +235,17 @@ fn high_search_aws_kms_rejects_binary_without_aws_kms_feature() {
     );
 
     assert_eq!(error, ConfigError::HighSearchBuildFeatureUnavailable);
+}
+
+#[test]
+fn high_search_aws_kms_requires_mongodb_authoritative_storage() {
+    let mut vars = high_search_aws_vars();
+    vars.retain(|(name, _)| name != "AUTHORITATIVE_BACKEND");
+
+    let error = AppConfig::from_vars(vars)
+        .expect_err("HIGH protected search must not run on the Scylla migration fallback");
+
+    assert_eq!(error, ConfigError::HighSearchRequiresMongoDb);
 }
 
 #[test]
