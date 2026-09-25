@@ -18,7 +18,10 @@ use super::{
     crypto_search_keys::{
         CachingSearchKeyProvider, HkdfSearchKeyProvider, SearchKeyCachePolicy, SearchKeyProvider,
     },
-    crypto_search_seed_provider::{ManagedPrfSearchKeySeedProvider, ManagedSearchSeedPrfClient},
+    crypto_search_seed_provider::{
+        ManagedPrfSearchKeySeedProvider, ManagedSearchSeedPrfClient,
+        MANAGED_PRF_PROVIDER_AWS_KMS,
+    },
     persistence::manticore_high::HighManticoreClient,
 };
 
@@ -42,6 +45,7 @@ impl HighSearchRuntimeStack {
         prf_client: Option<Arc<dyn ManagedSearchSeedPrfClient>>,
     ) -> AppResult<Option<Self>> {
         let HighSearchConfig::AwsKms {
+            key_arn,
             provider_seed_version,
             cache_ttl_seconds,
             cache_max_entries,
@@ -60,6 +64,14 @@ impl HighSearchRuntimeStack {
                 "HIGH search is enabled but no managed PRF client was composed".into(),
             )
         })?;
+        let binding = prf_client.binding();
+        if binding.provider != MANAGED_PRF_PROVIDER_AWS_KMS
+            || binding.immutable_key_reference != key_arn
+        {
+            return Err(AppError::ServiceUnavailable(
+                "HIGH search managed PRF client does not match configured AWS KMS key".into(),
+            ));
+        }
 
         let seed_provider = Arc::new(ManagedPrfSearchKeySeedProvider::new(
             prf_client,
@@ -130,18 +142,31 @@ mod tests {
 
     struct TestManagedPrfClient {
         key: hmac::Key,
+        provider: &'static str,
+        key_reference: String,
     }
 
     impl TestManagedPrfClient {
-        fn new() -> Self {
+        fn matching_config() -> Self {
             Self {
                 key: hmac::Key::new(hmac::HMAC_SHA384, &[0x42; 48]),
+                provider: MANAGED_PRF_PROVIDER_AWS_KMS,
+                key_reference:
+                    "arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+                        .into(),
             }
         }
     }
 
     #[async_trait]
     impl ManagedSearchSeedPrfClient for TestManagedPrfClient {
+        fn binding(&self) -> super::super::crypto_search_seed_provider::ManagedPrfClientBinding<'_> {
+            super::super::crypto_search_seed_provider::ManagedPrfClientBinding {
+                provider: self.provider,
+                immutable_key_reference: &self.key_reference,
+            }
+        }
+
         async fn hmac_sha384(&self, message: &[u8]) -> AppResult<Zeroizing<Vec<u8>>> {
             Ok(Zeroizing::new(
                 hmac::sign(&self.key, message).as_ref().to_vec(),
@@ -190,8 +215,36 @@ mod tests {
     }
 
     #[test]
+    fn enabled_high_search_rejects_mismatched_managed_prf_binding() {
+        let mut client = TestManagedPrfClient::matching_config();
+        client.key_reference =
+            "arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                .into();
+
+        assert!(matches!(
+            HighSearchRuntimeStack::build_managed_prf(
+                &enabled_config(),
+                "http://127.0.0.1:9308",
+                Some(Arc::new(client)),
+            ),
+            Err(AppError::ServiceUnavailable(_))
+        ));
+
+        let mut client = TestManagedPrfClient::matching_config();
+        client.provider = "other-provider";
+        assert!(matches!(
+            HighSearchRuntimeStack::build_managed_prf(
+                &enabled_config(),
+                "http://127.0.0.1:9308",
+                Some(Arc::new(client)),
+            ),
+            Err(AppError::ServiceUnavailable(_))
+        ));
+    }
+
+    #[test]
     fn enabled_high_search_composes_staged_runtime_stack() {
-        let client = Arc::new(TestManagedPrfClient::new());
+        let client = Arc::new(TestManagedPrfClient::matching_config());
         let stack = HighSearchRuntimeStack::build_managed_prf(
             &enabled_config(),
             "http://127.0.0.1:9308",
@@ -221,7 +274,7 @@ mod tests {
             HighSearchRuntimeStack::build_managed_prf(
                 &config,
                 "http://127.0.0.1:9308",
-                Some(Arc::new(TestManagedPrfClient::new())),
+                Some(Arc::new(TestManagedPrfClient::matching_config())),
             ),
             Err(AppError::ValidationError(_))
         ));
@@ -243,7 +296,7 @@ mod tests {
             HighSearchRuntimeStack::build_managed_prf(
                 &config,
                 "http://127.0.0.1:9308",
-                Some(Arc::new(TestManagedPrfClient::new())),
+                Some(Arc::new(TestManagedPrfClient::matching_config())),
             ),
             Err(AppError::ServiceUnavailable(_))
         ));
