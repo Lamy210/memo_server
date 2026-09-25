@@ -10,6 +10,9 @@ const DEFAULT_REDIS_URI: &str = "redis://127.0.0.1:6379";
 const DEFAULT_ELASTICSEARCH_URI: &str = "http://127.0.0.1:9200";
 const DEFAULT_MANTICORE_URI: &str = "http://127.0.0.1:9308";
 const DEFAULT_PORT: u16 = 8080;
+const MAX_SEARCH_VERSION_ID_CHARS: usize = 128;
+const HIGH_SEARCH_PRF_PREFIX: &str = "prf384-v1:";
+const HIGH_SEARCH_HKDF_PREFIX: &str = "hkdf384-v1:";
 
 // MongoDB database names on Unix/Linux must not contain NUL, space, double quote,
 // dollar sign, dot, forward slash, or backslash.
@@ -37,6 +40,19 @@ pub enum SearchBackend {
     Manticore,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HighSearchConfig {
+    Disabled,
+    AwsKms {
+        key_arn: String,
+        region: String,
+        provider_seed_version: String,
+        cache_ttl_seconds: u64,
+        cache_max_entries: usize,
+        cache_sweep_seconds: u64,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub authoritative_backend: AuthoritativeBackend,
@@ -45,6 +61,7 @@ pub struct AppConfig {
     pub redis_uri: String,
     pub search_backend: SearchBackend,
     pub search_uri: String,
+    pub high_search: HighSearchConfig,
     pub port: u16,
     pub auth: AuthConfig,
 }
@@ -61,6 +78,14 @@ pub enum ConfigError {
     InvalidMongoDatabase(String),
     #[error("SEARCH_BACKEND must be `elasticsearch` or `manticore`, got `{0}`")]
     InvalidSearchBackend(String),
+    #[error("HIGH_SEARCH_MODE must be `disabled` or `aws-kms`, got `{0}`")]
+    InvalidHighSearchMode(String),
+    #[error("HIGH_SEARCH_MODE=aws-kms requires SEARCH_BACKEND=manticore")]
+    HighSearchRequiresManticore,
+    #[error("{0} is required when HIGH_SEARCH_MODE=aws-kms")]
+    MissingHighSearchSetting(&'static str),
+    #[error("{0} is invalid for HIGH_SEARCH_MODE=aws-kms: `{1}`")]
+    InvalidHighSearchSetting(&'static str, String),
     #[error("AUTH_MODE is required; use `development` or `jwt`")]
     MissingAuthMode,
     #[error("AUTH_MODE must be `development` or `jwt`, got `{0}`")]
@@ -136,6 +161,8 @@ impl AppConfig {
                 .unwrap_or_else(|| DEFAULT_MANTICORE_URI.to_string()),
         };
 
+        let high_search = parse_high_search_config(&vars, search_backend)?;
+
         let port = match vars.get("PORT") {
             Some(value) => value
                 .parse::<u16>()
@@ -165,10 +192,153 @@ impl AppConfig {
             redis_uri,
             search_backend,
             search_uri,
+            high_search,
             port,
             auth,
         })
     }
+}
+
+fn parse_high_search_config(
+    vars: &HashMap<String, String>,
+    search_backend: SearchBackend,
+) -> Result<HighSearchConfig, ConfigError> {
+    let mode = vars
+        .get("HIGH_SEARCH_MODE")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "disabled".to_string());
+
+    match mode.as_str() {
+        "disabled" => Ok(HighSearchConfig::Disabled),
+        "aws-kms" => {
+            if search_backend != SearchBackend::Manticore {
+                return Err(ConfigError::HighSearchRequiresManticore);
+            }
+
+            let key_arn = required_high_search_setting(vars, "HIGH_SEARCH_AWS_KMS_KEY_ARN")?;
+            let region = required_high_search_setting(vars, "HIGH_SEARCH_AWS_REGION")?;
+            validate_aws_region(&region)?;
+            validate_high_search_kms_key_arn(&key_arn, &region)?;
+
+            let provider_seed_version =
+                required_high_search_setting(vars, "HIGH_SEARCH_SEED_VERSION")?;
+            validate_provider_seed_version(&provider_seed_version)?;
+
+            let cache_ttl_seconds = parse_positive_high_search_setting::<u64>(
+                vars,
+                "HIGH_SEARCH_KEY_CACHE_TTL_SECONDS",
+            )?;
+            let cache_max_entries = parse_positive_high_search_setting::<usize>(
+                vars,
+                "HIGH_SEARCH_KEY_CACHE_MAX_ENTRIES",
+            )?;
+            let cache_sweep_seconds = parse_positive_high_search_setting::<u64>(
+                vars,
+                "HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS",
+            )?;
+
+            Ok(HighSearchConfig::AwsKms {
+                key_arn,
+                region,
+                provider_seed_version,
+                cache_ttl_seconds,
+                cache_max_entries,
+                cache_sweep_seconds,
+            })
+        }
+        _ => Err(ConfigError::InvalidHighSearchMode(mode)),
+    }
+}
+
+fn required_high_search_setting(
+    vars: &HashMap<String, String>,
+    name: &'static str,
+) -> Result<String, ConfigError> {
+    vars.get(name)
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .ok_or(ConfigError::MissingHighSearchSetting(name))
+}
+
+fn parse_positive_high_search_setting<T>(
+    vars: &HashMap<String, String>,
+    name: &'static str,
+) -> Result<T, ConfigError>
+where
+    T: std::str::FromStr + PartialEq + Default,
+{
+    let raw = required_high_search_setting(vars, name)?;
+    let parsed = raw
+        .parse::<T>()
+        .map_err(|_| ConfigError::InvalidHighSearchSetting(name, raw.clone()))?;
+    if parsed == T::default() {
+        return Err(ConfigError::InvalidHighSearchSetting(name, raw));
+    }
+    Ok(parsed)
+}
+
+fn validate_provider_seed_version(value: &str) -> Result<(), ConfigError> {
+    let final_len = HIGH_SEARCH_HKDF_PREFIX.len() + HIGH_SEARCH_PRF_PREFIX.len() + value.len();
+    let valid_chars = value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'));
+
+    if value.is_empty() || !valid_chars || final_len > MAX_SEARCH_VERSION_ID_CHARS {
+        return Err(ConfigError::InvalidHighSearchSetting(
+            "HIGH_SEARCH_SEED_VERSION",
+            value.to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_aws_region(region: &str) -> Result<(), ConfigError> {
+    let valid = !region.is_empty()
+        && region.trim() == region
+        && region
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !region.starts_with('-')
+        && !region.ends_with('-');
+
+    if !valid {
+        return Err(ConfigError::InvalidHighSearchSetting(
+            "HIGH_SEARCH_AWS_REGION",
+            region.to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_high_search_kms_key_arn(
+    key_arn: &str,
+    expected_region: &str,
+) -> Result<(), ConfigError> {
+    let parts: Vec<&str> = key_arn.splitn(6, ':').collect();
+    let valid = parts.len() == 6
+        && parts[0] == "arn"
+        && !parts[1].is_empty()
+        && parts[2] == "kms"
+        && parts[3] == expected_region
+        && !parts[4].is_empty()
+        && parts[5].starts_with("key/")
+        && !parts[5].starts_with("alias/")
+        && parts[5].strip_prefix("key/").is_some_and(|resource| {
+            !resource.is_empty()
+                && !resource.contains('/')
+                && !resource.chars().any(char::is_whitespace)
+        });
+
+    if !valid {
+        return Err(ConfigError::InvalidHighSearchSetting(
+            "HIGH_SEARCH_AWS_KMS_KEY_ARN",
+            key_arn.to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_mongodb_database_name(name: &str) -> Result<(), ConfigError> {
