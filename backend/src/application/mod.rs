@@ -6,5 +6,6 @@ pub mod crypto_search;
 pub mod crypto_search_orchestration;
 pub mod crypto_search_projection;
 pub mod crypto_search_reindex;
+pub mod crypto_search_rotation;
 pub mod health;
 pub mod memo;
