@@ -133,6 +133,22 @@ Disabled configuration returns no stack and does not require provider dependenci
 
 The stack also exposes explicit cache sweep, owner invalidation, and global clear operations so later startup/rotation wiring does not need to reach through cryptographic internals.
 
+## Rotation / reindex protocol
+
+Key-generation rotation is staged behind an application-owned orchestration service. The protocol requires a concrete `HighSearchOfflineWindowGuard` backed by an enforced maintenance/write-freeze mechanism; a boolean operator assertion is intentionally insufficient. The guard must acquire a live `HighSearchOfflineWindowPermit` whose lifetime keeps that exclusion active.
+
+The sequence is:
+
+1. validate the reindex page size before touching key state,
+2. acquire the offline-window permit,
+3. keep the permit alive while clearing the derived-key cache and running the bounded reindex + convergence verification,
+4. revalidate the permit's backing lease after reindex,
+5. return a must-use `HighSearchRotationReady` value that still owns the permit,
+6. let the caller perform its cutover while that value remains alive,
+7. call `finish_after_cutover` to revalidate the lease once more and release the permit, or `abort` to clear target-generation cached keys before releasing it.
+
+If reindex or the pre-cutover permit check fails, the derived-key cache is cleared again while the permit is still held and the operation remains failed. If cleanup also fails, the result is promoted to service-unavailable with both failures recorded in the error text. The protocol does not itself change provider configuration or switch request routing; those remain caller/operator responsibilities, but the permit now spans that caller-owned cutover window instead of being dropped immediately after reindex.
+
 ## Runtime boundary
 
 This code remains staged and runtime-unreachable.
