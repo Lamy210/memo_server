@@ -214,8 +214,9 @@ fn accepts_complete_high_search_aws_kms_configuration() {
 #[cfg(not(feature = "aws-kms-search"))]
 #[test]
 fn high_search_aws_kms_rejects_binary_without_aws_kms_feature() {
-    let error = AppConfig::from_vars(high_search_aws_vars())
-        .expect_err("AWS KMS HIGH search must fail closed when the binary lacks its provider feature");
+    let error = AppConfig::from_vars(high_search_aws_vars()).expect_err(
+        "AWS KMS HIGH search must fail closed when the binary lacks its provider feature",
+    );
 
     assert_eq!(error, ConfigError::HighSearchBuildFeatureUnavailable);
 }
