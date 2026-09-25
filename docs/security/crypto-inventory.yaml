@@ -169,6 +169,8 @@ assets:
       runtime_composition:
         stack_factory: staged
         managed_prf_client_injection: required_when_enabled
+        managed_prf_client_binding: provider_and_immutable_key_reference
+        config_client_key_identity_match: fail_closed
         analyzer: icu4x_dictionary
         owner_key_derivation: hkdf_sha384
         derived_key_cache: bounded
