@@ -83,7 +83,9 @@ pub enum ConfigError {
     InvalidHighSearchMode(String),
     #[error("HIGH_SEARCH_MODE=aws-kms requires SEARCH_BACKEND=manticore")]
     HighSearchRequiresManticore,
-    #[error("HIGH_SEARCH_MODE=aws-kms requires the binary to be built with feature `aws-kms-search`")]
+    #[error(
+        "HIGH_SEARCH_MODE=aws-kms requires the binary to be built with feature `aws-kms-search`"
+    )]
     HighSearchBuildFeatureUnavailable,
     #[error("{0} is required when HIGH_SEARCH_MODE=aws-kms")]
     MissingHighSearchSetting(&'static str),
