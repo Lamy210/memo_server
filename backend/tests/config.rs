@@ -173,6 +173,18 @@ fn high_search_aws_vars() -> Vec<(String, String)> {
             "HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS".to_string(),
             "30".to_string(),
         ),
+        (
+            "HIGH_SEARCH_MAX_DOCUMENT_CONTENT_TERMS".to_string(),
+            "2048".to_string(),
+        ),
+        (
+            "HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS".to_string(),
+            "64".to_string(),
+        ),
+        (
+            "HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES".to_string(),
+            "256".to_string(),
+        ),
     ]
 }
 
@@ -207,6 +219,9 @@ fn accepts_complete_high_search_aws_kms_configuration() {
             cache_ttl_seconds: 60,
             cache_max_entries: 512,
             cache_sweep_seconds: 30,
+            max_document_content_terms: 2048,
+            max_query_content_terms: 64,
+            max_normalized_term_bytes: 256,
         }
     );
 }
@@ -255,6 +270,9 @@ fn high_search_aws_kms_requires_every_security_setting() {
         "HIGH_SEARCH_KEY_CACHE_TTL_SECONDS",
         "HIGH_SEARCH_KEY_CACHE_MAX_ENTRIES",
         "HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS",
+        "HIGH_SEARCH_MAX_DOCUMENT_CONTENT_TERMS",
+        "HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS",
+        "HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES",
     ] {
         let mut vars = high_search_aws_vars();
         vars.retain(|(name, _)| name != missing);
@@ -334,6 +352,9 @@ fn high_search_aws_kms_requires_positive_cache_bounds() {
         ("HIGH_SEARCH_KEY_CACHE_MAX_ENTRIES", "0"),
         ("HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS", "0"),
         ("HIGH_SEARCH_KEY_CACHE_TTL_SECONDS", "not-a-number"),
+        ("HIGH_SEARCH_MAX_DOCUMENT_CONTENT_TERMS", "0"),
+        ("HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS", "0"),
+        ("HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES", "0"),
     ] {
         let mut vars = high_search_aws_vars();
         vars.iter_mut().find(|(key, _)| key == name).unwrap().1 = value.to_string();
