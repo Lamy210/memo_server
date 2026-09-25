@@ -92,9 +92,12 @@ When `aws-kms` is selected, configuration parsing requires all of the following 
 - `HIGH_SEARCH_SEED_VERSION`, constrained so the final `hkdf384-v1:prf384-v1:<provider-seed-version>` identifier remains within the persisted version bound,
 - positive `HIGH_SEARCH_KEY_CACHE_TTL_SECONDS`,
 - positive `HIGH_SEARCH_KEY_CACHE_MAX_ENTRIES`,
-- positive `HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS`.
+- positive `HIGH_SEARCH_KEY_CACHE_SWEEP_SECONDS`,
+- positive `HIGH_SEARCH_MAX_DOCUMENT_CONTENT_TERMS`,
+- positive `HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS`,
+- positive `HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES`.
 
-There are deliberately no production defaults for key-cache TTL, capacity, or sweep cadence. These values remain an explicit deployment/security decision. A fully valid AWS KMS configuration is still rejected when the running binary lacks the `aws-kms-search` build feature, preventing configuration from claiming a capability that was compiled out. This configuration contract does not itself wire HIGH search into request handling.
+There are deliberately no production defaults for key-cache TTL, capacity, sweep cadence, or analysis work budgets. These values remain an explicit deployment/security decision. A fully valid AWS KMS configuration is still rejected when the running binary lacks the `aws-kms-search` build feature, preventing configuration from claiming a capability that was compiled out. This configuration contract does not itself wire HIGH search into request handling.
 
 ## Runtime boundary
 
