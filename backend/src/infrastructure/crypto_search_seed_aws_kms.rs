@@ -10,6 +10,7 @@ use crate::error::{AppError, AppResult};
 use super::crypto_search_seed_provider::ManagedSearchSeedPrfClient;
 
 const MAX_KMS_KEY_ARN_BYTES: usize = 2048;
+const HMAC_SHA384_BYTES: usize = 48;
 
 pub(super) struct AwsKmsSearchSeedPrfClient {
     client: Client,
@@ -67,6 +68,12 @@ impl ManagedSearchSeedPrfClient for AwsKmsSearchSeedPrfClient {
                 "AWS KMS HIGH search PRF response omitted MAC bytes".into(),
             )
         })?;
+        if mac.as_ref().len() != HMAC_SHA384_BYTES {
+            return Err(AppError::ServiceUnavailable(format!(
+                "AWS KMS HIGH search PRF returned {} MAC bytes; expected {HMAC_SHA384_BYTES}",
+                mac.as_ref().len()
+            )));
+        }
 
         Ok(Zeroizing::new(mac.as_ref().to_vec()))
     }
