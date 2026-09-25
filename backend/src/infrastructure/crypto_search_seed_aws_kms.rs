@@ -240,7 +240,9 @@ mod tests {
     fn rejects_mismatched_or_unusable_kms_key_metadata() {
         assert!(validate_kms_search_key_metadata(
             KEY_ARN,
-            Some("arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            Some(
+                "arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            ),
             true,
             Some("HMAC_384"),
             Some("GENERATE_VERIFY_MAC"),
