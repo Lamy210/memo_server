@@ -2,11 +2,13 @@
 
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    application::crypto_search_orchestration::{
-        HighSearchAnalysisBudget, HighSearchProjectionService,
+    application::{
+        crypto_search_orchestration::{HighSearchAnalysisBudget, HighSearchProjectionService},
+        crypto_search_rotation::HighSearchKeyCacheControl,
     },
     config::HighSearchConfig,
     error::{AppError, AppResult},
@@ -128,6 +130,14 @@ impl HighSearchRuntimeStack {
 
     pub(crate) async fn clear_cached_keys(&self) {
         self.key_cache.clear().await;
+    }
+}
+
+#[async_trait]
+impl HighSearchKeyCacheControl for HighSearchRuntimeStack {
+    async fn clear_cached_keys(&self) -> AppResult<()> {
+        self.key_cache.clear().await;
+        Ok(())
     }
 }
 
