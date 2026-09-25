@@ -171,8 +171,7 @@ impl AppConfig {
                 .unwrap_or_else(|| DEFAULT_MANTICORE_URI.to_string()),
         };
 
-        let high_search =
-            parse_high_search_config(&vars, authoritative_backend, search_backend)?;
+        let high_search = parse_high_search_config(&vars, authoritative_backend, search_backend)?;
 
         let port = match vars.get("PORT") {
             Some(value) => value
