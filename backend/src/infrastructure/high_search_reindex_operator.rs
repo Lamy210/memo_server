@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::{
     application::{
         crypto_migration_batch::validate_page_size,
-        crypto_search_reindex::{HighSearchReindexService, HighSearchReindexStats},
+        crypto_search_projection::HighSearchProjectionMigrationAdmin,
+        crypto_search_reindex::{
+            HighSearchReindexRunner, HighSearchReindexService, HighSearchReindexStats,
+        },
         crypto_search_rotation::{
             HighSearchKeyCacheControl, HighSearchOfflineWindowGuard, HighSearchRotationService,
         },
@@ -17,6 +20,33 @@ use super::{
     high_search_maintenance_mongodb::MongoHighSearchMaintenanceGuard,
     persistence::{manticore_high::HighManticoreClient, mongodb::MongoDbAuthoritativeStore},
 };
+
+struct ResettingHighSearchReindexRunner {
+    admin: Arc<dyn HighSearchProjectionMigrationAdmin>,
+    inner: Arc<dyn HighSearchReindexRunner>,
+}
+
+impl ResettingHighSearchReindexRunner {
+    fn new(
+        admin: Arc<dyn HighSearchProjectionMigrationAdmin>,
+        inner: Arc<dyn HighSearchReindexRunner>,
+    ) -> Self {
+        Self { admin, inner }
+    }
+}
+
+#[async_trait::async_trait]
+impl HighSearchReindexRunner for ResettingHighSearchReindexRunner {
+    async fn reindex_all(&self, page_size: usize) -> AppResult<HighSearchReindexStats> {
+        // This runner is used only while protected request routing is confirmed
+        // inactive and the rotation service already holds the MongoDB offline
+        // permit. Resetting first guarantees repeated staged rebuilds can
+        // converge after authoritative deletes instead of preserving stale
+        // protected rows.
+        self.admin.reset_projection().await?;
+        self.inner.reindex_all(page_size).await
+    }
+}
 
 /// Run the staged SEARCH-HIGH-1 protected-projection reindex and convergence
 /// verification without installing the protected search request path.
@@ -69,11 +99,14 @@ pub async fn run_staged_high_search_reindex(
     let guard: Arc<dyn HighSearchOfflineWindowGuard> =
         Arc::new(MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?);
     let inspector = Arc::new(HighManticoreClient::new(&config.search_uri)?);
+    let projection_admin: Arc<dyn HighSearchProjectionMigrationAdmin> = inspector.clone();
 
-    let reindex = Arc::new(HighSearchReindexService::new(
-        source,
-        stack.projection_service(),
-        inspector,
+    let inner_reindex: Arc<dyn HighSearchReindexRunner> = Arc::new(
+        HighSearchReindexService::new(source, stack.projection_service(), inspector),
+    );
+    let reindex = Arc::new(ResettingHighSearchReindexRunner::new(
+        projection_admin,
+        inner_reindex,
     ));
     let cache: Arc<dyn HighSearchKeyCacheControl> = stack;
     let rotation = HighSearchRotationService::new(guard, cache, reindex);
@@ -111,6 +144,69 @@ mod tests {
             validate_staged_high_search_reindex(&disabled_config(), 100),
             Err(AppError::ServiceUnavailable(_))
         ));
+    }
+
+    struct FakeAdmin {
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl HighSearchProjectionMigrationAdmin for FakeAdmin {
+        async fn reset_projection(&self) -> AppResult<()> {
+            self.events.lock().unwrap().push("reset");
+            if self.fail {
+                Err(AppError::Conflict("reset failed".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct FakeRunner {
+        events: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl HighSearchReindexRunner for FakeRunner {
+        async fn reindex_all(&self, _page_size: usize) -> AppResult<HighSearchReindexStats> {
+            self.events.lock().unwrap().push("reindex");
+            Ok(HighSearchReindexStats::default())
+        }
+    }
+
+    #[tokio::test]
+    async fn staged_runner_resets_projection_before_reindex() {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runner = ResettingHighSearchReindexRunner::new(
+            Arc::new(FakeAdmin {
+                events: events.clone(),
+                fail: false,
+            }),
+            Arc::new(FakeRunner {
+                events: events.clone(),
+            }),
+        );
+
+        runner.reindex_all(100).await.unwrap();
+        assert_eq!(*events.lock().unwrap(), vec!["reset", "reindex"]);
+    }
+
+    #[tokio::test]
+    async fn staged_runner_does_not_reindex_when_reset_fails() {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runner = ResettingHighSearchReindexRunner::new(
+            Arc::new(FakeAdmin {
+                events: events.clone(),
+                fail: true,
+            }),
+            Arc::new(FakeRunner {
+                events: events.clone(),
+            }),
+        );
+
+        assert!(runner.reindex_all(100).await.is_err());
+        assert_eq!(*events.lock().unwrap(), vec!["reset"]);
     }
 
     #[test]
