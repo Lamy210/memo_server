@@ -242,10 +242,7 @@ fn high_search_shadow_requires_enabled_high_search() {
 #[test]
 fn high_search_shadow_requires_explicit_positive_bounds() {
     let mut vars = high_search_aws_vars();
-    vars.push((
-        "HIGH_SEARCH_SHADOW_MODE".to_string(),
-        "observe".to_string(),
-    ));
+    vars.push(("HIGH_SEARCH_SHADOW_MODE".to_string(), "observe".to_string()));
 
     let error = AppConfig::from_vars(vars.clone())
         .expect_err("shadow observation requires explicit bounded concurrency");
@@ -269,8 +266,8 @@ fn high_search_shadow_requires_explicit_positive_bounds() {
         "HIGH_SEARCH_SHADOW_TIMEOUT_MS".to_string(),
         "250".to_string(),
     ));
-    let config = AppConfig::from_vars(vars)
-        .expect("complete HIGH search shadow bounds should be accepted");
+    let config =
+        AppConfig::from_vars(vars).expect("complete HIGH search shadow bounds should be accepted");
 
     assert_eq!(
         config.high_search_shadow,
@@ -290,10 +287,7 @@ fn high_search_shadow_rejects_excessive_resource_bounds() {
     ] {
         let mut vars = high_search_aws_vars();
         vars.extend([
-            (
-                "HIGH_SEARCH_SHADOW_MODE".to_string(),
-                "observe".to_string(),
-            ),
+            ("HIGH_SEARCH_SHADOW_MODE".to_string(), "observe".to_string()),
             (
                 "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY".to_string(),
                 "4".to_string(),
