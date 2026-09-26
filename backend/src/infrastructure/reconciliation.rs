@@ -11,6 +11,10 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        crypto_search_orchestration::HighSearchProjectionSink,
+        maintenance::{MemoMutationGuard, MemoMutationPermit},
+    },
     error::{AppError, AppResult},
     infrastructure::persistence::ports::{
         MemoAuthoritativeStore, MemoCache, MemoSearchProjection, ProjectionIntent, ProjectionTarget,
@@ -67,6 +71,8 @@ pub struct ProjectionReconciler {
     authoritative_store: Arc<dyn MemoAuthoritativeStore>,
     cache: Arc<dyn MemoCache>,
     search_projection: Arc<dyn MemoSearchProjection>,
+    high_search_projection: Option<Arc<dyn HighSearchProjectionSink>>,
+    mutation_guard: Arc<dyn MemoMutationGuard>,
     retry_states: Mutex<HashMap<Uuid, RetryState>>,
     counters: ReconciliationCounters,
 }
@@ -76,11 +82,15 @@ impl ProjectionReconciler {
         authoritative_store: Arc<dyn MemoAuthoritativeStore>,
         cache: Arc<dyn MemoCache>,
         search_projection: Arc<dyn MemoSearchProjection>,
+        high_search_projection: Option<Arc<dyn HighSearchProjectionSink>>,
+        mutation_guard: Arc<dyn MemoMutationGuard>,
     ) -> Self {
         Self {
             authoritative_store,
             cache,
             search_projection,
+            high_search_projection,
+            mutation_guard,
             retry_states: Mutex::new(HashMap::new()),
             counters: ReconciliationCounters::default(),
         }
@@ -179,13 +189,40 @@ impl ProjectionReconciler {
             return Ok(ReconcileOutcome::WaitingForTarget);
         }
 
+        // Background reconciliation participates in the same distributed
+        // maintenance barrier as foreground memo mutations. This prevents an
+        // outbox retry from mutating either search projection while a staged
+        // HIGH reindex/reset owns the offline window.
+        let permit = self.mutation_guard.acquire_mutation().await?;
+        let result = self.reconcile_secondary_state(event, memo.as_ref()).await;
+        Self::finish_guarded_reconciliation(result, permit).await?;
+
+        // Ack only after the secondary work and lease release both succeed.
+        // A release failure therefore leaves the durable intent available for
+        // an idempotent retry instead of silently losing reconciliation work.
+        self.authoritative_store
+            .acknowledge_projection_intent(event)
+            .await?;
+        Ok(ReconcileOutcome::Completed)
+    }
+
+    async fn reconcile_secondary_state(
+        &self,
+        event: &ProjectionIntent,
+        memo: Option<&crate::domain::memo::entity::Memo>,
+    ) -> AppResult<()> {
         let mut failures = Vec::new();
         let cache_key = cache_key(event.user_id, event.memo_id);
 
-        match memo.as_ref() {
+        match memo {
             Some(memo) => {
                 if let Err(error) = self.search_projection.index_memo(memo).await {
                     failures.push(format!("search_projection={error}"));
+                }
+                if let Some(high_search_projection) = self.high_search_projection.as_ref() {
+                    if let Err(error) = high_search_projection.replace_memo(memo).await {
+                        failures.push(format!("high_search_projection={error}"));
+                    }
                 }
                 if let Err(error) = self.cache.set_memo(&cache_key, memo, Some(CACHE_TTL)).await {
                     failures.push(format!("cache={error}"));
@@ -194,6 +231,14 @@ impl ProjectionReconciler {
             None => {
                 if let Err(error) = self.search_projection.delete_memo(event.memo_id).await {
                     failures.push(format!("search_projection={error}"));
+                }
+                if let Some(high_search_projection) = self.high_search_projection.as_ref() {
+                    if let Err(error) = high_search_projection
+                        .delete_memo(event.user_id, event.memo_id)
+                        .await
+                    {
+                        failures.push(format!("high_search_projection={error}"));
+                    }
                 }
                 if let Err(error) = self.cache.delete(&cache_key).await {
                     failures.push(format!("cache={error}"));
@@ -209,7 +254,7 @@ impl ProjectionReconciler {
             .authoritative_store
             .find_by_id(event.user_id, event.memo_id)
             .await?;
-        if projection_state(memo.as_ref()) != projection_state(current.as_ref()) {
+        if projection_state(memo) != projection_state(current.as_ref()) {
             let target = current
                 .as_ref()
                 .map(|memo| ProjectionTarget::Version(memo.version))
@@ -219,10 +264,21 @@ impl ProjectionReconciler {
                 .await?;
         }
 
-        self.authoritative_store
-            .acknowledge_projection_intent(event)
-            .await?;
-        Ok(ReconcileOutcome::Completed)
+        Ok(())
+    }
+
+    async fn finish_guarded_reconciliation(
+        result: AppResult<()>,
+        permit: Box<dyn MemoMutationPermit>,
+    ) -> AppResult<()> {
+        match (result, permit.release().await) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(primary), Ok(())) => Err(primary),
+            (Ok(()), Err(release)) => Err(release),
+            (Err(primary), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+                "projection reconciliation failed and maintenance writer lease release also failed; primary={primary}; release={release}"
+            ))),
+        }
     }
 
     pub fn stats(&self) -> ProjectionReconciliationStats {
