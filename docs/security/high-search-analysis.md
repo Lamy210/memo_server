@@ -148,7 +148,11 @@ The final production reindex still requires the authoritative source to be write
 
 ## Runtime status
 
-Protected HIGH search is still not wired into normal query request routing.
+Protected HIGH search is still not wired into normal query request routing. User-visible search results continue to come exclusively from the legacy search path.
+
+An explicit `HIGH_SEARCH_SHADOW_MODE=observe` mode can now schedule the protected query path as a bounded best-effort background observation after the legacy result is already available. Shadow work has an explicitly configured concurrency limit and timeout; capacity exhaustion drops the observation instead of queueing unbounded work or backpressuring the user request. Query/tag plaintext, owner identifiers, and result IDs are not logged. Only aggregate counters are retained/logged periodically.
+
+The current shadow comparison checks aggregate result totals only. It is **not** a parity or cutover gate: the legacy Manticore query currently uses OR semantics across title/content and sorts by `updated_at desc`, while the protected query uses analyzer-generated blind terms with AND semantics and a deterministic opaque sort key. Representative-corpus validation must define the accepted semantics before any result-equivalence threshold is treated as meaningful.
 
 When HIGH search is enabled, the existing durable projection outbox now mirrors authoritative create/update/delete state into `memos_high_v1` as a secondary projection. The same reconciler continues to maintain the legacy plaintext search projection and cache, and it acquires the shared MongoDB maintenance writer lease before any secondary mutation. An error in the HIGH mirror or in lease release leaves the outbox intent unacknowledged for retry.
 
