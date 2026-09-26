@@ -26,15 +26,13 @@ use super::{
 /// MongoDB maintenance barrier. The current protected request path must remain
 /// inactive for the whole operation; therefore the rotation "cutover" is a
 /// deliberate no-op and only releases the verified maintenance permit.
-pub async fn run_staged_high_search_reindex(
+pub fn validate_staged_high_search_reindex(
     config: &AppConfig,
     page_size: usize,
-) -> AppResult<HighSearchReindexStats> {
-    // Reject invalid operator input and impossible staged topologies before any
-    // provider or database network I/O.
+) -> AppResult<()> {
     validate_page_size(page_size)?;
 
-    if !matches!(config.high_search, HighSearchConfig::AwsKms { .. }) {
+    if !matches!(&config.high_search, HighSearchConfig::AwsKms { .. }) {
         return Err(AppError::ServiceUnavailable(
             "staged HIGH search reindex requires HIGH_SEARCH_MODE=aws-kms".into(),
         ));
@@ -49,6 +47,17 @@ pub async fn run_staged_high_search_reindex(
             "staged HIGH search reindex requires Manticore Search".into(),
         ));
     }
+
+    Ok(())
+}
+
+pub async fn run_staged_high_search_reindex(
+    config: &AppConfig,
+    page_size: usize,
+) -> AppResult<HighSearchReindexStats> {
+    // Reject invalid operator input and impossible staged topologies before any
+    // provider or database network I/O.
+    validate_staged_high_search_reindex(config, page_size)?;
 
     let runtime = HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri).await?;
     let stack = runtime.stack().ok_or_else(|| {
@@ -100,18 +109,18 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn disabled_high_search_fails_before_network_access() {
+    #[test]
+    fn disabled_high_search_fails_static_validation() {
         assert!(matches!(
-            run_staged_high_search_reindex(&disabled_config(), 100).await,
+            validate_staged_high_search_reindex(&disabled_config(), 100),
             Err(AppError::ServiceUnavailable(_))
         ));
     }
 
-    #[tokio::test]
-    async fn invalid_page_size_fails_before_runtime_or_network_access() {
+    #[test]
+    fn invalid_page_size_fails_before_runtime_or_network_access() {
         assert!(matches!(
-            run_staged_high_search_reindex(&disabled_config(), 0).await,
+            validate_staged_high_search_reindex(&disabled_config(), 0),
             Err(AppError::ValidationError(_))
         ));
     }
