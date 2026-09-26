@@ -239,9 +239,9 @@ mod tests {
                 updated_at: Utc.timestamp_millis_opt(1_700_000_001_000).unwrap(),
                 version: 1,
             };
-            let analyzed = analyzer
-                .analyze_document(&memo)
-                .unwrap_or_else(|error| panic!("representative document {} failed: {error}", document.id));
+            let analyzed = analyzer.analyze_document(&memo).unwrap_or_else(|error| {
+                panic!("representative document {} failed: {error}", document.id)
+            });
 
             assert_eq!(analyzed.analysis_version, corpus.analysis_version);
             document_content_term_counts.push(analyzed.content_terms.len());
@@ -260,7 +260,9 @@ mod tests {
         for query in &corpus.queries {
             let analyzed = analyzer
                 .analyze_query(&query.query, query.tag.as_deref())
-                .unwrap_or_else(|error| panic!("representative query {} failed: {error}", query.name));
+                .unwrap_or_else(|error| {
+                    panic!("representative query {} failed: {error}", query.name)
+                });
 
             assert_eq!(analyzed.analysis_version, corpus.analysis_version);
             query_content_term_counts.push(analyzed.content_terms.len());
@@ -281,10 +283,9 @@ mod tests {
                         .content_terms
                         .iter()
                         .all(|term| document.content_terms.binary_search(term).is_ok());
-                    let tag_matches = analyzed
-                        .tag_term
-                        .as_ref()
-                        .is_none_or(|tag| document.tag_terms.iter().any(|candidate| candidate == tag));
+                    let tag_matches = analyzed.tag_term.as_ref().is_none_or(|tag| {
+                        document.tag_terms.iter().any(|candidate| candidate == tag)
+                    });
                     (content_matches && tag_matches).then_some((*document_id).to_string())
                 })
                 .collect::<Vec<_>>();
