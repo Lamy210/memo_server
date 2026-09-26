@@ -8,8 +8,8 @@ use crate::{
     application::{
         crypto_search_projection::{
             HighMemoSearchProjection, HighSearchProjectionDocument, HighSearchProjectionMetadata,
-            HighSearchProjectionMigrationInspector, HighSearchProjectionPage,
-            HighSearchProjectionQuery,
+            HighSearchProjectionMigrationAdmin, HighSearchProjectionMigrationInspector,
+            HighSearchProjectionPage, HighSearchProjectionQuery,
         },
         health::HealthProbe,
     },
@@ -413,6 +413,18 @@ impl HighMemoSearchProjection for HighManticoreClient {
 }
 
 #[async_trait]
+impl HighSearchProjectionMigrationAdmin for HighManticoreClient {
+    async fn reset_projection(&self) -> AppResult<()> {
+        self.execute_raw_sql(
+            "DROP TABLE IF EXISTS memos_high_v1",
+            "protected projection reset",
+        )
+        .await?;
+        self.initialize_table().await
+    }
+}
+
+#[async_trait]
 impl HighSearchProjectionMigrationInspector for HighManticoreClient {
     async fn contains_metadata(&self, metadata: &HighSearchProjectionMetadata) -> AppResult<bool> {
         self.contains_metadata_inner(metadata).await
@@ -490,6 +502,13 @@ mod tests {
         let mut wrong_version = metadata.clone();
         wrong_version.version += 1;
         assert!(!client.contains_metadata(&wrong_version).await.unwrap());
+
+        // A staged full rebuild must be able to remove projection rows that no
+        // longer exist in the authoritative source before reindexing.
+        client.reset_projection().await.unwrap();
+        assert_eq!(client.count_documents().await.unwrap(), 0);
+        client.replace_document(&document).await.unwrap();
+        assert!(client.contains_metadata(&metadata).await.unwrap());
 
         let query = HighSearchProjectionQuery {
             content_tokens: vec![blind_content],
