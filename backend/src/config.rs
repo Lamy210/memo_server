@@ -323,10 +323,8 @@ fn parse_high_search_shadow_config(
                 vars,
                 "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY",
             )?;
-            let timeout_ms = parse_positive_high_search_setting::<u64>(
-                vars,
-                "HIGH_SEARCH_SHADOW_TIMEOUT_MS",
-            )?;
+            let timeout_ms =
+                parse_positive_high_search_setting::<u64>(vars, "HIGH_SEARCH_SHADOW_TIMEOUT_MS")?;
 
             if max_concurrency > MAX_HIGH_SEARCH_SHADOW_CONCURRENCY {
                 return Err(ConfigError::InvalidHighSearchSetting(
