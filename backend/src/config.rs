@@ -57,6 +57,15 @@ pub enum HighSearchConfig {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighSearchShadowConfig {
+    Disabled,
+    Observe {
+        max_concurrency: usize,
+        timeout_ms: u64,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub authoritative_backend: AuthoritativeBackend,
@@ -66,6 +75,7 @@ pub struct AppConfig {
     pub search_backend: SearchBackend,
     pub search_uri: String,
     pub high_search: HighSearchConfig,
+    pub high_search_shadow: HighSearchShadowConfig,
     pub port: u16,
     pub auth: AuthConfig,
 }
@@ -84,6 +94,10 @@ pub enum ConfigError {
     InvalidSearchBackend(String),
     #[error("HIGH_SEARCH_MODE must be `disabled` or `aws-kms`, got `{0}`")]
     InvalidHighSearchMode(String),
+    #[error("HIGH_SEARCH_SHADOW_MODE must be `disabled` or `observe`, got `{0}`")]
+    InvalidHighSearchShadowMode(String),
+    #[error("HIGH_SEARCH_SHADOW_MODE=observe requires HIGH_SEARCH_MODE=aws-kms")]
+    HighSearchShadowRequiresHighSearch,
     #[error("HIGH_SEARCH_MODE=aws-kms requires AUTHORITATIVE_BACKEND=mongodb")]
     HighSearchRequiresMongoDb,
     #[error("HIGH_SEARCH_MODE=aws-kms requires SEARCH_BACKEND=manticore")]
@@ -172,6 +186,7 @@ impl AppConfig {
         };
 
         let high_search = parse_high_search_config(&vars, authoritative_backend, search_backend)?;
+        let high_search_shadow = parse_high_search_shadow_config(&vars, &high_search)?;
 
         let port = match vars.get("PORT") {
             Some(value) => value
@@ -203,6 +218,7 @@ impl AppConfig {
             search_backend,
             search_uri,
             high_search,
+            high_search_shadow,
             port,
             auth,
         })
@@ -282,6 +298,40 @@ fn parse_high_search_config(
             Ok(config)
         }
         _ => Err(ConfigError::InvalidHighSearchMode(mode)),
+    }
+}
+
+fn parse_high_search_shadow_config(
+    vars: &HashMap<String, String>,
+    high_search: &HighSearchConfig,
+) -> Result<HighSearchShadowConfig, ConfigError> {
+    let mode = vars
+        .get("HIGH_SEARCH_SHADOW_MODE")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "disabled".to_string());
+
+    match mode.as_str() {
+        "disabled" => Ok(HighSearchShadowConfig::Disabled),
+        "observe" => {
+            if !matches!(high_search, HighSearchConfig::AwsKms { .. }) {
+                return Err(ConfigError::HighSearchShadowRequiresHighSearch);
+            }
+
+            let max_concurrency = parse_positive_high_search_setting::<usize>(
+                vars,
+                "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY",
+            )?;
+            let timeout_ms = parse_positive_high_search_setting::<u64>(
+                vars,
+                "HIGH_SEARCH_SHADOW_TIMEOUT_MS",
+            )?;
+
+            Ok(HighSearchShadowConfig::Observe {
+                max_concurrency,
+                timeout_ms,
+            })
+        }
+        _ => Err(ConfigError::InvalidHighSearchShadowMode(mode)),
     }
 }
 
