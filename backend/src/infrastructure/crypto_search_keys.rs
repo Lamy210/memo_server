@@ -248,6 +248,7 @@ impl CachedSearchKey {
 /// wrapped provider. Expiry and eviction drop zeroizing key storage.
 struct SearchKeyCacheState {
     entries: HashMap<Uuid, CachedSearchKey>,
+    resolution_gates: HashMap<Uuid, Arc<Mutex<()>>>,
     epoch: u64,
 }
 
@@ -264,6 +265,7 @@ impl CachingSearchKeyProvider {
             policy,
             state: Mutex::new(SearchKeyCacheState {
                 entries: HashMap::new(),
+                resolution_gates: HashMap::new(),
                 epoch: 0,
             }),
         }
@@ -296,49 +298,100 @@ impl CachingSearchKeyProvider {
         owner_partition: Uuid,
         now: Instant,
     ) -> AppResult<ResolvedSearchKey> {
-        let observed_epoch = {
+        let (observed_epoch, resolution_gate) = {
             let mut state = self.state.lock().await;
             Self::purge_expired(&mut state.entries, now);
             if let Some(cached) = state.entries.get(&owner_partition) {
                 return Ok(cached.to_resolved());
             }
-            state.epoch
+
+            let observed_epoch = state.epoch;
+            let resolution_gate = state
+                .resolution_gates
+                .entry(owner_partition)
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone();
+            (observed_epoch, resolution_gate)
         };
 
-        // Deliberately avoid holding the cache mutex across provider I/O.
-        // Concurrent misses may duplicate an idempotent provider call, but one
-        // slow owner must not serialize key resolution for every other owner.
-        let resolved = self.inner.resolve_search_key(owner_partition).await?;
-        resolved.validate()?;
-        let expires_at = now.checked_add(self.policy.ttl).ok_or_else(|| {
-            AppError::ServiceUnavailable("HIGH search-key cache TTL overflow".into())
-        })?;
+        // Single-flight only the same owner. The global cache-state mutex is
+        // never held across provider I/O, so unrelated owners still resolve in
+        // parallel. Tokio's mutex guard is cancellation-safe: a cancelled
+        // leader releases the owner gate and lets the next waiter continue.
+        let resolution_guard = resolution_gate.lock().await;
 
+        let result = async {
+            let resolution_now = std::cmp::max(now, Instant::now());
+            {
+                let mut state = self.state.lock().await;
+                Self::purge_expired(&mut state.entries, resolution_now);
+
+                // The request began before an invalidate/clear generation
+                // fence. Even if another waiter has since populated a key, a
+                // pre-fence request must fail and retry under the new epoch.
+                if state.epoch != observed_epoch {
+                    return Err(AppError::ServiceUnavailable(
+                        "HIGH search-key cache changed during key resolution; retry".into(),
+                    ));
+                }
+
+                if let Some(cached) = state.entries.get(&owner_partition) {
+                    return Ok(cached.to_resolved());
+                }
+            }
+
+            let resolved = self.inner.resolve_search_key(owner_partition).await?;
+            resolved.validate()?;
+
+            let resolved_at = std::cmp::max(now, Instant::now());
+            let expires_at = resolved_at.checked_add(self.policy.ttl).ok_or_else(|| {
+                AppError::ServiceUnavailable("HIGH search-key cache TTL overflow".into())
+            })?;
+
+            let mut state = self.state.lock().await;
+            Self::purge_expired(&mut state.entries, resolved_at);
+
+            // Rotation/deployment invalidation is a generation fence. Never
+            // return or reinsert key material resolved across an
+            // invalidate/clear event.
+            if state.epoch != observed_epoch {
+                return Err(AppError::ServiceUnavailable(
+                    "HIGH search-key cache changed during key resolution; retry".into(),
+                ));
+            }
+
+            if let Some(cached) = state.entries.get(&owner_partition) {
+                return Ok(cached.to_resolved());
+            }
+
+            if state.entries.len() >= self.policy.max_entries {
+                Self::evict_earliest_expiring(&mut state.entries);
+            }
+            state.entries.insert(
+                owner_partition,
+                CachedSearchKey::from_resolved(&resolved, expires_at),
+            );
+            Ok(resolved)
+        }
+        .await;
+
+        drop(resolution_guard);
+        self.prune_resolution_gate(owner_partition, &resolution_gate)
+            .await;
+        result
+    }
+
+    async fn prune_resolution_gate(&self, owner_partition: Uuid, resolution_gate: &Arc<Mutex<()>>) {
         let mut state = self.state.lock().await;
-        Self::purge_expired(&mut state.entries, now);
-
-        // Rotation/deployment invalidation is a generation fence. Never return
-        // or reinsert key material resolved across an invalidate/clear event.
-        if state.epoch != observed_epoch {
-            return Err(AppError::ServiceUnavailable(
-                "HIGH search-key cache changed during key resolution; retry".into(),
-            ));
+        let should_remove = state
+            .resolution_gates
+            .get(&owner_partition)
+            .is_some_and(|current| {
+                Arc::ptr_eq(current, resolution_gate) && Arc::strong_count(current) == 2
+            });
+        if should_remove {
+            state.resolution_gates.remove(&owner_partition);
         }
-
-        // A concurrent resolver may have populated the same owner while this
-        // call was awaiting the provider. Prefer that established generation.
-        if let Some(cached) = state.entries.get(&owner_partition) {
-            return Ok(cached.to_resolved());
-        }
-
-        if state.entries.len() >= self.policy.max_entries {
-            Self::evict_earliest_expiring(&mut state.entries);
-        }
-        state.entries.insert(
-            owner_partition,
-            CachedSearchKey::from_resolved(&resolved, expires_at),
-        );
-        Ok(resolved)
     }
 
     fn purge_expired(entries: &mut HashMap<Uuid, CachedSearchKey>, now: Instant) {
@@ -368,6 +421,7 @@ mod tests {
     use super::*;
 
     struct BlockingResolvedKeyProvider {
+        calls: std::sync::atomic::AtomicUsize,
         started: tokio::sync::Notify,
         release: tokio::sync::Notify,
     }
@@ -375,6 +429,8 @@ mod tests {
     #[async_trait]
     impl SearchKeyProvider for BlockingResolvedKeyProvider {
         async fn resolve_search_key(&self, owner_partition: Uuid) -> AppResult<ResolvedSearchKey> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.started.notify_one();
             self.release.notified().await;
 
@@ -557,7 +613,7 @@ mod tests {
         assert_eq!(inner.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 
         cache
-            .resolve_at(owner, start + Duration::from_secs(60))
+            .resolve_at(owner, start + Duration::from_secs(61))
             .await
             .unwrap();
         assert_eq!(inner.calls.load(std::sync::atomic::Ordering::Relaxed), 2);
@@ -603,8 +659,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_misses_for_same_owner_single_flight_provider_resolution() {
+        let inner = Arc::new(BlockingResolvedKeyProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let cache = Arc::new(CachingSearchKeyProvider::new(
+            inner.clone(),
+            SearchKeyCachePolicy::new(Duration::from_secs(60), 8).unwrap(),
+        ));
+        let owner = Uuid::new_v4();
+
+        let first_started = inner.started.notified();
+        let first = {
+            let cache = Arc::clone(&cache);
+            tokio::spawn(async move { cache.resolve_search_key(owner).await })
+        };
+        first_started.await;
+
+        let second = {
+            let cache = Arc::clone(&cache);
+            tokio::spawn(async move { cache.resolve_search_key(owner).await })
+        };
+
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            inner.calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "same-owner cache miss must not duplicate the provider call"
+        );
+
+        inner.release.notify_one();
+
+        let first = first.await.unwrap().unwrap();
+        let second = second.await.unwrap().unwrap();
+        assert_eq!(first.plaintext.expose(), second.plaintext.expose());
+        assert_eq!(first.key_version, second.key_version);
+        assert_eq!(inner.calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(cache.state.lock().await.resolution_gates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_misses_for_different_owners_resolve_in_parallel() {
+        let inner = Arc::new(BlockingResolvedKeyProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let cache = Arc::new(CachingSearchKeyProvider::new(
+            inner.clone(),
+            SearchKeyCachePolicy::new(Duration::from_secs(60), 8).unwrap(),
+        ));
+        let first_owner = Uuid::new_v4();
+        let second_owner = Uuid::new_v4();
+
+        let first_started = inner.started.notified();
+        let first = {
+            let cache = Arc::clone(&cache);
+            tokio::spawn(async move { cache.resolve_search_key(first_owner).await })
+        };
+        first_started.await;
+
+        let second_started = inner.started.notified();
+        let second = {
+            let cache = Arc::clone(&cache);
+            tokio::spawn(async move { cache.resolve_search_key(second_owner).await })
+        };
+        second_started.await;
+
+        assert_eq!(
+            inner.calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "different owners must not share one provider-resolution gate"
+        );
+
+        inner.release.notify_one();
+        inner.release.notify_one();
+
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        assert!(cache.state.lock().await.resolution_gates.is_empty());
+    }
+
+    #[tokio::test]
     async fn invalidation_fences_in_flight_key_resolution() {
         let inner = Arc::new(BlockingResolvedKeyProvider {
+            calls: std::sync::atomic::AtomicUsize::new(0),
             started: tokio::sync::Notify::new(),
             release: tokio::sync::Notify::new(),
         });
