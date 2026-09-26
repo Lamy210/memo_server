@@ -4,7 +4,10 @@ use uuid::Uuid;
 
 use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
 use crate::{
-    application::maintenance::{MemoMutationGuard, MemoMutationPermit},
+    application::{
+        high_search_shadow::HighSearchShadowObserver,
+        maintenance::{MemoMutationGuard, MemoMutationPermit},
+    },
     domain::memo::{
         entity::{Memo, MAX_MEMO_TAGS, MAX_MEMO_TAG_CHARS, MAX_MEMO_TITLE_CHARS},
         repository::MemoRepository,
@@ -17,16 +20,19 @@ const MAX_SEARCH_QUERY_CHARS: usize = 512;
 pub struct MemoService {
     memo_repository: Arc<dyn MemoRepository>,
     mutation_guard: Arc<dyn MemoMutationGuard>,
+    high_search_shadow: Option<Arc<HighSearchShadowObserver>>,
 }
 
 impl MemoService {
     pub fn new(
         memo_repository: Arc<dyn MemoRepository>,
         mutation_guard: Arc<dyn MemoMutationGuard>,
+        high_search_shadow: Option<Arc<HighSearchShadowObserver>>,
     ) -> Self {
         Self {
             memo_repository,
             mutation_guard,
+            high_search_shadow,
         }
     }
 
@@ -141,8 +147,20 @@ impl MemoService {
         let limit = limit.clamp(1, 100);
         let search_page = self
             .memo_repository
-            .search(query, tag, user_id, page, limit)
+            .search(query, tag.clone(), user_id, page, limit)
             .await?;
+
+        if let Some(observer) = self.high_search_shadow.as_ref() {
+            observer.observe(
+                query,
+                tag.as_deref(),
+                user_id,
+                page,
+                limit,
+                search_page.total,
+            );
+        }
+
         let total_pages = search_page.total.div_ceil(limit);
         let items = search_page
             .items
