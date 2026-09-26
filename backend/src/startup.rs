@@ -53,7 +53,10 @@ impl Application {
             projection_reconciler.clone(),
         ));
         let _projection_reconciler_task = tokio::spawn(projection_reconciler.run());
-        let memo_service = Data::new(MemoService::new(memo_repository));
+        let memo_service = Data::new(MemoService::new(
+            memo_repository,
+            persistence.mutation_guard,
+        ));
         let auth_service = Data::new(AuthService::new(config.auth));
         let port = config.port;
 

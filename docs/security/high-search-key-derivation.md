@@ -140,6 +140,8 @@ The stack also exposes explicit cache sweep, owner invalidation, and global clea
 
 Key-generation rotation is staged behind an application-owned orchestration service. The protocol requires a concrete `HighSearchOfflineWindowGuard` backed by an enforced maintenance/write-freeze mechanism; a boolean operator assertion is intentionally insufficient. The guard must acquire a live `HighSearchOfflineWindowPermit` whose lifetime keeps that exclusion active.
 
+The concrete MongoDB maintenance guard uses a singleton gate document plus per-mutation writer leases. Acquiring a writer lease and closing the maintenance gate both update the same singleton inside majority-write transactions, so a writer/maintenance race is serialized by MongoDB before a writer lease can become visible. Once the maintenance barrier is closed, new create/update/delete operations fail with service-unavailable and the guard waits for all already-acquired writer leases to drain before returning its offline permit. Writer leases do not auto-expire: a crashed writer or abruptly cancelled mutation intentionally leaves maintenance blocked until operator recovery is performed, preferring fail-closed unavailability over an unsafe time-based assumption that a mutation has stopped. Likewise, dropping an offline-window permit without its explicit release path leaves the maintenance barrier closed. The protected HIGH search request path is not installed yet; when it is, it must reuse the same maintenance barrier before SEARCH-HIGH-1 can be marked deployed.
+
 The sequence is:
 
 1. validate the reindex page size before touching key state,
@@ -150,7 +152,7 @@ The sequence is:
 6. let the caller perform its cutover while that value remains alive,
 7. call `finish_after_cutover` to revalidate the lease once more and release the permit, or `abort` to clear target-generation cached keys before releasing it.
 
-If reindex or the pre-cutover permit check fails, the derived-key cache is cleared again while the permit is still held and the operation remains failed. If cleanup also fails, the result is promoted to service-unavailable with both failures recorded in the error text. The protocol does not itself change provider configuration or switch request routing; those remain caller/operator responsibilities, but the permit now spans that caller-owned cutover window instead of being dropped immediately after reindex.
+If reindex or the pre-cutover permit check fails, the derived-key cache is cleared again while the permit is still held and the operation remains failed. Permit release is explicit and awaited after cutover, abort, or fail-closed cleanup. If cache cleanup or barrier release also fails, the result is promoted to service-unavailable with the combined failure context; a failed release leaves the shared gate closed rather than silently resuming writes. The protocol does not itself change provider configuration or switch request routing; those remain caller/operator responsibilities, but the permit now spans that caller-owned cutover window instead of being dropped immediately after reindex.
 
 ## Staged startup wiring
 

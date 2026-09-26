@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
 use crate::{
+    application::maintenance::{MemoMutationGuard, MemoMutationPermit},
     domain::memo::{
         entity::{Memo, MAX_MEMO_TAGS, MAX_MEMO_TAG_CHARS, MAX_MEMO_TITLE_CHARS},
         repository::MemoRepository,
@@ -15,18 +16,30 @@ const MAX_SEARCH_QUERY_CHARS: usize = 512;
 
 pub struct MemoService {
     memo_repository: Arc<dyn MemoRepository>,
+    mutation_guard: Arc<dyn MemoMutationGuard>,
 }
 
 impl MemoService {
-    pub fn new(memo_repository: Arc<dyn MemoRepository>) -> Self {
-        Self { memo_repository }
+    pub fn new(
+        memo_repository: Arc<dyn MemoRepository>,
+        mutation_guard: Arc<dyn MemoMutationGuard>,
+    ) -> Self {
+        Self {
+            memo_repository,
+            mutation_guard,
+        }
     }
 
     pub async fn create_memo(&self, dto: CreateMemoDto, user_id: Uuid) -> AppResult<MemoResponse> {
         let memo = Memo::new(dto.title, dto.content, dto.tags, user_id);
         Self::validate_memo(&memo)?;
-        self.memo_repository.save(&memo).await?;
-        Ok(MemoResponse::from(memo))
+        let permit = self.mutation_guard.acquire_mutation().await?;
+        let result = self
+            .memo_repository
+            .save(&memo)
+            .await
+            .map(|()| MemoResponse::from(memo));
+        Self::finish_mutation(result, permit).await
     }
 
     pub async fn update_memo(
@@ -54,8 +67,13 @@ impl MemoService {
 
         memo.update(dto.title, dto.content, dto.tags);
         Self::validate_memo(&memo)?;
-        self.memo_repository.save(&memo).await?;
-        Ok(MemoResponse::from(memo))
+        let permit = self.mutation_guard.acquire_mutation().await?;
+        let result = self
+            .memo_repository
+            .save(&memo)
+            .await
+            .map(|()| MemoResponse::from(memo));
+        Self::finish_mutation(result, permit).await
     }
 
     pub async fn get_memo(&self, id: Uuid, user_id: Uuid) -> AppResult<MemoResponse> {
@@ -71,7 +89,24 @@ impl MemoService {
         if !self.memo_repository.exists(user_id, id).await? {
             return Err(AppError::NotFound("Memo not found".into()));
         }
-        self.memo_repository.delete(user_id, id).await
+
+        let permit = self.mutation_guard.acquire_mutation().await?;
+        let result = self.memo_repository.delete(user_id, id).await;
+        Self::finish_mutation(result, permit).await
+    }
+
+    async fn finish_mutation<T>(
+        result: AppResult<T>,
+        permit: Box<dyn MemoMutationPermit>,
+    ) -> AppResult<T> {
+        match (result, permit.release().await) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(primary), Ok(())) => Err(primary),
+            (Ok(_), Err(release)) => Err(release),
+            (Err(primary), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+                "memo mutation failed and maintenance writer lease release also failed; primary={primary}; release={release}"
+            ))),
+        }
     }
 
     pub async fn get_user_memos(&self, user_id: Uuid) -> AppResult<Vec<MemoResponse>> {

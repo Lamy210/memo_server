@@ -688,6 +688,10 @@ impl MongoDbAuthoritativeStore {
         }
     }
 
+    pub(crate) fn database_handle(&self) -> Database {
+        self.database.clone()
+    }
+
     pub async fn health_check(&self) -> AppResult<bool> {
         self.database
             .run_command(doc! { "ping": 1 })
