@@ -14,6 +14,8 @@ const MAX_SEARCH_VERSION_ID_CHARS: usize = 128;
 const HIGH_SEARCH_PRF_PREFIX: &str = "prf384-v1:";
 const HIGH_SEARCH_HKDF_PREFIX: &str = "hkdf384-v1:";
 const MAX_KMS_KEY_ARN_BYTES: usize = 2048;
+const MAX_HIGH_SEARCH_SHADOW_CONCURRENCY: usize = 256;
+const MAX_HIGH_SEARCH_SHADOW_TIMEOUT_MS: u64 = 60_000;
 
 // MongoDB database names on Unix/Linux must not contain NUL, space, double quote,
 // dollar sign, dot, forward slash, or backslash.
@@ -325,6 +327,19 @@ fn parse_high_search_shadow_config(
                 vars,
                 "HIGH_SEARCH_SHADOW_TIMEOUT_MS",
             )?;
+
+            if max_concurrency > MAX_HIGH_SEARCH_SHADOW_CONCURRENCY {
+                return Err(ConfigError::InvalidHighSearchSetting(
+                    "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY",
+                    max_concurrency.to_string(),
+                ));
+            }
+            if timeout_ms > MAX_HIGH_SEARCH_SHADOW_TIMEOUT_MS {
+                return Err(ConfigError::InvalidHighSearchSetting(
+                    "HIGH_SEARCH_SHADOW_TIMEOUT_MS",
+                    timeout_ms.to_string(),
+                ));
+            }
 
             Ok(HighSearchShadowConfig::Observe {
                 max_concurrency,
