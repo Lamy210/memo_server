@@ -85,6 +85,7 @@ HIGH protected search remains disabled unless `HIGH_SEARCH_MODE=aws-kms` is expl
 
 When `aws-kms` is selected, configuration parsing requires all of the following before application startup can proceed:
 
+- `AUTHORITATIVE_BACKEND=mongodb`,
 - the binary was built with the `aws-kms-search` Cargo feature,
 - `SEARCH_BACKEND=manticore`,
 - `HIGH_SEARCH_AWS_KMS_KEY_ARN` as a pinned KMS key ARN, never an alias or bare key ID,
@@ -96,6 +97,8 @@ When `aws-kms` is selected, configuration parsing requires all of the following 
 - positive `HIGH_SEARCH_MAX_DOCUMENT_CONTENT_TERMS`,
 - positive `HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS`,
 - positive `HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES`.
+
+The MongoDB requirement is deliberate: the accepted HIGH storage target, plaintext-to-encrypted staging source, and protected-search reindex source are MongoDB-backed. ScyllaDB remains a migration fallback for deployments that have not completed authoritative cutover, but such deployments cannot claim the staged HIGH search runtime.
 
 There are deliberately no production defaults for key-cache TTL, capacity, sweep cadence, or analysis work budgets. These values remain an explicit deployment/security decision. A fully valid AWS KMS configuration is still rejected when the running binary lacks the `aws-kms-search` build feature, preventing configuration from claiming a capability that was compiled out. This configuration contract does not itself wire HIGH search into request handling.
 
