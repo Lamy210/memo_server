@@ -80,9 +80,7 @@ impl HighSearchRotationReady {
 
     /// Abort a prepared rotation while the offline permit is still held.
     pub async fn abort(self) -> AppResult<()> {
-        let Self {
-            permit, cache, ..
-        } = self;
+        let Self { permit, cache, .. } = self;
         let cleanup = cache.clear_cached_keys().await;
         let release = permit.release().await;
 
@@ -365,7 +363,13 @@ mod tests {
         ));
         assert_eq!(
             events.snapshot(),
-            vec!["guard-acquire", "cache", "reindex", "cache", "permit-release"]
+            vec![
+                "guard-acquire",
+                "cache",
+                "reindex",
+                "cache",
+                "permit-release"
+            ]
         );
     }
 
@@ -400,7 +404,13 @@ mod tests {
         ));
         assert_eq!(
             events.snapshot(),
-            vec!["guard-acquire", "cache", "reindex", "cache", "permit-release"]
+            vec![
+                "guard-acquire",
+                "cache",
+                "reindex",
+                "cache",
+                "permit-release"
+            ]
         );
     }
 
