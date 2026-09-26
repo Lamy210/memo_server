@@ -242,6 +242,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shadow_failure_is_counted_without_affecting_other_outcomes() {
+        let reader = Arc::new(FakeReader {
+            result: Mutex::new(Some(Err(AppError::DatabaseError(
+                "protected search failed".into(),
+            )))),
+            block: None,
+        });
+        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
+
+        observer.observe("private query", None, Uuid::new_v4(), 1, 20, 3);
+        wait_for_completion(&observer).await;
+
+        assert_eq!(
+            observer.stats(),
+            HighSearchShadowStats {
+                completed: 1,
+                total_matches: 0,
+                total_mismatches: 0,
+                failures: 1,
+                timeouts: 0,
+                dropped_capacity: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn shadow_timeout_is_counted_and_releases_capacity() {
+        let block = Arc::new(Notify::new());
+        let reader = Arc::new(FakeReader {
+            result: Mutex::new(None),
+            block: Some(block),
+        });
+        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(1)).unwrap();
+
+        observer.observe("private query", None, Uuid::new_v4(), 1, 20, 0);
+        wait_for_completion(&observer).await;
+
+        assert_eq!(observer.stats().timeouts, 1);
+        assert_eq!(observer.stats().dropped_capacity, 0);
+
+        // The timed-out task has dropped its owned semaphore permit, so the
+        // next observation can be admitted rather than being permanently stuck.
+        observer.observe("next query", None, Uuid::new_v4(), 1, 20, 0);
+        assert_eq!(observer.stats().dropped_capacity, 0);
+    }
+
+    #[tokio::test]
     async fn saturated_shadow_drops_observation_without_queueing() {
         let block = Arc::new(Notify::new());
         let reader = Arc::new(FakeReader {
