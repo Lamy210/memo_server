@@ -283,6 +283,40 @@ fn high_search_shadow_requires_explicit_positive_bounds() {
 
 #[cfg(feature = "aws-kms-search")]
 #[test]
+fn high_search_shadow_rejects_excessive_resource_bounds() {
+    for (name, value) in [
+        ("HIGH_SEARCH_SHADOW_MAX_CONCURRENCY", "257"),
+        ("HIGH_SEARCH_SHADOW_TIMEOUT_MS", "60001"),
+    ] {
+        let mut vars = high_search_aws_vars();
+        vars.extend([
+            (
+                "HIGH_SEARCH_SHADOW_MODE".to_string(),
+                "observe".to_string(),
+            ),
+            (
+                "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY".to_string(),
+                "4".to_string(),
+            ),
+            (
+                "HIGH_SEARCH_SHADOW_TIMEOUT_MS".to_string(),
+                "250".to_string(),
+            ),
+        ]);
+        vars.iter_mut().find(|(key, _)| key == name).unwrap().1 = value.to_string();
+
+        let error = AppConfig::from_vars(vars)
+            .expect_err("HIGH search shadow resource bounds must be capped");
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidHighSearchSetting(setting, _) if setting == name
+        ));
+    }
+}
+
+#[cfg(feature = "aws-kms-search")]
+#[test]
 fn accepts_complete_high_search_aws_kms_configuration() {
     let config = AppConfig::from_vars(high_search_aws_vars())
         .expect("complete staged AWS KMS HIGH search configuration should be valid");
