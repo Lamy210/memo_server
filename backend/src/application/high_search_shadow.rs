@@ -92,7 +92,6 @@ impl HighSearchShadowObserver {
         let counters = self.counters.clone();
 
         tokio::spawn(async move {
-            let _permit = permit;
             match timeout(
                 timeout_duration,
                 reader.search_memo_ids(owner_partition, &query, tag.as_deref(), page, limit),
@@ -114,6 +113,10 @@ impl HighSearchShadowObserver {
                 }
             }
 
+            // Publish completion only after capacity is available again. This
+            // makes the completed counter a reliable admission boundary for
+            // tests and operational sampling.
+            drop(permit);
             let completed = counters.completed.fetch_add(1, Ordering::Relaxed) + 1;
             if completed.is_multiple_of(METRICS_LOG_EVERY_COMPLETIONS) {
                 let stats = snapshot(&counters);
