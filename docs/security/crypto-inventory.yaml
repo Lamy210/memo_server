@@ -277,6 +277,12 @@ assets:
         staged_reindex_reset_requires_request_path_inactive: true
         reindex_cutover_behavior: no_op_while_request_path_inactive
         reindex_write_freeze_required: true
+        mutation_mirror: outbox_reconciler_staged_when_enabled
+        mutation_mirror_scope: create_update_delete
+        mutation_mirror_failure_behavior: durable_intent_retry
+        reconciler_maintenance_guard: shared_mongodb_writer_lease
+        reconciler_ack_after_lease_release: true
+        query_request_path_installed: false
       legacy_plaintext_projection_active: true
       runtime_eligible: false
     migration_status: in_progress

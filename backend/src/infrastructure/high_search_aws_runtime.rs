@@ -9,6 +9,7 @@ use std::{
 use tokio::{task::JoinHandle, time::sleep};
 
 use crate::{
+    application::crypto_search_orchestration::HighSearchProjectionSink,
     config::HighSearchConfig,
     error::{AppError, AppResult},
 };
@@ -63,6 +64,13 @@ impl HighSearchRuntimeHandle {
 
     pub(crate) fn stack(&self) -> Option<Arc<HighSearchRuntimeStack>> {
         self.stack.clone()
+    }
+
+    pub(crate) fn projection_sink(&self) -> Option<Arc<dyn HighSearchProjectionSink>> {
+        self.stack.as_ref().map(|stack| {
+            let sink: Arc<dyn HighSearchProjectionSink> = stack.projection_service();
+            sink
+        })
     }
 }
 
@@ -151,6 +159,7 @@ mod tests {
                 .unwrap();
 
         assert!(handle.stack().is_none());
+        assert!(handle.projection_sink().is_none());
         assert!(handle.cache_sweeper.is_none());
     }
 
