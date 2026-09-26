@@ -487,10 +487,7 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn acknowledge_projection_intent(
-            &self,
-            _event: &ProjectionIntent,
-        ) -> AppResult<()> {
+        async fn acknowledge_projection_intent(&self, _event: &ProjectionIntent) -> AppResult<()> {
             self.events.push("ack");
             self.acknowledged.fetch_add(1, Ordering::Relaxed);
             Ok(())
@@ -536,10 +533,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MemoSearchProjection for FakeLegacyProjection {
-        async fn index_memo(
-            &self,
-            _memo: &crate::domain::memo::entity::Memo,
-        ) -> AppResult<()> {
+        async fn index_memo(&self, _memo: &crate::domain::memo::entity::Memo) -> AppResult<()> {
             self.events.push("legacy-index");
             Ok(())
         }
@@ -552,10 +546,12 @@ mod tests {
             _page: usize,
             _limit: usize,
         ) -> AppResult<crate::infrastructure::persistence::ports::MemoSearchHitPage> {
-            Ok(crate::infrastructure::persistence::ports::MemoSearchHitPage {
-                memo_ids: Vec::new(),
-                total: 0,
-            })
+            Ok(
+                crate::infrastructure::persistence::ports::MemoSearchHitPage {
+                    memo_ids: Vec::new(),
+                    total: 0,
+                },
+            )
         }
 
         async fn delete_memo(&self, _id: Uuid) -> AppResult<()> {
@@ -572,10 +568,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl HighSearchProjectionSink for FakeHighProjection {
-        async fn replace_memo(
-            &self,
-            _memo: &crate::domain::memo::entity::Memo,
-        ) -> AppResult<()> {
+        async fn replace_memo(&self, _memo: &crate::domain::memo::entity::Memo) -> AppResult<()> {
             self.events.push("high-index");
             if self.fail_replace {
                 Err(AppError::DatabaseError("HIGH projection failed".into()))
@@ -670,13 +663,7 @@ mod tests {
         });
 
         (
-            ProjectionReconciler::new(
-                store.clone(),
-                cache,
-                legacy,
-                Some(high.clone()),
-                guard,
-            ),
+            ProjectionReconciler::new(store.clone(), cache, legacy, Some(high.clone()), guard),
             store,
             high,
             events,
@@ -688,11 +675,8 @@ mod tests {
         let user_id = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
         let memo = test_memo(user_id, memo_id);
-        let event = ProjectionIntent::new(
-            user_id,
-            memo_id,
-            ProjectionTarget::Version(memo.version),
-        );
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
         let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
 
         assert_eq!(
@@ -718,11 +702,8 @@ mod tests {
         let user_id = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
         let memo = test_memo(user_id, memo_id);
-        let event = ProjectionIntent::new(
-            user_id,
-            memo_id,
-            ProjectionTarget::Version(memo.version),
-        );
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
         let (reconciler, store, _, events) = test_reconciler(Some(memo), true, false);
 
         assert!(reconciler.reconcile_event(&event).await.is_err());
@@ -744,11 +725,8 @@ mod tests {
         let user_id = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
         let memo = test_memo(user_id, memo_id);
-        let event = ProjectionIntent::new(
-            user_id,
-            memo_id,
-            ProjectionTarget::Version(memo.version),
-        );
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
         let (reconciler, store, _, events) = test_reconciler(Some(memo), false, true);
 
         assert!(matches!(
