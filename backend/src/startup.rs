@@ -45,6 +45,8 @@ impl Application {
             persistence.authoritative_store.clone(),
             persistence.cache.clone(),
             persistence.search_projection.clone(),
+            high_search_runtime.projection_sink(),
+            persistence.mutation_guard.clone(),
         ));
         let memo_repository = Arc::new(MemoRepositoryImpl::new(
             persistence.authoritative_store,

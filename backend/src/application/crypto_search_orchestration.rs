@@ -71,6 +71,12 @@ impl HighSearchAnalysisBudget {
     }
 }
 
+#[async_trait::async_trait]
+pub trait HighSearchProjectionSink: Send + Sync {
+    async fn replace_memo(&self, memo: &Memo) -> AppResult<()>;
+    async fn delete_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()>;
+}
+
 /// Application orchestration for the protected HIGH search projection.
 ///
 /// This service is intentionally independent of Manticore, HMAC, and concrete
@@ -274,6 +280,19 @@ impl HighSearchProjectionService {
         }
 
         Ok((tokens, operation_key_version))
+    }
+}
+
+#[async_trait::async_trait]
+impl HighSearchProjectionSink for HighSearchProjectionService {
+    async fn replace_memo(&self, memo: &Memo) -> AppResult<()> {
+        HighSearchProjectionService::replace_memo(self, memo)
+            .await
+            .map(|_| ())
+    }
+
+    async fn delete_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
+        HighSearchProjectionService::delete_memo(self, owner_partition, memo_id).await
     }
 }
 

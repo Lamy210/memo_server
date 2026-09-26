@@ -11,6 +11,10 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::{
+    application::{
+        crypto_search_orchestration::HighSearchProjectionSink,
+        maintenance::{MemoMutationGuard, MemoMutationPermit},
+    },
     error::{AppError, AppResult},
     infrastructure::persistence::ports::{
         MemoAuthoritativeStore, MemoCache, MemoSearchProjection, ProjectionIntent, ProjectionTarget,
@@ -67,6 +71,8 @@ pub struct ProjectionReconciler {
     authoritative_store: Arc<dyn MemoAuthoritativeStore>,
     cache: Arc<dyn MemoCache>,
     search_projection: Arc<dyn MemoSearchProjection>,
+    high_search_projection: Option<Arc<dyn HighSearchProjectionSink>>,
+    mutation_guard: Arc<dyn MemoMutationGuard>,
     retry_states: Mutex<HashMap<Uuid, RetryState>>,
     counters: ReconciliationCounters,
 }
@@ -76,11 +82,15 @@ impl ProjectionReconciler {
         authoritative_store: Arc<dyn MemoAuthoritativeStore>,
         cache: Arc<dyn MemoCache>,
         search_projection: Arc<dyn MemoSearchProjection>,
+        high_search_projection: Option<Arc<dyn HighSearchProjectionSink>>,
+        mutation_guard: Arc<dyn MemoMutationGuard>,
     ) -> Self {
         Self {
             authoritative_store,
             cache,
             search_projection,
+            high_search_projection,
+            mutation_guard,
             retry_states: Mutex::new(HashMap::new()),
             counters: ReconciliationCounters::default(),
         }
@@ -179,13 +189,40 @@ impl ProjectionReconciler {
             return Ok(ReconcileOutcome::WaitingForTarget);
         }
 
+        // Background reconciliation participates in the same distributed
+        // maintenance barrier as foreground memo mutations. This prevents an
+        // outbox retry from mutating either search projection while a staged
+        // HIGH reindex/reset owns the offline window.
+        let permit = self.mutation_guard.acquire_mutation().await?;
+        let result = self.reconcile_secondary_state(event, memo.as_ref()).await;
+        Self::finish_guarded_reconciliation(result, permit).await?;
+
+        // Ack only after the secondary work and lease release both succeed.
+        // A release failure therefore leaves the durable intent available for
+        // an idempotent retry instead of silently losing reconciliation work.
+        self.authoritative_store
+            .acknowledge_projection_intent(event)
+            .await?;
+        Ok(ReconcileOutcome::Completed)
+    }
+
+    async fn reconcile_secondary_state(
+        &self,
+        event: &ProjectionIntent,
+        memo: Option<&crate::domain::memo::entity::Memo>,
+    ) -> AppResult<()> {
         let mut failures = Vec::new();
         let cache_key = cache_key(event.user_id, event.memo_id);
 
-        match memo.as_ref() {
+        match memo {
             Some(memo) => {
                 if let Err(error) = self.search_projection.index_memo(memo).await {
                     failures.push(format!("search_projection={error}"));
+                }
+                if let Some(high_search_projection) = self.high_search_projection.as_ref() {
+                    if let Err(error) = high_search_projection.replace_memo(memo).await {
+                        failures.push(format!("high_search_projection={error}"));
+                    }
                 }
                 if let Err(error) = self.cache.set_memo(&cache_key, memo, Some(CACHE_TTL)).await {
                     failures.push(format!("cache={error}"));
@@ -194,6 +231,14 @@ impl ProjectionReconciler {
             None => {
                 if let Err(error) = self.search_projection.delete_memo(event.memo_id).await {
                     failures.push(format!("search_projection={error}"));
+                }
+                if let Some(high_search_projection) = self.high_search_projection.as_ref() {
+                    if let Err(error) = high_search_projection
+                        .delete_memo(event.user_id, event.memo_id)
+                        .await
+                    {
+                        failures.push(format!("high_search_projection={error}"));
+                    }
                 }
                 if let Err(error) = self.cache.delete(&cache_key).await {
                     failures.push(format!("cache={error}"));
@@ -209,7 +254,7 @@ impl ProjectionReconciler {
             .authoritative_store
             .find_by_id(event.user_id, event.memo_id)
             .await?;
-        if projection_state(memo.as_ref()) != projection_state(current.as_ref()) {
+        if projection_state(memo) != projection_state(current.as_ref()) {
             let target = current
                 .as_ref()
                 .map(|memo| ProjectionTarget::Version(memo.version))
@@ -219,10 +264,21 @@ impl ProjectionReconciler {
                 .await?;
         }
 
-        self.authoritative_store
-            .acknowledge_projection_intent(event)
-            .await?;
-        Ok(ReconcileOutcome::Completed)
+        Ok(())
+    }
+
+    async fn finish_guarded_reconciliation(
+        result: AppResult<()>,
+        permit: Box<dyn MemoMutationPermit>,
+    ) -> AppResult<()> {
+        match (result, permit.release().await) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(primary), Ok(())) => Err(primary),
+            (Ok(()), Err(release)) => Err(release),
+            (Err(primary), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+                "projection reconciliation failed and maintenance writer lease release also failed; primary={primary}; release={release}"
+            ))),
+        }
     }
 
     pub fn stats(&self) -> ProjectionReconciliationStats {
@@ -346,6 +402,397 @@ fn cache_key(user_id: Uuid, memo_id: Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct TestEvents(Mutex<Vec<&'static str>>);
+
+    impl TestEvents {
+        fn push(&self, event: &'static str) {
+            self.0.lock().unwrap().push(event);
+        }
+
+        fn snapshot(&self) -> Vec<&'static str> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    struct FakeAuthoritativeStore {
+        memo: Mutex<Option<crate::domain::memo::entity::Memo>>,
+        acknowledged: AtomicU64,
+        events: Arc<TestEvents>,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoAuthoritativeStore for FakeAuthoritativeStore {
+        async fn find_by_id(
+            &self,
+            _user_id: Uuid,
+            _id: Uuid,
+        ) -> AppResult<Option<crate::domain::memo::entity::Memo>> {
+            Ok(self.memo.lock().unwrap().clone())
+        }
+
+        async fn find_all_by_user_id(
+            &self,
+            _user_id: Uuid,
+        ) -> AppResult<Vec<crate::domain::memo::entity::Memo>> {
+            Ok(Vec::new())
+        }
+
+        async fn find_many_by_ids(
+            &self,
+            _user_id: Uuid,
+            _ids: &[Uuid],
+        ) -> AppResult<Vec<crate::domain::memo::entity::Memo>> {
+            Ok(Vec::new())
+        }
+
+        async fn save_with_projection_intent(
+            &self,
+            memo: &crate::domain::memo::entity::Memo,
+        ) -> AppResult<ProjectionIntent> {
+            Ok(ProjectionIntent::new(
+                memo.user_id,
+                memo.id,
+                ProjectionTarget::Version(memo.version),
+            ))
+        }
+
+        async fn delete_with_projection_intent(
+            &self,
+            user_id: Uuid,
+            id: Uuid,
+        ) -> AppResult<ProjectionIntent> {
+            Ok(ProjectionIntent::new(
+                user_id,
+                id,
+                ProjectionTarget::Deleted,
+            ))
+        }
+
+        async fn exists(&self, _user_id: Uuid, _id: Uuid) -> AppResult<bool> {
+            Ok(self.memo.lock().unwrap().is_some())
+        }
+
+        async fn enqueue_projection_intent(
+            &self,
+            user_id: Uuid,
+            memo_id: Uuid,
+            target: ProjectionTarget,
+        ) -> AppResult<ProjectionIntent> {
+            Ok(ProjectionIntent::new(user_id, memo_id, target))
+        }
+
+        async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
+            Ok(Vec::new())
+        }
+
+        async fn acknowledge_projection_intent(
+            &self,
+            _event: &ProjectionIntent,
+        ) -> AppResult<()> {
+            self.events.push("ack");
+            self.acknowledged.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    struct FakeCache {
+        events: Arc<TestEvents>,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoCache for FakeCache {
+        async fn get_memo(
+            &self,
+            _key: &str,
+        ) -> AppResult<Option<crate::domain::memo::entity::Memo>> {
+            Ok(None)
+        }
+
+        async fn set_memo(
+            &self,
+            _key: &str,
+            _memo: &crate::domain::memo::entity::Memo,
+            _expiration: Option<Duration>,
+        ) -> AppResult<()> {
+            self.events.push("cache-set");
+            Ok(())
+        }
+
+        async fn delete(&self, _key: &str) -> AppResult<()> {
+            self.events.push("cache-delete");
+            Ok(())
+        }
+
+        async fn exists(&self, _key: &str) -> AppResult<bool> {
+            Ok(false)
+        }
+    }
+
+    struct FakeLegacyProjection {
+        events: Arc<TestEvents>,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoSearchProjection for FakeLegacyProjection {
+        async fn index_memo(
+            &self,
+            _memo: &crate::domain::memo::entity::Memo,
+        ) -> AppResult<()> {
+            self.events.push("legacy-index");
+            Ok(())
+        }
+
+        async fn search_memo_ids(
+            &self,
+            _query: &str,
+            _tag: Option<String>,
+            _user_id: Uuid,
+            _page: usize,
+            _limit: usize,
+        ) -> AppResult<crate::infrastructure::persistence::ports::MemoSearchHitPage> {
+            Ok(crate::infrastructure::persistence::ports::MemoSearchHitPage {
+                memo_ids: Vec::new(),
+                total: 0,
+            })
+        }
+
+        async fn delete_memo(&self, _id: Uuid) -> AppResult<()> {
+            self.events.push("legacy-delete");
+            Ok(())
+        }
+    }
+
+    struct FakeHighProjection {
+        events: Arc<TestEvents>,
+        fail_replace: bool,
+        deleted: Mutex<Option<(Uuid, Uuid)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl HighSearchProjectionSink for FakeHighProjection {
+        async fn replace_memo(
+            &self,
+            _memo: &crate::domain::memo::entity::Memo,
+        ) -> AppResult<()> {
+            self.events.push("high-index");
+            if self.fail_replace {
+                Err(AppError::DatabaseError("HIGH projection failed".into()))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn delete_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
+            self.events.push("high-delete");
+            *self.deleted.lock().unwrap() = Some((owner_partition, memo_id));
+            Ok(())
+        }
+    }
+
+    struct FakeMutationGuard {
+        events: Arc<TestEvents>,
+        fail_release: bool,
+    }
+
+    struct FakeMutationPermit {
+        events: Arc<TestEvents>,
+        fail_release: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoMutationGuard for FakeMutationGuard {
+        async fn acquire_mutation(&self) -> AppResult<Box<dyn MemoMutationPermit>> {
+            self.events.push("guard-acquire");
+            Ok(Box::new(FakeMutationPermit {
+                events: self.events.clone(),
+                fail_release: self.fail_release,
+            }))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MemoMutationPermit for FakeMutationPermit {
+        async fn release(self: Box<Self>) -> AppResult<()> {
+            self.events.push("guard-release");
+            if self.fail_release {
+                Err(AppError::ServiceUnavailable(
+                    "writer lease release failed".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn test_memo(user_id: Uuid, memo_id: Uuid) -> crate::domain::memo::entity::Memo {
+        let mut memo = crate::domain::memo::entity::Memo::new(
+            "title".into(),
+            "content".into(),
+            vec!["tag".into()],
+            user_id,
+        );
+        memo.id = memo_id;
+        memo
+    }
+
+    fn test_reconciler(
+        memo: Option<crate::domain::memo::entity::Memo>,
+        high_fail_replace: bool,
+        guard_fail_release: bool,
+    ) -> (
+        ProjectionReconciler,
+        Arc<FakeAuthoritativeStore>,
+        Arc<FakeHighProjection>,
+        Arc<TestEvents>,
+    ) {
+        let events = Arc::new(TestEvents::default());
+        let store = Arc::new(FakeAuthoritativeStore {
+            memo: Mutex::new(memo),
+            acknowledged: AtomicU64::new(0),
+            events: events.clone(),
+        });
+        let cache = Arc::new(FakeCache {
+            events: events.clone(),
+        });
+        let legacy = Arc::new(FakeLegacyProjection {
+            events: events.clone(),
+        });
+        let high = Arc::new(FakeHighProjection {
+            events: events.clone(),
+            fail_replace: high_fail_replace,
+            deleted: Mutex::new(None),
+        });
+        let guard = Arc::new(FakeMutationGuard {
+            events: events.clone(),
+            fail_release: guard_fail_release,
+        });
+
+        (
+            ProjectionReconciler::new(
+                store.clone(),
+                cache,
+                legacy,
+                Some(high.clone()),
+                guard,
+            ),
+            store,
+            high,
+            events,
+        )
+    }
+
+    #[tokio::test]
+    async fn successful_high_mirror_releases_guard_before_ack() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event = ProjectionIntent::new(
+            user_id,
+            memo_id,
+            ProjectionTarget::Version(memo.version),
+        );
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+
+        assert_eq!(
+            reconciler.reconcile_event(&event).await.unwrap(),
+            ReconcileOutcome::Completed
+        );
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "legacy-index",
+                "high-index",
+                "cache-set",
+                "guard-release",
+                "ack"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn high_mirror_failure_keeps_outbox_intent_unacknowledged() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event = ProjectionIntent::new(
+            user_id,
+            memo_id,
+            ProjectionTarget::Version(memo.version),
+        );
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), true, false);
+
+        assert!(reconciler.reconcile_event(&event).await.is_err());
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "legacy-index",
+                "high-index",
+                "cache-set",
+                "guard-release"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn guard_release_failure_keeps_outbox_intent_unacknowledged() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event = ProjectionIntent::new(
+            user_id,
+            memo_id,
+            ProjectionTarget::Version(memo.version),
+        );
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, true);
+
+        assert!(matches!(
+            reconciler.reconcile_event(&event).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "legacy-index",
+                "high-index",
+                "cache-set",
+                "guard-release"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_mirror_preserves_owner_scope() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let event = ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Deleted);
+        let (reconciler, store, high, events) = test_reconciler(None, false, false);
+
+        assert_eq!(
+            reconciler.reconcile_event(&event).await.unwrap(),
+            ReconcileOutcome::Completed
+        );
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+        assert_eq!(*high.deleted.lock().unwrap(), Some((user_id, memo_id)));
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "legacy-delete",
+                "high-delete",
+                "cache-delete",
+                "guard-release",
+                "ack"
+            ]
+        );
+    }
 
     fn retry(user_id: Uuid, memo_id: Uuid, target: ProjectionTarget) -> ProjectionIntent {
         ProjectionIntent::new(user_id, memo_id, target)
