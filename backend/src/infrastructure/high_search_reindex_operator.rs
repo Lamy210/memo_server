@@ -101,9 +101,11 @@ pub async fn run_staged_high_search_reindex(
     let inspector = Arc::new(HighManticoreClient::new(&config.search_uri)?);
     let projection_admin: Arc<dyn HighSearchProjectionMigrationAdmin> = inspector.clone();
 
-    let inner_reindex: Arc<dyn HighSearchReindexRunner> = Arc::new(
-        HighSearchReindexService::new(source, stack.projection_service(), inspector),
-    );
+    let inner_reindex: Arc<dyn HighSearchReindexRunner> = Arc::new(HighSearchReindexService::new(
+        source,
+        stack.projection_service(),
+        inspector,
+    ));
     let reindex = Arc::new(ResettingHighSearchReindexRunner::new(
         projection_admin,
         inner_reindex,
