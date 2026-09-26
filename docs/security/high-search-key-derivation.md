@@ -166,6 +166,8 @@ The handle retains the stack for the application lifetime and runs the configure
 
 The provider/runtime stack is now startup-composed when explicitly enabled, but remains request-path-inactive.
 
+A staged operator command, `reindex_high_search_staged`, can now compose that runtime with the MongoDB authoritative source, the shared maintenance barrier, and protected Manticore reindex/convergence verification. Its `--apply` mode requires explicit confirmation that all memo writers participate in the barrier and that protected request routing is still inactive. While that offline permit is held, the staging runner resets the isolated `memos_high_v1` projection before the full rebuild so repeated validation runs cannot retain rows for memos deleted since an earlier staged run. Because there is no protected routing generation to switch yet, successful staging performs no request cutover; it only revalidates and releases the maintenance permit after convergence succeeds.
+
 Before SEARCH-HIGH-1 can become DEPLOYED:
 
 - provision/review the staged AWS KMS HMAC_384 key and IAM/key policy, and validate deployment credential-provider behavior,

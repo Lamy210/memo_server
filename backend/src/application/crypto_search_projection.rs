@@ -136,6 +136,14 @@ pub trait HighSearchProjectionMigrationInspector: Send + Sync {
 }
 
 #[async_trait]
+pub trait HighSearchProjectionMigrationAdmin: Send + Sync {
+    /// Reset the isolated protected projection before an operator-controlled
+    /// full rebuild. This boundary is migration-only and must never be exposed
+    /// to normal request handling.
+    async fn reset_projection(&self) -> AppResult<()>;
+}
+
+#[async_trait]
 pub trait HighMemoSearchProjection: Send + Sync {
     async fn replace_document(&self, document: &HighSearchProjectionDocument) -> AppResult<()>;
 
