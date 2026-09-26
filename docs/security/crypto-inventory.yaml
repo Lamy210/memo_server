@@ -250,6 +250,12 @@ assets:
         abrupt_offline_permit_drop: barrier_remains_closed
         maintenance_drain: wait_for_all_writer_leases
         maintenance_release: explicit_async
+        operator_recovery: explicit_cas_guarded
+        recovery_requires_application_stop_confirmation: true
+        recovery_snapshot_guard: mode_holder_token_and_writer_epoch
+        recovery_clears_stale_writer_leases: explicit_only
+        recovery_writer_epoch_advance: required
+        recovery_auto_expiry: forbidden
         protected_search_gate: pending_request_path_installation
       long_lived_search_root_process_exposure: forbidden
       production_search_key_provider: not_implemented

@@ -106,6 +106,8 @@ jobs:
             -- --ignored --nocapture
           cargo test --locked mongodb_maintenance_barrier_drains_and_blocks_writers \
             -- --ignored --nocapture
+          cargo test --locked mongodb_maintenance_recovery_requires_exact_snapshot_and_reopens_state \
+            -- --ignored --nocapture
 
       - name: Stop MongoDB replica set
         if: always()
