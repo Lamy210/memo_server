@@ -226,7 +226,9 @@ assets:
       cache_hard_residency_guarantee: not_claimed
       cache_rotation_invalidation: explicit
       cache_inflight_invalidation_fence: fail_closed_epoch
-      cache_single_flight: not_implemented
+      cache_single_flight: per_owner_async_resolution_gate
+      cache_single_flight_cross_owner_parallelism: preserved
+      cache_single_flight_failure_cache: forbidden
       rotation_protocol:
         orchestration: staged
         offline_window_guard: required
