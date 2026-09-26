@@ -19,7 +19,7 @@ blind-token projection
 memos_high_v1 in Manticore
 ```
 
-The command uses the same MongoDB maintenance barrier as memo mutations, clears the derived-key cache before projection work, performs a bounded reindex, verifies source/projection convergence, revalidates the maintenance permit, and explicitly releases it.
+The command uses the same MongoDB maintenance barrier as memo mutations, clears the derived-key cache, resets the isolated `memos_high_v1` protected projection, performs a bounded full rebuild, verifies source/projection convergence, revalidates the maintenance permit, and explicitly releases it. Resetting the projection is necessary because normal HIGH projection mutation wiring is not installed yet; without it, a memo deleted after an earlier staged run could otherwise remain as a stale protected row.
 
 It does **not** install SEARCH-HIGH-1 into the HTTP request path and does not perform a production routing cutover.
 
@@ -78,7 +78,9 @@ The maintenance barrier is released only after reindex convergence and permit re
 ## Failure behavior
 
 - Invalid page size or disabled/incompatible configuration fails before provider/database work.
-- Failure to acquire the maintenance barrier prevents reindex from starting.
+- Failure to acquire the maintenance barrier prevents projection reset or reindex from starting.
+- Projection reset occurs only after the barrier is held and only while protected request routing is operator-confirmed inactive.
+- If reset succeeds but rebuild later fails, the protected projection may be incomplete; request routing remains inactive and the command must be rerun after resolving the failure.
 - New memo mutations are rejected while the barrier is closed.
 - Existing mutation leases must drain before reindex begins.
 - KMS, analyzer, projection, or convergence failures keep the operation failed.
