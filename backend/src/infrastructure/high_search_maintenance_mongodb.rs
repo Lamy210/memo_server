@@ -146,7 +146,6 @@ impl MongoHighSearchMaintenanceGuard {
             Ok(()) => Ok(MongoMemoMutationPermit {
                 writers: self.writers.clone(),
                 lease_id,
-                released: false,
             }),
             Err(error) if error.get_custom::<MaintenanceActive>().is_some() => {
                 Err(AppError::ServiceUnavailable(
@@ -201,7 +200,6 @@ impl MongoHighSearchMaintenanceGuard {
             Ok(()) => Ok(MongoHighSearchOfflineWindowPermit {
                 state: self.state.clone(),
                 holder_token,
-                released: false,
             }),
             Err(error) if error.get_custom::<MaintenanceActive>().is_some() => Err(
                 AppError::Conflict("HIGH search maintenance window is already active".into()),
@@ -224,11 +222,11 @@ impl MongoHighSearchMaintenanceGuard {
 struct MongoMemoMutationPermit {
     writers: Collection<Document>,
     lease_id: String,
-    released: bool,
 }
 
-impl MongoMemoMutationPermit {
-    async fn release_inner(&mut self) -> AppResult<()> {
+#[async_trait]
+impl MemoMutationPermit for MongoMemoMutationPermit {
+    async fn release(self: Box<Self>) -> AppResult<()> {
         let result = self
             .writers
             .delete_one(doc! { "_id": self.lease_id.clone() })
@@ -241,71 +239,13 @@ impl MongoMemoMutationPermit {
             ));
         }
 
-        self.released = true;
         Ok(())
-    }
-}
-
-#[async_trait]
-impl MemoMutationPermit for MongoMemoMutationPermit {
-    async fn release(mut self: Box<Self>) -> AppResult<()> {
-        self.release_inner().await
-    }
-}
-
-impl Drop for MongoMemoMutationPermit {
-    fn drop(&mut self) {
-        if self.released {
-            return;
-        }
-
-        let writers = self.writers.clone();
-        let lease_id = self.lease_id.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                if let Err(error) = writers.delete_one(doc! { "_id": lease_id }).await {
-                    log::error!(
-                        "Failed to clean up dropped HIGH search writer lease; maintenance remains fail-closed: {error}"
-                    );
-                }
-            });
-        }
     }
 }
 
 struct MongoHighSearchOfflineWindowPermit {
     state: Collection<Document>,
     holder_token: String,
-    released: bool,
-}
-
-impl MongoHighSearchOfflineWindowPermit {
-    async fn release_inner(&mut self) -> AppResult<()> {
-        let result = self
-            .state
-            .update_one(
-                doc! {
-                    "_id": STATE_ID,
-                    "mode": MODE_MAINTENANCE,
-                    "holder_token": self.holder_token.clone(),
-                },
-                doc! {
-                    "$set": { "mode": MODE_OPEN },
-                    "$unset": { "holder_token": "" },
-                },
-            )
-            .await
-            .map_err(|error| maintenance_db_error("release maintenance barrier", error))?;
-
-        if result.matched_count != 1 {
-            return Err(AppError::ServiceUnavailable(
-                "HIGH search maintenance barrier ownership was lost before release".into(),
-            ));
-        }
-
-        self.released = true;
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -331,41 +271,30 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
         }
     }
 
-    async fn release(mut self: Box<Self>) -> AppResult<()> {
-        self.release_inner().await
-    }
-}
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        let result = self
+            .state
+            .update_one(
+                doc! {
+                    "_id": STATE_ID,
+                    "mode": MODE_MAINTENANCE,
+                    "holder_token": self.holder_token.clone(),
+                },
+                doc! {
+                    "$set": { "mode": MODE_OPEN },
+                    "$unset": { "holder_token": "" },
+                },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("release maintenance barrier", error))?;
 
-impl Drop for MongoHighSearchOfflineWindowPermit {
-    fn drop(&mut self) {
-        if self.released {
-            return;
+        if result.matched_count != 1 {
+            return Err(AppError::ServiceUnavailable(
+                "HIGH search maintenance barrier ownership was lost before release".into(),
+            ));
         }
 
-        let state = self.state.clone();
-        let holder_token = self.holder_token.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                if let Err(error) = state
-                    .update_one(
-                        doc! {
-                            "_id": STATE_ID,
-                            "mode": MODE_MAINTENANCE,
-                            "holder_token": holder_token,
-                        },
-                        doc! {
-                            "$set": { "mode": MODE_OPEN },
-                            "$unset": { "holder_token": "" },
-                        },
-                    )
-                    .await
-                {
-                    log::error!(
-                        "Failed to clean up dropped HIGH search maintenance barrier; writes remain fail-closed: {error}"
-                    );
-                }
-            });
-        }
+        Ok(())
     }
 }
 
