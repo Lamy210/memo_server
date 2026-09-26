@@ -83,7 +83,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> {
-    if args.is_empty() || args == ["--status"] {
+    if args.is_empty() || matches!(args.as_slice(), [flag] if flag == "--status") {
         return Ok(Command::Status);
     }
 
