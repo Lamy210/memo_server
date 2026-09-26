@@ -8,6 +8,7 @@ pub(crate) mod crypto_search_keys;
 pub(crate) mod crypto_search_seed_aws_kms;
 pub(crate) mod crypto_search_seed_provider;
 pub(crate) mod high_search_aws_runtime;
+pub(crate) mod high_search_maintenance_mongodb;
 pub(crate) mod high_search_runtime;
 pub mod persistence;
 pub mod reconciliation;
