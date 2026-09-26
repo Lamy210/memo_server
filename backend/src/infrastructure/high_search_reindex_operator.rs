@@ -26,10 +26,7 @@ use super::{
 /// MongoDB maintenance barrier. The current protected request path must remain
 /// inactive for the whole operation; therefore the rotation "cutover" is a
 /// deliberate no-op and only releases the verified maintenance permit.
-pub fn validate_staged_high_search_reindex(
-    config: &AppConfig,
-    page_size: usize,
-) -> AppResult<()> {
+pub fn validate_staged_high_search_reindex(config: &AppConfig, page_size: usize) -> AppResult<()> {
     validate_page_size(page_size)?;
 
     if !matches!(&config.high_search, HighSearchConfig::AwsKms { .. }) {
@@ -69,9 +66,8 @@ pub async fn run_staged_high_search_reindex(
     let source = Arc::new(
         MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?,
     );
-    let guard: Arc<dyn HighSearchOfflineWindowGuard> = Arc::new(
-        MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?,
-    );
+    let guard: Arc<dyn HighSearchOfflineWindowGuard> =
+        Arc::new(MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?);
     let inspector = Arc::new(HighManticoreClient::new(&config.search_uri)?);
 
     let reindex = Arc::new(HighSearchReindexService::new(
