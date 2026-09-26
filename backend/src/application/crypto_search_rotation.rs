@@ -12,13 +12,13 @@ use crate::{
 
 /// Live permit for an enforced operator-controlled offline window.
 ///
-/// A production implementation should hold the maintenance/write-freeze lease
-/// for the lifetime of this value. Dropping the permit may release that lease,
-/// but rotation orchestration keeps it alive until reindex verification has
-/// completed or failed.
+/// A production implementation must hold the maintenance/write-freeze barrier
+/// for the lifetime of this value. Rotation orchestration explicitly releases
+/// it only after cutover or fail-closed cleanup has completed.
 #[async_trait]
 pub trait HighSearchOfflineWindowPermit: Send + Sync {
     async fn assert_still_enforced(&self) -> AppResult<()>;
+    async fn release(self: Box<Self>) -> AppResult<()>;
 }
 
 /// Acquires an enforced maintenance/write-freeze window.
@@ -57,20 +57,43 @@ impl HighSearchRotationReady {
     /// Confirm that the offline-window lease survived the caller-owned cutover
     /// and only then allow this permit to be dropped.
     pub async fn finish_after_cutover(self) -> AppResult<HighSearchReindexStats> {
-        if let Err(primary) = self.permit.assert_still_enforced().await {
-            return match self.cache.clear_cached_keys().await {
-                Ok(()) => Err(primary),
-                Err(cleanup) => Err(AppError::ServiceUnavailable(format!(
-                    "HIGH search cutover permit failed and cache cleanup also failed; primary={primary}; cleanup={cleanup}"
-                ))),
-            };
+        let Self {
+            stats,
+            permit,
+            cache,
+        } = self;
+
+        if let Err(primary) = permit.assert_still_enforced().await {
+            let cleanup = cache.clear_cached_keys().await;
+            let release = permit.release().await;
+            return rotation_failure(
+                "HIGH search cutover permit failed",
+                primary,
+                cleanup,
+                release,
+            );
         }
-        Ok(self.stats)
+
+        permit.release().await?;
+        Ok(stats)
     }
 
     /// Abort a prepared rotation while the offline permit is still held.
     pub async fn abort(self) -> AppResult<()> {
-        self.cache.clear_cached_keys().await
+        let Self {
+            permit, cache, ..
+        } = self;
+        let cleanup = cache.clear_cached_keys().await;
+        let release = permit.release().await;
+
+        match (cleanup, release) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(primary), Ok(())) => Err(primary),
+            (Ok(()), Err(release)) => Err(release),
+            (Err(primary), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+                "HIGH search abort cleanup failed and maintenance release also failed; primary={primary}; release={release}"
+            ))),
+        }
     }
 }
 
@@ -101,17 +124,19 @@ impl HighSearchRotationService {
         // Discard keys from the previous runtime generation before any new
         // projection work. The newly composed provider will repopulate only the
         // target generation.
-        self.cache.clear_cached_keys().await?;
+        if let Err(error) = self.cache.clear_cached_keys().await {
+            return self.fail_closed_after_error(error, permit).await;
+        }
 
         let stats = match self.reindex.reindex_all(page_size).await {
             Ok(stats) => stats,
-            Err(error) => return self.fail_closed_after_error(error).await,
+            Err(error) => return self.fail_closed_after_error(error, permit).await,
         };
 
         // The live permit remains owned by this scope for the complete reindex
         // window. Re-check its backing lease before success can be returned.
         if let Err(error) = permit.assert_still_enforced().await {
-            return self.fail_closed_after_error(error).await;
+            return self.fail_closed_after_error(error, permit).await;
         }
 
         Ok(HighSearchRotationReady {
@@ -121,13 +146,34 @@ impl HighSearchRotationService {
         })
     }
 
-    async fn fail_closed_after_error<T>(&self, primary: AppError) -> AppResult<T> {
-        match self.cache.clear_cached_keys().await {
-            Ok(()) => Err(primary),
-            Err(cleanup) => Err(AppError::ServiceUnavailable(format!(
-                "HIGH search rotation failed and cache cleanup also failed; primary={primary}; cleanup={cleanup}"
-            ))),
-        }
+    async fn fail_closed_after_error<T>(
+        &self,
+        primary: AppError,
+        permit: Box<dyn HighSearchOfflineWindowPermit>,
+    ) -> AppResult<T> {
+        let cleanup = self.cache.clear_cached_keys().await;
+        let release = permit.release().await;
+        rotation_failure("HIGH search rotation failed", primary, cleanup, release)
+    }
+}
+
+fn rotation_failure<T>(
+    context: &str,
+    primary: AppError,
+    cleanup: AppResult<()>,
+    release: AppResult<()>,
+) -> AppResult<T> {
+    match (cleanup, release) {
+        (Ok(()), Ok(())) => Err(primary),
+        (Err(cleanup), Ok(())) => Err(AppError::ServiceUnavailable(format!(
+            "{context} and cache cleanup also failed; primary={primary}; cleanup={cleanup}"
+        ))),
+        (Ok(()), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+            "{context} and maintenance release also failed; primary={primary}; release={release}"
+        ))),
+        (Err(cleanup), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+            "{context}, cache cleanup failed, and maintenance release failed; primary={primary}; cleanup={cleanup}; release={release}"
+        ))),
     }
 }
 
@@ -176,11 +222,10 @@ mod tests {
             }
             Ok(())
         }
-    }
 
-    impl Drop for FakePermit {
-        fn drop(&mut self) {
-            self.events.push("permit-drop");
+        async fn release(self: Box<Self>) -> AppResult<()> {
+            self.events.push("permit-release");
+            Ok(())
         }
     }
 
@@ -305,7 +350,7 @@ mod tests {
                 "reindex",
                 "permit-check",
                 "permit-check",
-                "permit-drop"
+                "permit-release"
             ]
         );
     }
@@ -320,7 +365,7 @@ mod tests {
         ));
         assert_eq!(
             events.snapshot(),
-            vec!["guard-acquire", "cache", "reindex", "cache", "permit-drop"]
+            vec!["guard-acquire", "cache", "reindex", "cache", "permit-release"]
         );
     }
 
@@ -340,7 +385,7 @@ mod tests {
                 "reindex",
                 "permit-check",
                 "cache",
-                "permit-drop"
+                "permit-release"
             ]
         );
     }
@@ -355,7 +400,7 @@ mod tests {
         ));
         assert_eq!(
             events.snapshot(),
-            vec!["guard-acquire", "cache", "reindex", "cache", "permit-drop"]
+            vec!["guard-acquire", "cache", "reindex", "cache", "permit-release"]
         );
     }
 
@@ -374,7 +419,7 @@ mod tests {
                 "reindex",
                 "permit-check",
                 "cache",
-                "permit-drop"
+                "permit-release"
             ]
         );
     }
