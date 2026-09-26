@@ -180,11 +180,7 @@ fn summarize_distribution(mut samples: Vec<usize>) -> DistributionSummary {
 fn nearest_rank(sorted: &[usize], percentile: usize) -> usize {
     debug_assert!(!sorted.is_empty());
     debug_assert!((1..=100).contains(&percentile));
-    let rank = sorted
-        .len()
-        .saturating_mul(percentile)
-        .div_ceil(100)
-        .max(1);
+    let rank = sorted.len().saturating_mul(percentile).div_ceil(100).max(1);
     sorted[rank - 1]
 }
 
@@ -225,7 +221,12 @@ mod tests {
         assert!(report.normalized_term_bytes.max >= "こんにちは".len());
 
         let serialized = serde_json::to_string(&report).unwrap();
-        for plaintext in ["Snow Memo", "Private winter notes", "こんにちは世界", "日本語"] {
+        for plaintext in [
+            "Snow Memo",
+            "Private winter notes",
+            "こんにちは世界",
+            "日本語",
+        ] {
             assert!(!serialized.contains(plaintext));
         }
     }
