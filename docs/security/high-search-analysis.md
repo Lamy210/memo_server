@@ -150,11 +150,13 @@ The final production reindex still requires the authoritative source to be write
 
 This contract is not wired into normal request-path search yet.
 
+The staged protected projection now has an operator-only `reindex_high_search_staged` command. It runs behind the MongoDB write-freeze barrier and verifies source/projection convergence, but deliberately performs no request-path cutover.
+
 Runtime cutover still requires:
 
 - representative-corpus validation and approval of the staged ICU4X analyzer,
-- a production search-key provider,
-- an operator-guarded invocation of the staged protected projection reindex/verification service,
+- promotion of the staged AWS KMS search-key provider/operator path to the approved production deployment,
+- a cutover-aware invocation once protected routing generations exist; the current staged command only validates the inactive projection,
 - an explicit search-key rotation protocol that prevents old/new key-version query gaps (for example generation-based reindex plus atomic switch or verified dual-read),
 - an explicit analysis-version migration protocol for tokenizer/normalizer changes,
 - request-path orchestration wiring,
