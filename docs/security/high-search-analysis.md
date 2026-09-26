@@ -150,7 +150,7 @@ The final production reindex still requires the authoritative source to be write
 
 This contract is not wired into normal request-path search yet.
 
-The staged protected projection now has an operator-only `reindex_high_search_staged` command. It runs behind the MongoDB write-freeze barrier and verifies source/projection convergence, but deliberately performs no request-path cutover.
+The staged protected projection now has an operator-only `reindex_high_search_staged` command. It runs behind the MongoDB write-freeze barrier and verifies source/projection convergence, but deliberately performs no request-path cutover. Because normal HIGH projection mutation wiring is not installed yet, each staged full rebuild first resets only `memos_high_v1` while the offline permit is held; this prevents stale protected rows from surviving authoritative deletes between repeated validation runs. This reset is valid only while protected request routing remains inactive.
 
 Runtime cutover still requires:
 
