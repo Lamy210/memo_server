@@ -164,7 +164,9 @@ The handle retains the stack for the application lifetime and runs the configure
 
 ## Runtime boundary
 
-The provider/runtime stack is now startup-composed when explicitly enabled, but remains request-path-inactive.
+The provider/runtime stack is now startup-composed when explicitly enabled. Its protected projection service is also connected to the durable projection outbox/reconciler so create/update/delete events mirror into `memos_high_v1` while HIGH search is enabled, but protected search **query routing remains request-path-inactive**.
+
+The reconciler acquires the same MongoDB maintenance writer lease used by foreground memo mutations before touching legacy search, protected HIGH search, or cache projections. It releases that lease before acknowledging the durable projection intent. HIGH projection failure or lease-release failure therefore leaves the outbox intent available for idempotent retry, and the staged reindex barrier drains/blocks both foreground mutations and background projection retries.
 
 A staged operator command, `reindex_high_search_staged`, can now compose that runtime with the MongoDB authoritative source, the shared maintenance barrier, and protected Manticore reindex/convergence verification. Its `--apply` mode requires explicit confirmation that all memo writers participate in the barrier and that protected request routing is still inactive. While that offline permit is held, the staging runner resets the isolated `memos_high_v1` projection before the full rebuild so repeated validation runs cannot retain rows for memos deleted since an earlier staged run. Because there is no protected routing generation to switch yet, successful staging performs no request cutover; it only revalidates and releases the maintenance permit after convergence succeeds.
 
