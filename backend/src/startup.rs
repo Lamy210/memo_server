@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::{io, sync::Arc, time::Duration};
 
 use actix_web::{
     middleware,
@@ -7,8 +7,11 @@ use actix_web::{
 };
 
 use crate::{
-    application::{health::HealthService, memo::service::MemoService},
-    config::AppConfig,
+    application::{
+        health::HealthService, high_search_shadow::HighSearchShadowObserver,
+        memo::service::MemoService,
+    },
+    config::{AppConfig, HighSearchShadowConfig},
     infrastructure::{
         auth::AuthService, high_search_aws_runtime::HighSearchRuntimeHandle,
         persistence::stack::PersistenceStack, reconciliation::ProjectionReconciler,
@@ -36,6 +39,28 @@ impl Application {
             .await
             .map_err(|error| io::Error::other(error.to_string()))?;
 
+        let high_search_shadow = match config.high_search_shadow {
+            HighSearchShadowConfig::Disabled => None,
+            HighSearchShadowConfig::Observe {
+                max_concurrency,
+                timeout_ms,
+            } => {
+                let reader = high_search_runtime.query_reader().ok_or_else(|| {
+                    io::Error::other(
+                        "HIGH search shadow is enabled but no protected query reader is available",
+                    )
+                })?;
+                Some(Arc::new(
+                    HighSearchShadowObserver::new(
+                        reader,
+                        max_concurrency,
+                        Duration::from_millis(timeout_ms),
+                    )
+                    .map_err(|error| io::Error::other(error.to_string()))?,
+                ))
+            }
+        };
+
         let health_service = Data::new(HealthService::new(
             persistence.authoritative_health.clone(),
             persistence.cache_health.clone(),
@@ -58,6 +83,7 @@ impl Application {
         let memo_service = Data::new(MemoService::new(
             memo_repository,
             persistence.mutation_guard,
+            high_search_shadow,
         ));
         let auth_service = Data::new(AuthService::new(config.auth));
         let port = config.port;
