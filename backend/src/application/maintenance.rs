@@ -5,8 +5,9 @@ use crate::error::AppResult;
 /// Permit held for the complete lifetime of one memo mutation.
 ///
 /// Implementations may use this to participate in a distributed maintenance
-/// barrier. The permit must not be released until the authoritative mutation
-/// and its synchronous reconciliation attempt have completed.
+/// barrier. The permit must not be released until the guarded mutation or
+/// reconciliation work has completed. Foreground memo mutations and background
+/// projection reconciliation intentionally share this boundary.
 #[async_trait]
 pub trait MemoMutationPermit: Send + Sync {
     async fn release(self: Box<Self>) -> AppResult<()>;
