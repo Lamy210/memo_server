@@ -272,6 +272,9 @@ assets:
         reindex_operator_requires_apply: true
         reindex_operator_requires_writer_guard_confirmation: true
         reindex_operator_requires_request_path_inactive_confirmation: true
+        staged_reindex_projection_reset: required_before_full_rebuild
+        staged_reindex_reset_scope: protected_projection_only
+        staged_reindex_reset_requires_request_path_inactive: true
         reindex_cutover_behavior: no_op_while_request_path_inactive
         reindex_write_freeze_required: true
       legacy_plaintext_projection_active: true
