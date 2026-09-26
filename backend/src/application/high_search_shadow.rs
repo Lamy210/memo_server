@@ -95,13 +95,7 @@ impl HighSearchShadowObserver {
             let _permit = permit;
             match timeout(
                 timeout_duration,
-                reader.search_memo_ids(
-                    owner_partition,
-                    &query,
-                    tag.as_deref(),
-                    page,
-                    limit,
-                ),
+                reader.search_memo_ids(owner_partition, &query, tag.as_deref(), page, limit),
             )
             .await
             {
@@ -109,9 +103,7 @@ impl HighSearchShadowObserver {
                     if result.total == legacy_total {
                         counters.total_matches.fetch_add(1, Ordering::Relaxed);
                     } else {
-                        counters
-                            .total_mismatches
-                            .fetch_add(1, Ordering::Relaxed);
+                        counters.total_mismatches.fetch_add(1, Ordering::Relaxed);
                     }
                 }
                 Ok(Err(_)) => {
@@ -183,16 +175,12 @@ mod tests {
                 block.notified().await;
             }
 
-            self.result
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap_or_else(|| {
-                    Ok(HighSearchProjectionPage {
-                        memo_ids: Vec::new(),
-                        total: 0,
-                    })
+            self.result.lock().unwrap().take().unwrap_or_else(|| {
+                Ok(HighSearchProjectionPage {
+                    memo_ids: Vec::new(),
+                    total: 0,
                 })
+            })
         }
     }
 
@@ -213,12 +201,9 @@ mod tests {
             block: None,
         });
 
-        assert!(HighSearchShadowObserver::new(
-            reader.clone(),
-            0,
-            Duration::from_millis(10),
-        )
-        .is_err());
+        assert!(
+            HighSearchShadowObserver::new(reader.clone(), 0, Duration::from_millis(10),).is_err()
+        );
         assert!(HighSearchShadowObserver::new(reader, 1, Duration::ZERO).is_err());
     }
 
@@ -231,10 +216,16 @@ mod tests {
             }))),
             block: None,
         });
-        let observer =
-            HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
+        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
 
-        observer.observe("private query", Some("private-tag"), Uuid::new_v4(), 1, 20, 7);
+        observer.observe(
+            "private query",
+            Some("private-tag"),
+            Uuid::new_v4(),
+            1,
+            20,
+            7,
+        );
         wait_for_completion(&observer).await;
 
         assert_eq!(
@@ -257,8 +248,7 @@ mod tests {
             result: Mutex::new(None),
             block: Some(block.clone()),
         });
-        let observer =
-            HighSearchShadowObserver::new(reader, 1, Duration::from_secs(1)).unwrap();
+        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_secs(1)).unwrap();
 
         observer.observe("first", None, Uuid::new_v4(), 1, 20, 0);
         observer.observe("second", None, Uuid::new_v4(), 1, 20, 0);
