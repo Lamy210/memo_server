@@ -7,11 +7,11 @@ use crate::{
     },
     config::{AppConfig, AuthoritativeBackend, HighSearchConfig, SearchBackend},
     error::{AppError, AppResult},
+    infrastructure::high_search_maintenance_mongodb::MongoHighSearchMaintenanceGuard,
 };
 
 use super::{
     elasticsearch::ElasticsearchClient,
-    high_search_maintenance_mongodb::MongoHighSearchMaintenanceGuard,
     manticore::ManticoreClient,
     mongodb::MongoDbAuthoritativeStore,
     ports::{MemoAuthoritativeStore, MemoCache, MemoSearchProjection},
