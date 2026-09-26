@@ -1,0 +1,78 @@
+{
+  "analysis_version": "icu4x-2.3.0-uax29-17-nfkc-fold-dict-v1",
+  "documents": [
+    {
+      "id": "en-snow",
+      "title": "Snow Memo",
+      "content": "Private notes for winter trip",
+      "tags": ["Travel", "Personal"]
+    },
+    {
+      "id": "en-security",
+      "title": "Security Review",
+      "content": "AWS KMS key rotation checklist",
+      "tags": ["High Priority", "Security"]
+    },
+    {
+      "id": "ja-hello",
+      "title": "こんにちは世界",
+      "content": "雪 メモ",
+      "tags": ["日本語"]
+    },
+    {
+      "id": "mixed-width",
+      "title": "ＨＥＬＬＯ Memo",
+      "content": "Snow snow",
+      "tags": ["ＴＡＧ"]
+    }
+  ],
+  "queries": [
+    {
+      "name": "english_two_term_and",
+      "query": "snow memo",
+      "tag": null,
+      "expected_document_ids": ["en-snow", "mixed-width"]
+    },
+    {
+      "name": "english_and_narrows_results",
+      "query": "snow private",
+      "tag": null,
+      "expected_document_ids": ["en-snow"]
+    },
+    {
+      "name": "width_casefold_with_exact_tag",
+      "query": "hello",
+      "tag": "tag",
+      "expected_document_ids": ["mixed-width"]
+    },
+    {
+      "name": "japanese_dictionary_terms",
+      "query": "こんにちは世界",
+      "tag": null,
+      "expected_document_ids": ["ja-hello"]
+    },
+    {
+      "name": "tag_only_japanese",
+      "query": "",
+      "tag": "日本語",
+      "expected_document_ids": ["ja-hello"]
+    },
+    {
+      "name": "security_multi_term_and",
+      "query": "kms rotation",
+      "tag": null,
+      "expected_document_ids": ["en-security"]
+    },
+    {
+      "name": "missing_term_returns_none",
+      "query": "snow missing",
+      "tag": null,
+      "expected_document_ids": []
+    }
+  ],
+  "expected_metrics": {
+    "document_content_term_counts_sorted": [3, 4, 7, 7],
+    "query_content_term_counts_sorted": [0, 1, 2, 2, 2, 2, 2],
+    "max_normalized_term_bytes": 15
+  }
+}

@@ -136,6 +136,37 @@ mod tests {
         expected_tag_term: Option<String>,
     }
 
+    #[derive(Debug, Deserialize)]
+    struct RepresentativeCorpus {
+        analysis_version: String,
+        documents: Vec<RepresentativeDocument>,
+        queries: Vec<RepresentativeQuery>,
+        expected_metrics: RepresentativeMetrics,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RepresentativeDocument {
+        id: String,
+        title: String,
+        content: String,
+        tags: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct RepresentativeQuery {
+        name: String,
+        query: String,
+        tag: Option<String>,
+        expected_document_ids: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    struct RepresentativeMetrics {
+        document_content_term_counts_sorted: Vec<usize>,
+        query_content_term_counts_sorted: Vec<usize>,
+        max_normalized_term_bytes: usize,
+    }
+
     fn memo(title: &str, content: &str, tags: Vec<&str>) -> Memo {
         Memo {
             id: Uuid::from_u128(7),
@@ -180,6 +211,106 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn representative_workload_preserves_index_query_compatibility_and_budgets() {
+        let corpus: RepresentativeCorpus = serde_json::from_str(include_str!(
+            "../../testdata/high_search_representative_corpus_v1.json"
+        ))
+        .unwrap();
+        let analyzer = IcuHighSearchTextAnalyzer::new();
+
+        assert_eq!(corpus.analysis_version, ICU_HIGH_SEARCH_ANALYSIS_VERSION);
+
+        let mut analyzed_documents = Vec::with_capacity(corpus.documents.len());
+        let mut document_content_term_counts = Vec::with_capacity(corpus.documents.len());
+        let mut query_content_term_counts = Vec::with_capacity(corpus.queries.len());
+        let mut max_normalized_term_bytes = 0_usize;
+
+        for (index, document) in corpus.documents.iter().enumerate() {
+            let memo = Memo {
+                id: Uuid::from_u128(index as u128 + 1),
+                title: document.title.clone(),
+                content: document.content.clone(),
+                tags: document.tags.clone(),
+                user_id: Uuid::from_u128(100),
+                created_at: Utc.timestamp_millis_opt(1_700_000_000_000).unwrap(),
+                updated_at: Utc.timestamp_millis_opt(1_700_000_001_000).unwrap(),
+                version: 1,
+            };
+            let analyzed = analyzer.analyze_document(&memo).unwrap_or_else(|error| {
+                panic!("representative document {} failed: {error}", document.id)
+            });
+
+            assert_eq!(analyzed.analysis_version, corpus.analysis_version);
+            document_content_term_counts.push(analyzed.content_terms.len());
+            max_normalized_term_bytes = max_normalized_term_bytes.max(
+                analyzed
+                    .content_terms
+                    .iter()
+                    .chain(&analyzed.tag_terms)
+                    .map(|term| term.len())
+                    .max()
+                    .unwrap_or(0),
+            );
+            analyzed_documents.push((document.id.as_str(), analyzed));
+        }
+
+        for query in &corpus.queries {
+            let analyzed = analyzer
+                .analyze_query(&query.query, query.tag.as_deref())
+                .unwrap_or_else(|error| {
+                    panic!("representative query {} failed: {error}", query.name)
+                });
+
+            assert_eq!(analyzed.analysis_version, corpus.analysis_version);
+            query_content_term_counts.push(analyzed.content_terms.len());
+            max_normalized_term_bytes = max_normalized_term_bytes.max(
+                analyzed
+                    .content_terms
+                    .iter()
+                    .chain(analyzed.tag_term.iter())
+                    .map(|term| term.len())
+                    .max()
+                    .unwrap_or(0),
+            );
+
+            let mut matched = analyzed_documents
+                .iter()
+                .filter_map(|(document_id, document)| {
+                    let content_matches = analyzed
+                        .content_terms
+                        .iter()
+                        .all(|term| document.content_terms.binary_search(term).is_ok());
+                    let tag_matches = analyzed.tag_term.as_ref().is_none_or(|tag| {
+                        document.tag_terms.iter().any(|candidate| candidate == tag)
+                    });
+                    (content_matches && tag_matches).then_some((*document_id).to_string())
+                })
+                .collect::<Vec<_>>();
+            matched.sort();
+
+            let mut expected = query.expected_document_ids.clone();
+            expected.sort();
+            assert_eq!(
+                matched, expected,
+                "representative HIGH semantics mismatch for query {}",
+                query.name
+            );
+        }
+
+        document_content_term_counts.sort_unstable();
+        query_content_term_counts.sort_unstable();
+
+        assert_eq!(
+            RepresentativeMetrics {
+                document_content_term_counts_sorted: document_content_term_counts,
+                query_content_term_counts_sorted: query_content_term_counts,
+                max_normalized_term_bytes,
+            },
+            corpus.expected_metrics
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # HIGH Search Analysis Contract
 
-Status: ICU4X production candidate staged; corpus/cutover validation pending  
+Status: ICU4X production candidate staged; synthetic representative gate active; production workload/cutover validation pending  
 Last reviewed: 2026-09-23
 
 ## Purpose
@@ -105,7 +105,11 @@ ICU4X's dictionary word segmenter supplies compiled dictionary handling for comp
 
 This remains a **production candidate**, not an activated production analyzer. A versioned synthetic conformance corpus at `backend/testdata/high_search_analysis_corpus_v1.json` locks known normalization/segmentation cases to the analyzer generation and is executed by unit tests. It intentionally contains only repository-owned synthetic strings and is safe to commit.
 
-The synthetic corpus is a compatibility regression gate, **not** representative production-corpus approval. Before runtime cutover, representative Japanese and English memo/query corpora must still be checked for index/query compatibility, recall, term-count distribution, and normalized-term-size distribution. Any change to ICU version, normalization order, segmentation mode, filtering, tag semantics, or expected conformance output requires an explicit review; changes to token semantics require a new global `analysis_version` and a verified reindex.
+The small synthetic conformance corpus is a compatibility regression gate, **not** representative production-corpus approval.
+
+A second repository-owned synthetic representative workload at `backend/testdata/high_search_representative_corpus_v1.json` now exercises end-to-end analyzer semantics across English, Japanese, width/case normalization, exact tags, positive/negative multi-term queries, and tag-only search. CI analyzes both the memo side and query side, requires the expected protected-search result set under AND/exact-tag semantics, and locks the observed document/query term-count distributions plus maximum normalized-term byte length. Because blind-token HMAC preserves equality, this validates analyzer/index/query compatibility without persisting plaintext-derived tokens or requiring KMS/Manticore access.
+
+This representative gate deliberately contains no user data and is suitable for source control. It approves the staged semantic contract and supplies concrete lower-bound sizing evidence for analysis budgets; it does **not** claim that its term distributions represent production traffic. Before runtime cutover, sanitized or generated workload measurements representative of the intended deployment still need to confirm production term-count/term-size distributions and capacity assumptions without committing user content. Any change to ICU version, normalization order, segmentation mode, filtering, tag semantics, or expected corpus output requires an explicit review; changes to token semantics require a new global `analysis_version` and a verified reindex.
 
 References:
 

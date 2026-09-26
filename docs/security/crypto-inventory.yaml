@@ -147,7 +147,19 @@ assets:
           path: backend/testdata/high_search_analysis_corpus_v1.json
           unit_test_gate: true
           user_data: forbidden
-        representative_corpus_validation: pending
+        representative_corpus_validation:
+          status: synthetic_representative_gate
+          path: backend/testdata/high_search_representative_corpus_v1.json
+          ci_gate: true
+          user_data: forbidden
+          languages: [english, japanese]
+          validates:
+            - index_query_term_compatibility
+            - protected_and_semantics
+            - exact_tag_semantics
+            - term_count_distribution
+            - max_normalized_term_bytes
+          production_workload_distribution_validation: pending
         runtime_wired: false
       runtime_configuration:
         mode_default: disabled
