@@ -318,15 +318,8 @@ impl HighSearchQueryReader for HighSearchProjectionService {
         page: usize,
         limit: usize,
     ) -> AppResult<HighSearchProjectionPage> {
-        HighSearchProjectionService::search_memo_ids(
-            self,
-            owner_partition,
-            query,
-            tag,
-            page,
-            limit,
-        )
-        .await
+        HighSearchProjectionService::search_memo_ids(self, owner_partition, query, tag, page, limit)
+            .await
     }
 }
 
