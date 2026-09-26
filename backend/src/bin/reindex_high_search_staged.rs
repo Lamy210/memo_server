@@ -1,8 +1,10 @@
 use std::{env, process::ExitCode};
 
 use memo_app_backend::{
-    config::{AppConfig, AuthoritativeBackend, HighSearchConfig, SearchBackend},
-    infrastructure::high_search_reindex_operator::run_staged_high_search_reindex,
+    config::AppConfig,
+    infrastructure::high_search_reindex_operator::{
+        run_staged_high_search_reindex, validate_staged_high_search_reindex,
+    },
 };
 
 const USAGE: &str = "usage:
@@ -35,7 +37,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let command = parse_command(env::args().skip(1).collect())?;
     let config = load_operator_config()?;
-    validate_operator_config(&config)?;
+    validate_staged_high_search_reindex(&config, command.page_size)?;
 
     println!("mode={:?}", command.mode);
     println!("page_size={}", command.page_size);
@@ -131,19 +133,6 @@ fn load_operator_config() -> Result<AppConfig, Box<dyn std::error::Error>> {
         .collect();
     vars.push(("AUTH_MODE".to_string(), "development".to_string()));
     Ok(AppConfig::from_vars(vars)?)
-}
-
-fn validate_operator_config(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
-    if config.authoritative_backend != AuthoritativeBackend::MongoDb {
-        return Err("AUTHORITATIVE_BACKEND must be mongodb".into());
-    }
-    if config.search_backend != SearchBackend::Manticore {
-        return Err("SEARCH_BACKEND must be manticore".into());
-    }
-    if !matches!(config.high_search, HighSearchConfig::AwsKms { .. }) {
-        return Err("HIGH_SEARCH_MODE must be aws-kms".into());
-    }
-    Ok(())
 }
 
 #[cfg(test)]
