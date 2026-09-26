@@ -211,11 +211,10 @@ impl MongoHighSearchMaintenanceRecovery {
         &self,
         expected: &HighSearchMaintenanceStatus,
     ) -> AppResult<HighSearchMaintenanceStatus> {
-        let mut session = self
-            .client
-            .start_session()
-            .await
-            .map_err(|error| maintenance_db_error("start maintenance recovery session", error))?;
+        let mut session =
+            self.client.start_session().await.map_err(|error| {
+                maintenance_db_error("start maintenance recovery session", error)
+            })?;
         let context = RecoveryContext {
             state: self.state.clone(),
             writers: self.writers.clone(),
