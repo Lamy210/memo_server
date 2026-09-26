@@ -7,8 +7,7 @@ use memo_app_backend::infrastructure::high_search_workload_measurement::{
 const USAGE: &str =
     "usage: measure_high_search_workload --input <sanitized-or-generated-corpus.json>";
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
