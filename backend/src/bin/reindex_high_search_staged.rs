@@ -117,10 +117,7 @@ fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error
     Ok(Command { mode, page_size })
 }
 
-fn set_mode(
-    mode: &mut Option<Mode>,
-    candidate: Mode,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn set_mode(mode: &mut Option<Mode>, candidate: Mode) -> Result<(), Box<dyn std::error::Error>> {
     if mode.replace(candidate).is_some() {
         return Err("choose exactly one of --plan or --apply".into());
     }
