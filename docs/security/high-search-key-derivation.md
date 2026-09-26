@@ -98,6 +98,8 @@ When `aws-kms` is selected, configuration parsing requires all of the following 
 - positive `HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS`,
 - positive `HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES`.
 
+Protected query shadowing is separately opt-in. `HIGH_SEARCH_SHADOW_MODE=observe` is accepted only when the AWS KMS HIGH runtime is enabled and additionally requires positive `HIGH_SEARCH_SHADOW_MAX_CONCURRENCY` and `HIGH_SEARCH_SHADOW_TIMEOUT_MS`. Configuration caps these at 256 concurrent observations and 60,000 ms respectively; shadowing defaults to disabled.
+
 The MongoDB requirement is deliberate: the accepted HIGH storage target, plaintext-to-encrypted staging source, and protected-search reindex source are MongoDB-backed. ScyllaDB remains a migration fallback for deployments that have not completed authoritative cutover, but such deployments cannot claim the staged HIGH search runtime.
 
 There are deliberately no production defaults for key-cache TTL, capacity, sweep cadence, or analysis work budgets. These values remain an explicit deployment/security decision. A fully valid AWS KMS configuration is still rejected when the running binary lacks the `aws-kms-search` build feature, preventing configuration from claiming a capability that was compiled out. This configuration contract does not itself wire HIGH search into request handling.
@@ -165,6 +167,8 @@ The handle retains the stack for the application lifetime and runs the configure
 ## Runtime boundary
 
 The provider/runtime stack is now startup-composed when explicitly enabled. Its protected projection service is also connected to the durable projection outbox/reconciler so create/update/delete events mirror into `memos_high_v1` while HIGH search is enabled, but protected search **query routing remains request-path-inactive**.
+
+An optional shadow observer may use the same protected query reader without changing the response source. It schedules bounded background observations only after the legacy search result has been produced, drops work when its semaphore is saturated, enforces a per-observation timeout, and records only aggregate outcome counters. Shadow failures and timeouts never replace or fail the user-visible legacy result.
 
 The reconciler acquires the same MongoDB maintenance writer lease used by foreground memo mutations before touching legacy search, protected HIGH search, or cache projections. It releases that lease before acknowledging the durable projection intent. HIGH projection failure or lease-release failure therefore leaves the outbox intent available for idempotent retry, and the staged reindex barrier drains/blocks both foreground mutations and background projection retries.
 

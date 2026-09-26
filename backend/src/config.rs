@@ -14,6 +14,8 @@ const MAX_SEARCH_VERSION_ID_CHARS: usize = 128;
 const HIGH_SEARCH_PRF_PREFIX: &str = "prf384-v1:";
 const HIGH_SEARCH_HKDF_PREFIX: &str = "hkdf384-v1:";
 const MAX_KMS_KEY_ARN_BYTES: usize = 2048;
+const MAX_HIGH_SEARCH_SHADOW_CONCURRENCY: usize = 256;
+const MAX_HIGH_SEARCH_SHADOW_TIMEOUT_MS: u64 = 60_000;
 
 // MongoDB database names on Unix/Linux must not contain NUL, space, double quote,
 // dollar sign, dot, forward slash, or backslash.
@@ -57,6 +59,15 @@ pub enum HighSearchConfig {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighSearchShadowConfig {
+    Disabled,
+    Observe {
+        max_concurrency: usize,
+        timeout_ms: u64,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub authoritative_backend: AuthoritativeBackend,
@@ -66,6 +77,7 @@ pub struct AppConfig {
     pub search_backend: SearchBackend,
     pub search_uri: String,
     pub high_search: HighSearchConfig,
+    pub high_search_shadow: HighSearchShadowConfig,
     pub port: u16,
     pub auth: AuthConfig,
 }
@@ -84,6 +96,10 @@ pub enum ConfigError {
     InvalidSearchBackend(String),
     #[error("HIGH_SEARCH_MODE must be `disabled` or `aws-kms`, got `{0}`")]
     InvalidHighSearchMode(String),
+    #[error("HIGH_SEARCH_SHADOW_MODE must be `disabled` or `observe`, got `{0}`")]
+    InvalidHighSearchShadowMode(String),
+    #[error("HIGH_SEARCH_SHADOW_MODE=observe requires HIGH_SEARCH_MODE=aws-kms")]
+    HighSearchShadowRequiresHighSearch,
     #[error("HIGH_SEARCH_MODE=aws-kms requires AUTHORITATIVE_BACKEND=mongodb")]
     HighSearchRequiresMongoDb,
     #[error("HIGH_SEARCH_MODE=aws-kms requires SEARCH_BACKEND=manticore")]
@@ -172,6 +188,7 @@ impl AppConfig {
         };
 
         let high_search = parse_high_search_config(&vars, authoritative_backend, search_backend)?;
+        let high_search_shadow = parse_high_search_shadow_config(&vars, &high_search)?;
 
         let port = match vars.get("PORT") {
             Some(value) => value
@@ -203,6 +220,7 @@ impl AppConfig {
             search_backend,
             search_uri,
             high_search,
+            high_search_shadow,
             port,
             auth,
         })
@@ -282,6 +300,51 @@ fn parse_high_search_config(
             Ok(config)
         }
         _ => Err(ConfigError::InvalidHighSearchMode(mode)),
+    }
+}
+
+fn parse_high_search_shadow_config(
+    vars: &HashMap<String, String>,
+    high_search: &HighSearchConfig,
+) -> Result<HighSearchShadowConfig, ConfigError> {
+    let mode = vars
+        .get("HIGH_SEARCH_SHADOW_MODE")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "disabled".to_string());
+
+    match mode.as_str() {
+        "disabled" => Ok(HighSearchShadowConfig::Disabled),
+        "observe" => {
+            if !matches!(high_search, HighSearchConfig::AwsKms { .. }) {
+                return Err(ConfigError::HighSearchShadowRequiresHighSearch);
+            }
+
+            let max_concurrency = parse_positive_high_search_setting::<usize>(
+                vars,
+                "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY",
+            )?;
+            let timeout_ms =
+                parse_positive_high_search_setting::<u64>(vars, "HIGH_SEARCH_SHADOW_TIMEOUT_MS")?;
+
+            if max_concurrency > MAX_HIGH_SEARCH_SHADOW_CONCURRENCY {
+                return Err(ConfigError::InvalidHighSearchSetting(
+                    "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY",
+                    max_concurrency.to_string(),
+                ));
+            }
+            if timeout_ms > MAX_HIGH_SEARCH_SHADOW_TIMEOUT_MS {
+                return Err(ConfigError::InvalidHighSearchSetting(
+                    "HIGH_SEARCH_SHADOW_TIMEOUT_MS",
+                    timeout_ms.to_string(),
+                ));
+            }
+
+            Ok(HighSearchShadowConfig::Observe {
+                max_concurrency,
+                timeout_ms,
+            })
+        }
+        _ => Err(ConfigError::InvalidHighSearchShadowMode(mode)),
     }
 }
 

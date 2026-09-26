@@ -77,6 +77,18 @@ pub trait HighSearchProjectionSink: Send + Sync {
     async fn delete_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()>;
 }
 
+#[async_trait::async_trait]
+pub trait HighSearchQueryReader: Send + Sync {
+    async fn search_memo_ids(
+        &self,
+        owner_partition: Uuid,
+        query: &str,
+        tag: Option<&str>,
+        page: usize,
+        limit: usize,
+    ) -> AppResult<HighSearchProjectionPage>;
+}
+
 /// Application orchestration for the protected HIGH search projection.
 ///
 /// This service is intentionally independent of Manticore, HMAC, and concrete
@@ -293,6 +305,21 @@ impl HighSearchProjectionSink for HighSearchProjectionService {
 
     async fn delete_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
         HighSearchProjectionService::delete_memo(self, owner_partition, memo_id).await
+    }
+}
+
+#[async_trait::async_trait]
+impl HighSearchQueryReader for HighSearchProjectionService {
+    async fn search_memo_ids(
+        &self,
+        owner_partition: Uuid,
+        query: &str,
+        tag: Option<&str>,
+        page: usize,
+        limit: usize,
+    ) -> AppResult<HighSearchProjectionPage> {
+        HighSearchProjectionService::search_memo_ids(self, owner_partition, query, tag, page, limit)
+            .await
     }
 }
 

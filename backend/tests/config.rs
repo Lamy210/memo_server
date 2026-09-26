@@ -1,5 +1,6 @@
 use memo_app_backend::config::{
-    AppConfig, AuthConfig, AuthoritativeBackend, ConfigError, HighSearchConfig, SearchBackend,
+    AppConfig, AuthConfig, AuthoritativeBackend, ConfigError, HighSearchConfig,
+    HighSearchShadowConfig, SearchBackend,
 };
 
 fn development_vars() -> Vec<(String, String)> {
@@ -18,6 +19,7 @@ fn uses_service_defaults_in_explicit_development_mode() {
     assert_eq!(config.search_backend, SearchBackend::Elasticsearch);
     assert_eq!(config.search_uri, "http://127.0.0.1:9200");
     assert_eq!(config.high_search, HighSearchConfig::Disabled);
+    assert_eq!(config.high_search_shadow, HighSearchShadowConfig::Disabled);
     assert_eq!(config.port, 8080);
     assert_eq!(config.auth, AuthConfig::Development);
 }
@@ -201,6 +203,110 @@ fn high_search_is_disabled_by_default_and_ignores_staged_settings() {
     .expect("staged HIGH search settings must not activate without an explicit mode");
 
     assert_eq!(config.high_search, HighSearchConfig::Disabled);
+}
+
+#[test]
+fn high_search_shadow_is_disabled_by_default() {
+    let config = AppConfig::from_vars(development_vars())
+        .expect("HIGH search shadow must remain disabled unless explicitly enabled");
+
+    assert_eq!(config.high_search_shadow, HighSearchShadowConfig::Disabled);
+}
+
+#[test]
+fn high_search_shadow_rejects_unknown_mode() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        ("HIGH_SEARCH_SHADOW_MODE".to_string(), "magic".to_string()),
+    ])
+    .expect_err("unknown HIGH search shadow modes must fail closed");
+
+    assert_eq!(
+        error,
+        ConfigError::InvalidHighSearchShadowMode("magic".to_string())
+    );
+}
+
+#[test]
+fn high_search_shadow_requires_enabled_high_search() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        ("HIGH_SEARCH_SHADOW_MODE".to_string(), "observe".to_string()),
+    ])
+    .expect_err("shadow observation must not run without the protected HIGH runtime");
+
+    assert_eq!(error, ConfigError::HighSearchShadowRequiresHighSearch);
+}
+
+#[cfg(feature = "aws-kms-search")]
+#[test]
+fn high_search_shadow_requires_explicit_positive_bounds() {
+    let mut vars = high_search_aws_vars();
+    vars.push(("HIGH_SEARCH_SHADOW_MODE".to_string(), "observe".to_string()));
+
+    let error = AppConfig::from_vars(vars.clone())
+        .expect_err("shadow observation requires explicit bounded concurrency");
+    assert_eq!(
+        error,
+        ConfigError::MissingHighSearchSetting("HIGH_SEARCH_SHADOW_MAX_CONCURRENCY")
+    );
+
+    vars.push((
+        "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY".to_string(),
+        "4".to_string(),
+    ));
+    let error = AppConfig::from_vars(vars.clone())
+        .expect_err("shadow observation requires an explicit timeout");
+    assert_eq!(
+        error,
+        ConfigError::MissingHighSearchSetting("HIGH_SEARCH_SHADOW_TIMEOUT_MS")
+    );
+
+    vars.push((
+        "HIGH_SEARCH_SHADOW_TIMEOUT_MS".to_string(),
+        "250".to_string(),
+    ));
+    let config =
+        AppConfig::from_vars(vars).expect("complete HIGH search shadow bounds should be accepted");
+
+    assert_eq!(
+        config.high_search_shadow,
+        HighSearchShadowConfig::Observe {
+            max_concurrency: 4,
+            timeout_ms: 250,
+        }
+    );
+}
+
+#[cfg(feature = "aws-kms-search")]
+#[test]
+fn high_search_shadow_rejects_excessive_resource_bounds() {
+    for (name, value) in [
+        ("HIGH_SEARCH_SHADOW_MAX_CONCURRENCY", "257"),
+        ("HIGH_SEARCH_SHADOW_TIMEOUT_MS", "60001"),
+    ] {
+        let mut vars = high_search_aws_vars();
+        vars.extend([
+            ("HIGH_SEARCH_SHADOW_MODE".to_string(), "observe".to_string()),
+            (
+                "HIGH_SEARCH_SHADOW_MAX_CONCURRENCY".to_string(),
+                "4".to_string(),
+            ),
+            (
+                "HIGH_SEARCH_SHADOW_TIMEOUT_MS".to_string(),
+                "250".to_string(),
+            ),
+        ]);
+        vars.iter_mut().find(|(key, _)| key == name).unwrap().1 = value.to_string();
+
+        let error = AppConfig::from_vars(vars)
+            .expect_err("HIGH search shadow resource bounds must be capped");
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidHighSearchSetting(setting, _) if setting == name
+        ));
+    }
 }
 
 #[cfg(feature = "aws-kms-search")]

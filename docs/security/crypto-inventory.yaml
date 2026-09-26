@@ -152,6 +152,13 @@ assets:
       runtime_configuration:
         mode_default: disabled
         explicit_enable_value: aws-kms
+        query_shadow_mode_default: disabled
+        query_shadow_observe_value: observe
+        query_shadow_requires_high_search_enabled: true
+        query_shadow_max_concurrency_required_positive: true
+        query_shadow_max_concurrency_cap: 256
+        query_shadow_timeout_ms_required_positive: true
+        query_shadow_timeout_ms_cap: 60000
         aws_kms_build_feature_required: aws-kms-search
         build_feature_mismatch_behavior: fail_closed
         mongodb_authoritative_required_when_enabled: true
@@ -282,6 +289,13 @@ assets:
         mutation_mirror_failure_behavior: durable_intent_retry
         reconciler_maintenance_guard: shared_mongodb_writer_lease
         reconciler_ack_after_lease_release: true
+        query_shadow_observer: opt_in_bounded_best_effort
+        query_shadow_user_response_influence: forbidden
+        query_shadow_comparison: aggregate_total_only
+        query_shadow_plaintext_logging: forbidden
+        query_shadow_result_id_logging: forbidden
+        query_shadow_capacity_behavior: drop_observation
+        query_shadow_timeout_behavior: count_and_discard
         query_request_path_installed: false
       legacy_plaintext_projection_active: true
       runtime_eligible: false

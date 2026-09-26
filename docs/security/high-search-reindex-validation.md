@@ -19,7 +19,7 @@ blind-token projection
 memos_high_v1 in Manticore
 ```
 
-The command uses the same MongoDB maintenance barrier as memo mutations, clears the derived-key cache, resets the isolated `memos_high_v1` protected projection, performs a bounded full rebuild, verifies source/projection convergence, revalidates the maintenance permit, and explicitly releases it. Resetting the projection is necessary because normal HIGH projection mutation wiring is not installed yet; without it, a memo deleted after an earlier staged run could otherwise remain as a stale protected row.
+The command uses the same MongoDB maintenance barrier as memo mutations and background projection reconciliation, clears the derived-key cache, resets the isolated `memos_high_v1` protected projection, performs a bounded full rebuild, verifies source/projection convergence, revalidates the maintenance permit, and explicitly releases it. The normal outbox/reconciler now mirrors HIGH projection mutations when the runtime is enabled; the explicit reset remains part of staged full-rebuild validation so the operator starts from a known empty protected generation while the shared barrier excludes foreground and background writers.
 
 It does **not** install SEARCH-HIGH-1 into the HTTP request path and does not perform a production routing cutover.
 
