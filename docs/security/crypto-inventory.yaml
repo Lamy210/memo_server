@@ -242,7 +242,13 @@ assets:
         cache_clear_on_failure: true
         offline_window_recheck_after_reindex: permit_lease_revalidation
         traffic_resume_owned_by_operator: true
-        concrete_maintenance_guard: not_implemented
+        concrete_maintenance_guard: mongodb_transactional_gate_staged
+        maintenance_gate_scope: shared_mongodb_singleton
+        mutation_writer_leases: create_update_delete
+        writer_lease_auto_expiry: forbidden_fail_closed
+        maintenance_drain: wait_for_all_writer_leases
+        maintenance_release: explicit_async
+        protected_search_gate: pending_request_path_installation
       long_lived_search_root_process_exposure: forbidden
       production_search_key_provider: not_implemented
       protected_projection:
