@@ -246,6 +246,8 @@ assets:
         maintenance_gate_scope: shared_mongodb_singleton
         mutation_writer_leases: create_update_delete
         writer_lease_auto_expiry: forbidden_fail_closed
+        abrupt_writer_drop: stale_lease_fail_closed
+        abrupt_offline_permit_drop: barrier_remains_closed
         maintenance_drain: wait_for_all_writer_leases
         maintenance_release: explicit_async
         protected_search_gate: pending_request_path_installation
