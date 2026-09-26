@@ -203,11 +203,9 @@ impl MongoHighSearchMaintenanceGuard {
                 holder_token,
                 released: false,
             }),
-            Err(error) if error.get_custom::<MaintenanceActive>().is_some() => {
-                Err(AppError::Conflict(
-                    "HIGH search maintenance window is already active".into(),
-                ))
-            }
+            Err(error) if error.get_custom::<MaintenanceActive>().is_some() => Err(
+                AppError::Conflict("HIGH search maintenance window is already active".into()),
+            ),
             Err(error) => Err(maintenance_db_error(
                 "acquire HIGH search maintenance barrier",
                 error,
