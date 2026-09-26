@@ -9,9 +9,7 @@ use std::{
 use tokio::{task::JoinHandle, time::sleep};
 
 use crate::{
-    application::crypto_search_orchestration::{
-        HighSearchProjectionSink, HighSearchQueryReader,
-    },
+    application::crypto_search_orchestration::{HighSearchProjectionSink, HighSearchQueryReader},
     config::HighSearchConfig,
     error::{AppError, AppResult},
 };
