@@ -759,6 +759,70 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
         self.current_query_route().await
     }
 
+    async fn current_memo_route(&self) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+        let state = self
+            .state
+            .find_one(doc! {
+                "_id": STATE_ID,
+                "mode": MODE_MAINTENANCE,
+                "holder_token": self.holder_token.clone(),
+            })
+            .await
+            .map_err(|error| maintenance_db_error("read HIGH memo authoritative route", error))?
+            .ok_or_else(|| {
+                AppError::Conflict("HIGH search maintenance barrier ownership was lost".into())
+            })?;
+        app_memo_route_snapshot(&state)
+    }
+
+    async fn switch_memo_route(
+        &self,
+        expected: HighMemoAuthoritativeRouteSnapshot,
+        target: HighMemoAuthoritativeRoute,
+    ) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+        if expected.generation < 0 || expected.generation == i64::MAX {
+            return Err(AppError::Conflict(
+                "HIGH memo authoritative route generation cannot advance safely".into(),
+            ));
+        }
+
+        if target == expected.route {
+            let current = self.current_memo_route().await?;
+            if current == expected {
+                return Ok(current);
+            }
+            return Err(AppError::Conflict(
+                "HIGH memo authoritative route changed before idempotent cutover validation".into(),
+            ));
+        }
+
+        let update = self
+            .state
+            .update_one(
+                doc! {
+                    "_id": STATE_ID,
+                    "mode": MODE_MAINTENANCE,
+                    "holder_token": self.holder_token.clone(),
+                    "memo_route": expected.route.as_persisted_str(),
+                    "memo_route_generation": expected.generation,
+                },
+                doc! {
+                    "$set": { "memo_route": target.as_persisted_str() },
+                    "$inc": { "memo_route_generation": 1_i64 },
+                },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("switch HIGH memo authoritative route", error))?;
+
+        if update.matched_count != 1 {
+            return Err(AppError::Conflict(
+                "HIGH memo authoritative route changed before cutover".into(),
+            ));
+        }
+
+        self.current_memo_route().await
+    }
+
     async fn release(self: Box<Self>) -> AppResult<()> {
         let result = self
             .state
