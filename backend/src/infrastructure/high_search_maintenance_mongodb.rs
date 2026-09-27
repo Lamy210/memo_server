@@ -1010,6 +1010,13 @@ mod tests {
             .await
             .unwrap();
         let first_writer = guard.acquire_mutation().await.unwrap();
+        assert_eq!(
+            first_writer.memo_route_snapshot(),
+            HighMemoAuthoritativeRouteSnapshot {
+                route: HighMemoAuthoritativeRoute::Plaintext,
+                generation: 0,
+            }
+        );
         let first_query = guard.acquire_query().await.unwrap();
         assert_eq!(
             first_query.route_snapshot(),
@@ -1088,6 +1095,48 @@ mod tests {
             Err(AppError::Conflict(_))
         ));
 
+        let plaintext_memo_route = maintenance.current_memo_route().await.unwrap();
+        assert_eq!(
+            plaintext_memo_route,
+            HighMemoAuthoritativeRouteSnapshot {
+                route: HighMemoAuthoritativeRoute::Plaintext,
+                generation: 0,
+            }
+        );
+        let encrypted_memo_route = maintenance
+            .switch_memo_route(
+                plaintext_memo_route,
+                HighMemoAuthoritativeRoute::Encrypted,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            encrypted_memo_route,
+            HighMemoAuthoritativeRouteSnapshot {
+                route: HighMemoAuthoritativeRoute::Encrypted,
+                generation: 1,
+            }
+        );
+        assert_eq!(
+            maintenance
+                .switch_memo_route(
+                    encrypted_memo_route,
+                    HighMemoAuthoritativeRoute::Encrypted,
+                )
+                .await
+                .unwrap(),
+            encrypted_memo_route
+        );
+        assert!(matches!(
+            maintenance
+                .switch_memo_route(
+                    plaintext_memo_route,
+                    HighMemoAuthoritativeRoute::Plaintext,
+                )
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+
         assert!(matches!(
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
@@ -1099,6 +1148,13 @@ mod tests {
 
         maintenance.release().await.unwrap();
         let writer_after_release = guard.acquire_mutation().await.unwrap();
+        assert_eq!(
+            writer_after_release.memo_route_snapshot(),
+            HighMemoAuthoritativeRouteSnapshot {
+                route: HighMemoAuthoritativeRoute::Encrypted,
+                generation: 1,
+            }
+        );
         writer_after_release.release().await.unwrap();
         let query_after_release = guard.acquire_query().await.unwrap();
         assert_eq!(
@@ -1138,6 +1194,11 @@ mod tests {
         assert_eq!(open_snapshot.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(open_snapshot.query_route(), HighSearchQueryRoute::Legacy);
         assert_eq!(open_snapshot.query_route_generation(), 0);
+        assert_eq!(
+            open_snapshot.memo_route(),
+            HighMemoAuthoritativeRoute::Plaintext
+        );
+        assert_eq!(open_snapshot.memo_route_generation(), 0);
         assert_eq!(open_snapshot.active_writer_leases(), 1);
         assert_eq!(open_snapshot.active_query_leases(), 1);
 
@@ -1161,10 +1222,25 @@ mod tests {
         assert_eq!(after_stale_route.active_writer_leases(), 1);
         assert_eq!(after_stale_route.active_query_leases(), 1);
 
+        let mut stale_memo_route_snapshot = open_snapshot.clone();
+        stale_memo_route_snapshot.memo_route_generation += 1;
+        assert!(matches!(
+            recovery.recover_stale_state(&stale_memo_route_snapshot).await,
+            Err(AppError::Conflict(_))
+        ));
+        let after_stale_memo_route = recovery.inspect().await.unwrap();
+        assert_eq!(after_stale_memo_route.active_writer_leases(), 1);
+        assert_eq!(after_stale_memo_route.active_query_leases(), 1);
+
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(recovered.query_route(), HighSearchQueryRoute::Legacy);
         assert_eq!(recovered.query_route_generation(), 0);
+        assert_eq!(
+            recovered.memo_route(),
+            HighMemoAuthoritativeRoute::Plaintext
+        );
+        assert_eq!(recovered.memo_route_generation(), 0);
         assert_eq!(recovered.active_writer_leases(), 0);
         assert_eq!(recovered.active_query_leases(), 0);
         assert_eq!(recovered.writer_epoch(), open_snapshot.writer_epoch() + 1);
