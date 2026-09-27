@@ -152,6 +152,11 @@ fn print_status(
 ) {
     println!("{label}.mode={}", status.mode());
     println!("{label}.writer_epoch={}", status.writer_epoch());
+    println!("{label}.query_route={}", status.query_route());
+    println!(
+        "{label}.query_route_generation={}",
+        status.query_route_generation()
+    );
     println!(
         "{label}.active_writer_leases={}",
         status.active_writer_leases()
