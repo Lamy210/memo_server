@@ -124,10 +124,7 @@ impl MemoCache for HighMemoCiphertextCacheAdapter {
         // HIGH cache existence is an integrity-sensitive read. A raw Redis key
         // is not sufficient evidence because the envelope may be corrupt,
         // cross-identity, or undecryptable under the active key ring.
-        Ok(self
-            .get_memo(owner_partition, memo_id)
-            .await?
-            .is_some())
+        Ok(self.get_memo(owner_partition, memo_id).await?.is_some())
     }
 }
 
