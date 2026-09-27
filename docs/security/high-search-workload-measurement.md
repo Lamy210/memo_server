@@ -69,3 +69,58 @@ Use the report together with load testing to choose explicit deployment values f
 Do not set these directly to a single corpus maximum without considering headroom, rejection policy, KMS/HMAC cost, projection size, and expected growth. Record the reviewed values in deployment configuration and retain only the aggregate report where policy permits.
 
 The committed representative corpus is a semantic CI gate. This measurement tool is the sizing mechanism for production-like sanitized/generated workloads. Neither one alone authorizes request-path cutover.
+
+
+## Reviewed approval manifest
+
+Measurement output does not authorize deployment by itself. After the corpus and projection load test have been reviewed, record the result in a separate approval JSON artifact using schema `high-search-workload-approval-v1`.
+
+Example shape:
+
+```json
+{
+  "schema_version": "high-search-workload-approval-v1",
+  "approval_id": "prod-like-2026-09-27",
+  "workload_source": "sanitized_production_like",
+  "production_like_corpus_reviewed": true,
+  "projection_load_test_completed": true,
+  "measurement": {
+    "analysis_version": "icu4x-2.3.0-uax29-17-nfkc-fold-dict-v1",
+    "documents": 1000,
+    "queries": 1000,
+    "documents_with_zero_content_terms": 0,
+    "queries_with_zero_content_terms": 2,
+    "queries_with_tag": 200,
+    "document_content_terms": {"samples":1000,"min":1,"p50":8,"p95":40,"max":70},
+    "document_tag_terms": {"samples":1000,"min":0,"p50":2,"p95":5,"max":8},
+    "query_content_terms": {"samples":1000,"min":0,"p50":2,"p95":8,"max":12},
+    "normalized_term_bytes": {"samples":20000,"min":1,"p50":6,"p95":24,"max":64}
+  },
+  "selected_budgets": {
+    "max_document_content_terms": 128,
+    "max_query_content_terms": 32,
+    "max_normalized_term_bytes": 128
+  }
+}
+```
+
+The selected budgets must be positive and must not be lower than the measured maxima. The manifest validator also requires the analyzer version to equal the build's current HIGH-search analyzer version.
+
+Validate the artifact alone:
+
+```bash
+cargo run --locked --bin validate_high_search_workload_approval -- \
+  --input /path/to/approval.json
+```
+
+Validate it against the deployment environment as well:
+
+```bash
+cargo run --locked --bin validate_high_search_workload_approval -- \
+  --input /path/to/approval.json \
+  --against-env
+```
+
+`--against-env` parses the normal application configuration and requires the reviewed `HIGH_SEARCH_MAX_DOCUMENT_CONTENT_TERMS`, `HIGH_SEARCH_MAX_QUERY_CONTENT_TERMS`, and `HIGH_SEARCH_MAX_NORMALIZED_TERM_BYTES` values to match the manifest exactly.
+
+The approval file contains aggregate measurements only and should still be handled as deployment-control metadata. It is an operator attestation, not a cryptographic signature and not proof that the input corpus was sanitized correctly. Existing corpus governance and review remain required. A valid approval manifest is a prerequisite artifact for a future protected-query cutover gate; it does not authorize cutover by itself.
