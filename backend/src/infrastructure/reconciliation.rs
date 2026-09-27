@@ -754,8 +754,7 @@ mod tests {
             events: events.clone(),
             fail_release: false,
         });
-        let reconciler =
-            ProjectionReconciler::new(store.clone(), cache, legacy, Some(high), guard);
+        let reconciler = ProjectionReconciler::new(store.clone(), cache, legacy, Some(high), guard);
 
         assert!(reconciler.reconcile_event(&event).await.is_err());
         assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
