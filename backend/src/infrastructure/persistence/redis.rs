@@ -14,17 +14,12 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::MemoCache;
+use super::ports::{
+    LegacyMemoCacheSweepStats, LegacyMemoPlaintextCacheMaintenance, MemoCache,
+};
 
 const LEGACY_CACHE_NAMESPACE: &str = "memo";
 const HIGH_CACHE_NAMESPACE: &str = "memo:high:v1";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct LegacyMemoCacheSweepStats {
-    pub(crate) scanned_candidates: u64,
-    pub(crate) legacy_keys: u64,
-    pub(crate) deleted_keys: u64,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LegacyMemoCacheSweepMode {
@@ -149,22 +144,6 @@ impl RedisCache {
             return None;
         }
         Some((owner_partition, memo_id))
-    }
-
-    pub(crate) async fn inspect_legacy_plaintext_memo_cache(
-        &self,
-        scan_count: usize,
-    ) -> AppResult<LegacyMemoCacheSweepStats> {
-        self.sweep_legacy_plaintext_memo_cache(scan_count, LegacyMemoCacheSweepMode::Inspect)
-            .await
-    }
-
-    pub(crate) async fn purge_legacy_plaintext_memo_cache(
-        &self,
-        scan_count: usize,
-    ) -> AppResult<LegacyMemoCacheSweepStats> {
-        self.sweep_legacy_plaintext_memo_cache(scan_count, LegacyMemoCacheSweepMode::Purge)
-            .await
     }
 
     async fn sweep_legacy_plaintext_memo_cache(
@@ -341,6 +320,25 @@ impl HighEncryptedMemoCache for RedisCache {
     ) -> AppResult<bool> {
         let key = Self::high_cache_key(owner_partition, memo_id);
         self.exists(&key).await
+    }
+}
+
+#[async_trait]
+impl LegacyMemoPlaintextCacheMaintenance for RedisCache {
+    async fn inspect_legacy_plaintext_memo_cache(
+        &self,
+        scan_count: usize,
+    ) -> AppResult<LegacyMemoCacheSweepStats> {
+        self.sweep_legacy_plaintext_memo_cache(scan_count, LegacyMemoCacheSweepMode::Inspect)
+            .await
+    }
+
+    async fn purge_legacy_plaintext_memo_cache(
+        &self,
+        scan_count: usize,
+    ) -> AppResult<LegacyMemoCacheSweepStats> {
+        self.sweep_legacy_plaintext_memo_cache(scan_count, LegacyMemoCacheSweepMode::Purge)
+            .await
     }
 }
 
