@@ -373,11 +373,9 @@ impl MongoHighSearchMaintenanceGuard {
         activity: &'static str,
     ) -> AppResult<MongoMaintenanceActivityPermit> {
         let lease_id = Uuid::new_v4().to_string();
-        let mut session = self
-            .client
-            .start_session()
-            .await
-            .map_err(|error| maintenance_db_error("start maintenance activity lease session", error))?;
+        let mut session = self.client.start_session().await.map_err(|error| {
+            maintenance_db_error("start maintenance activity lease session", error)
+        })?;
         let context = ActivityAcquireContext {
             state: self.state.clone(),
             leases: leases.clone(),
