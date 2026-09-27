@@ -963,6 +963,128 @@ impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
 }
 
 #[async_trait]
+impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
+    async fn find_envelope_by_id(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<Option<HighEncryptedMemoEnvelope>> {
+        let document = self
+            .encrypted_memos
+            .find_one(doc! {
+                "_id": memo_id.to_string(),
+                "owner_partition": owner_partition.to_string(),
+            })
+            .await
+            .map_err(|error| mongo_error("find encrypted MongoDB memo", error))?;
+
+        document
+            .map(EncryptedMemoDocument::try_into_envelope)
+            .transpose()
+    }
+
+    async fn find_all_envelopes_by_owner(
+        &self,
+        owner_partition: Uuid,
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+        let documents: Vec<EncryptedMemoDocument> = self
+            .encrypted_memos
+            .find(doc! { "owner_partition": owner_partition.to_string() })
+            .await
+            .map_err(|error| mongo_error("find encrypted MongoDB memos", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read encrypted MongoDB memo cursor", error))?;
+
+        documents
+            .into_iter()
+            .map(EncryptedMemoDocument::try_into_envelope)
+            .collect()
+    }
+
+    async fn find_many_envelopes_by_ids(
+        &self,
+        owner_partition: Uuid,
+        memo_ids: &[Uuid],
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+        if memo_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let requested_ids = memo_ids.iter().map(Uuid::to_string).collect::<Vec<_>>();
+        let documents: Vec<EncryptedMemoDocument> = self
+            .encrypted_memos
+            .find(doc! {
+                "owner_partition": owner_partition.to_string(),
+                "_id": { "$in": requested_ids },
+            })
+            .await
+            .map_err(|error| mongo_error("find encrypted MongoDB memos by ids", error))?
+            .try_collect()
+            .await
+            .map_err(|error| {
+                mongo_error("read encrypted MongoDB memo hydration cursor", error)
+            })?;
+
+        let mut by_id = HashMap::with_capacity(documents.len());
+        for document in documents {
+            let envelope = document.try_into_envelope()?;
+            by_id.insert(envelope.memo_id, envelope);
+        }
+
+        Ok(memo_ids
+            .iter()
+            .filter_map(|memo_id| by_id.get(memo_id).cloned())
+            .collect())
+    }
+
+    async fn save_envelope_with_projection_intent(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+    ) -> AppResult<ProjectionIntent> {
+        envelope.validate_structure()?;
+        let event = ProjectionIntent::new(
+            envelope.owner_partition,
+            envelope.memo_id,
+            ProjectionTarget::Version(envelope.version),
+        );
+        self.save_encrypted_transaction(envelope, &event).await?;
+        Ok(event)
+    }
+
+    async fn delete_envelope_with_projection_intent(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<ProjectionIntent> {
+        let event = ProjectionIntent::new(owner_partition, memo_id, ProjectionTarget::Deleted);
+        self.delete_encrypted_transaction(owner_partition, memo_id, &event)
+            .await?;
+        Ok(event)
+    }
+
+    async fn enqueue_projection_intent(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+        target: ProjectionTarget,
+    ) -> AppResult<ProjectionIntent> {
+        <Self as MemoAuthoritativeStore>::enqueue_projection_intent(
+            self, user_id, memo_id, target,
+        )
+        .await
+    }
+
+    async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
+        <Self as MemoAuthoritativeStore>::list_projection_intents(self).await
+    }
+
+    async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+        <Self as MemoAuthoritativeStore>::acknowledge_projection_intent(self, event).await
+    }
+}
+
+#[async_trait]
 impl MemoAuthoritativeStore for MongoDbAuthoritativeStore {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
         self.find_by_id_inner(user_id, id).await
