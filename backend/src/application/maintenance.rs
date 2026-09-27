@@ -41,7 +41,6 @@ impl MemoMutationGuard for UnrestrictedMemoMutationGuard {
     }
 }
 
-
 /// Permit held while one protected HIGH search query is in flight.
 ///
 /// Protected reads participate in the same distributed maintenance barrier as
