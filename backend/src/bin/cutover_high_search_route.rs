@@ -70,9 +70,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             print_route("cutover.current", report.current);
             if let Some(stats) = report.reindex {
                 println!("cutover.reindex.source_count={}", stats.source_count);
-                println!("cutover.reindex.projection_count={}", stats.projection_count);
-                println!("cutover.reindex.projected_visited={}", stats.projected_visited);
-                println!("cutover.reindex.verified_visited={}", stats.verified_visited);
+                println!(
+                    "cutover.reindex.projection_count={}",
+                    stats.projection_count
+                );
+                println!(
+                    "cutover.reindex.projected_visited={}",
+                    stats.projected_visited
+                );
+                println!(
+                    "cutover.reindex.verified_visited={}",
+                    stats.verified_visited
+                );
             }
         }
         Command::Legacy {
