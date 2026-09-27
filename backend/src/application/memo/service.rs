@@ -550,7 +550,9 @@ mod tests {
         );
 
         assert!(matches!(
-            service.search_memos("protected", None, user_id, 1, 20).await,
+            service
+                .search_memos("protected", None, user_id, 1, 20)
+                .await,
             Err(AppError::ServiceUnavailable(_))
         ));
         assert_eq!(*events.lock().unwrap(), vec!["acquire", "release"]);
@@ -576,7 +578,9 @@ mod tests {
         );
 
         assert!(matches!(
-            service.search_memos("protected", None, user_id, 1, 20).await,
+            service
+                .search_memos("protected", None, user_id, 1, 20)
+                .await,
             Err(AppError::ServiceUnavailable(_))
         ));
         assert_eq!(*events.lock().unwrap(), vec!["acquire", "release"]);
