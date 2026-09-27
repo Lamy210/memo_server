@@ -387,7 +387,20 @@ mod tests {
         assert_eq!(event.target, ProjectionTarget::Version(1));
 
         let restored = adapter.find_by_id(owner, id).await.unwrap().unwrap();
-        assert_eq!(restored, memo);
+        assert_eq!(restored.id, memo.id);
+        assert_eq!(restored.user_id, memo.user_id);
+        assert_eq!(restored.title, memo.title);
+        assert_eq!(restored.content, memo.content);
+        assert_eq!(restored.tags, memo.tags);
+        assert_eq!(restored.version, memo.version);
+        assert_eq!(
+            restored.created_at.timestamp_millis(),
+            memo.created_at.timestamp_millis()
+        );
+        assert_eq!(
+            restored.updated_at.timestamp_millis(),
+            memo.updated_at.timestamp_millis()
+        );
         assert!(adapter.exists(owner, id).await.unwrap());
         assert_eq!(store.intents.lock().unwrap().len(), 1);
     }
