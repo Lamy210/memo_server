@@ -687,6 +687,7 @@ mod tests {
                 "guard-acquire",
                 "legacy-index",
                 "high-index",
+                "cache-delete",
                 "cache-set",
                 "guard-release",
                 "ack"
@@ -711,6 +712,7 @@ mod tests {
                 "guard-acquire",
                 "legacy-index",
                 "high-index",
+                "cache-delete",
                 "cache-set",
                 "guard-release"
             ]
@@ -737,6 +739,7 @@ mod tests {
                 "guard-acquire",
                 "legacy-index",
                 "high-index",
+                "cache-delete",
                 "cache-set",
                 "guard-release"
             ]
