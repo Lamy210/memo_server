@@ -5,7 +5,7 @@
 // MemoAuthoritativeStore contract without persisting semantic plaintext.
 #![allow(dead_code)]
 
-use std::sync::Arc;
+use std::{cmp::Reverse, sync::Arc};
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -109,7 +109,7 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
 
         // updated_at is intentionally encrypted inside the payload, so the
         // persistence adapter cannot sort on it without leaking new metadata.
-        memos.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        memos.sort_by_key(|memo| Reverse(memo.updated_at));
         Ok(memos)
     }
 
