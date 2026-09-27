@@ -176,10 +176,13 @@ A staged operator command, `reindex_high_search_staged`, can now compose that ru
 
 The committed synthetic representative corpus now gates the staged analyzer's index/query compatibility and protected-search semantics in CI. It intentionally does not satisfy production workload distribution/capacity validation; that remains a deployment-specific cutover prerequisite.
 
+The aggregate workload measurement tool now has a separate reviewed approval-manifest boundary. A valid `high-search-workload-approval-v1` artifact requires explicit corpus-review and projection-load-test confirmations, the current analyzer version, budgets no lower than measured maxima, and can be checked for exact equality with the deployment's `HIGH_SEARCH_MAX_*` settings. This artifact is an operator attestation rather than a cryptographic signature and does not by itself enable protected query routing.
+
 Before SEARCH-HIGH-1 can become DEPLOYED:
 
 - provision/review the staged AWS KMS HMAC_384 key and IAM/key policy, and validate deployment credential-provider behavior,
 - choose deployment TTL/capacity for the staged bounded derived-key cache and wire invalidation into the production rotation protocol,
+- measure a production-like sanitized/generated workload, complete projection load testing, and validate a reviewed workload approval manifest against the deployment HIGH-search budgets,
 - prove rotation/reindex behavior,
 - complete protected projection reindex verification,
 - select and version the production Japanese/English analyzer,
