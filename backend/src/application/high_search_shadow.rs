@@ -325,6 +325,49 @@ mod tests {
         )
     }
 
+    struct FakeQueryGuard {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        reject: bool,
+        fail_release: bool,
+    }
+
+    struct FakeQueryPermit {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        fail_release: bool,
+    }
+
+    #[async_trait]
+    impl HighSearchQueryGuard for FakeQueryGuard {
+        async fn acquire_query(
+            &self,
+        ) -> AppResult<Box<dyn crate::application::maintenance::HighSearchQueryPermit>> {
+            self.events.lock().unwrap().push("query-acquire");
+            if self.reject {
+                return Err(AppError::ServiceUnavailable(
+                    "protected query maintenance active".into(),
+                ));
+            }
+            Ok(Box::new(FakeQueryPermit {
+                events: self.events.clone(),
+                fail_release: self.fail_release,
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl crate::application::maintenance::HighSearchQueryPermit for FakeQueryPermit {
+        async fn release(self: Box<Self>) -> AppResult<()> {
+            self.events.lock().unwrap().push("query-release");
+            if self.fail_release {
+                Err(AppError::ServiceUnavailable(
+                    "protected query lease release failed".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     async fn wait_for_completion(observer: &HighSearchShadowObserver) {
         tokio::time::timeout(Duration::from_millis(100), async {
             while observer.stats().completed == 0 {
@@ -346,6 +389,122 @@ mod tests {
             observer(reader.clone(), 0, Duration::from_millis(10)).is_err()
         );
         assert!(observer(reader, 1, Duration::ZERO).is_err());
+    }
+
+    #[tokio::test]
+    async fn protected_query_is_wrapped_by_maintenance_lease() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let reader = Arc::new(FakeReader {
+            result: Mutex::new(Some(Ok(HighSearchProjectionPage {
+                memo_ids: Vec::new(),
+                total: 0,
+            }))),
+            block: None,
+        });
+        let observer = HighSearchShadowObserver::new(
+            reader,
+            Arc::new(FakeQueryGuard {
+                events: events.clone(),
+                reject: false,
+                fail_release: false,
+            }),
+            1,
+            Duration::from_millis(50),
+        )
+        .unwrap();
+
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
+        wait_for_completion(&observer).await;
+
+        assert_eq!(*events.lock().unwrap(), vec!["query-acquire", "query-release"]);
+        assert_eq!(observer.stats().total_matches, 1);
+        assert_eq!(observer.stats().failures, 0);
+    }
+
+    #[tokio::test]
+    async fn maintenance_rejection_skips_protected_reader() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let reader = Arc::new(FakeReader {
+            result: Mutex::new(Some(Ok(HighSearchProjectionPage {
+                memo_ids: vec![Uuid::new_v4()],
+                total: 1,
+            }))),
+            block: None,
+        });
+        let reader_probe = reader.clone();
+        let observer = HighSearchShadowObserver::new(
+            reader,
+            Arc::new(FakeQueryGuard {
+                events: events.clone(),
+                reject: true,
+                fail_release: false,
+            }),
+            1,
+            Duration::from_millis(50),
+        )
+        .unwrap();
+
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
+        wait_for_completion(&observer).await;
+
+        assert_eq!(*events.lock().unwrap(), vec!["query-acquire"]);
+        assert!(reader_probe.result.lock().unwrap().is_some());
+        assert_eq!(observer.stats().failures, 1);
+        assert_eq!(observer.stats().total_matches, 0);
+    }
+
+    #[tokio::test]
+    async fn query_lease_release_failure_is_counted_as_shadow_failure() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let reader = Arc::new(FakeReader {
+            result: Mutex::new(Some(Ok(HighSearchProjectionPage {
+                memo_ids: Vec::new(),
+                total: 0,
+            }))),
+            block: None,
+        });
+        let observer = HighSearchShadowObserver::new(
+            reader,
+            Arc::new(FakeQueryGuard {
+                events: events.clone(),
+                reject: false,
+                fail_release: true,
+            }),
+            1,
+            Duration::from_millis(50),
+        )
+        .unwrap();
+
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
+        wait_for_completion(&observer).await;
+
+        assert_eq!(*events.lock().unwrap(), vec!["query-acquire", "query-release"]);
+        assert_eq!(observer.stats().failures, 1);
+        assert_eq!(observer.stats().total_matches, 0);
     }
 
     #[tokio::test]
