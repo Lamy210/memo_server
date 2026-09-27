@@ -309,7 +309,7 @@ Forbidden:
 
 Persistence should be disabled unless there is a demonstrated operational need. If persistence is enabled, ciphertext-only invariants still apply.
 
-The staged HIGH cache port accepts only `HighEncryptedMemoEnvelope` values and derives cache keys internally from `owner_partition + memo_id`. Reads reject cached envelopes whose authenticated identity metadata does not match the requested cache key. This adapter is not yet wired into normal request paths; the legacy plaintext cache contract remains active until encrypted authoritative storage and protected search are ready for coordinated cutover.
+The staged HIGH cache port accepts only `HighEncryptedMemoEnvelope` values and derives cache keys internally from `owner_partition + memo_id`. The domain-facing memo-cache contract is now also owner/memo-ID typed rather than accepting arbitrary cache-key strings, so key construction stays inside persistence adapters. The staged `HighMemoCiphertextCacheAdapter` converts domain `Memo` values to authenticated HIGH envelopes before cache writes and decrypts/identity-checks envelopes on cache hits. It rejects missing/zero TTLs and purges invalid cached envelopes before returning a cache failure so callers can fall back to the authoritative store. This adapter is not yet wired into normal request paths; coordinated activation still requires request-path crypto wiring and retirement/purge of legacy plaintext cache entries.
 
 Manticore is a rebuildable projection, never a second source of truth.
 
