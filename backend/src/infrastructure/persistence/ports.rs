@@ -68,16 +68,19 @@ pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
         memo_id: Uuid,
     ) -> AppResult<ProjectionIntent>;
 
-    async fn enqueue_projection_intent(
+    async fn enqueue_encrypted_projection_intent(
         &self,
         user_id: Uuid,
         memo_id: Uuid,
         target: ProjectionTarget,
     ) -> AppResult<ProjectionIntent>;
 
-    async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>>;
+    async fn list_encrypted_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>>;
 
-    async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()>;
+    async fn acknowledge_encrypted_projection_intent(
+        &self,
+        event: &ProjectionIntent,
+    ) -> AppResult<()>;
 }
 
 #[async_trait]
