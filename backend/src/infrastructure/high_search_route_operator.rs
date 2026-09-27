@@ -113,7 +113,7 @@ pub async fn run_protected_high_search_cutover(
         .await;
     }
 
-    let current = switch_prepared_route_fail_closed(
+    let (_, current, stats) = switch_prepared_route_fail_closed(
         ready,
         previous,
         HighSearchQueryRoute::Protected,
@@ -123,7 +123,7 @@ pub async fn run_protected_high_search_cutover(
     Ok(HighSearchRouteChangeReport {
         previous,
         current,
-        reindex: Some(current.2),
+        reindex: Some(stats),
     })
 }
 
