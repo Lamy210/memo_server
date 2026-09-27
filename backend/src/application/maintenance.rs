@@ -40,3 +40,41 @@ impl MemoMutationGuard for UnrestrictedMemoMutationGuard {
         Ok(Box::new(UnrestrictedMemoMutationPermit))
     }
 }
+
+
+/// Permit held while one protected HIGH search query is in flight.
+///
+/// Protected reads participate in the same distributed maintenance barrier as
+/// memo writers so projection reset/reindex cannot race a query that is already
+/// reading the protected generation.
+#[async_trait]
+pub trait HighSearchQueryPermit: Send + Sync {
+    async fn release(self: Box<Self>) -> AppResult<()>;
+}
+
+/// Application boundary that rejects new protected HIGH search queries while a
+/// maintenance window is active and tracks admitted queries until release.
+#[async_trait]
+pub trait HighSearchQueryGuard: Send + Sync {
+    async fn acquire_query(&self) -> AppResult<Box<dyn HighSearchQueryPermit>>;
+}
+
+/// Normal mode used when HIGH search itself is disabled.
+#[derive(Default)]
+pub struct UnrestrictedHighSearchQueryGuard;
+
+struct UnrestrictedHighSearchQueryPermit;
+
+#[async_trait]
+impl HighSearchQueryPermit for UnrestrictedHighSearchQueryPermit {
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl HighSearchQueryGuard for UnrestrictedHighSearchQueryGuard {
+    async fn acquire_query(&self) -> AppResult<Box<dyn HighSearchQueryPermit>> {
+        Ok(Box::new(UnrestrictedHighSearchQueryPermit))
+    }
+}
