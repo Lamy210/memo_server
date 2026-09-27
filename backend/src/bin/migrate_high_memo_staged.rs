@@ -112,20 +112,13 @@ mod tests {
     #[test]
     fn plan_is_the_non_destructive_default() {
         assert_eq!(parse_args(Vec::new()).unwrap(), Command::Plan);
-        assert_eq!(
-            parse_args(vec!["--plan".into()]).unwrap(),
-            Command::Plan
-        );
+        assert_eq!(parse_args(vec!["--plan".into()]).unwrap(), Command::Plan);
     }
 
     #[test]
     fn apply_requires_explicit_reset_confirmation_and_page_size() {
         assert!(parse_args(vec!["--apply".into()]).is_err());
-        assert!(parse_args(vec![
-            "--apply".into(),
-            "--confirm-staging-reset".into(),
-        ])
-        .is_err());
+        assert!(parse_args(vec!["--apply".into(), "--confirm-staging-reset".into(),]).is_err());
 
         assert_eq!(
             parse_args(vec![
