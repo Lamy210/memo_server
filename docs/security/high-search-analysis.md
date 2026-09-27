@@ -172,9 +172,9 @@ Runtime cutover still requires:
 
 - representative-corpus validation and approval of the staged ICU4X analyzer,
 - promotion of the staged AWS KMS search-key provider/operator path to the approved production deployment,
-- a guarded operator cutover invocation that validates deployment prerequisites and switches the shared route generation only while the maintenance permit is held,
-- an explicit search-key rotation protocol that prevents old/new key-version query gaps (for example generation-based reindex plus atomic switch or verified dual-read),
-- an explicit analysis-version migration protocol for tokenizer/normalizer changes,
-- rollback rehearsal.
+- a reviewed `high-search-cutover-approval-v1` artifact bound to the deployment KMS/cache/budget configuration,
+- execution of the guarded `cutover_high_search_route` command, which reindexes to convergence and switches the shared route generation only while the maintenance permit is held,
+- an explicit search-key rotation protocol for future key-version changes that prevents old/new query gaps,
+- an explicit analysis-version migration protocol for future tokenizer/normalizer changes.
 
 Changing either the search-key version or analysis version in place while only one version is queried can make valid documents temporarily undiscoverable. Runtime activation must therefore treat projection generations as a coordinated migration, not as a per-request configuration flip.
