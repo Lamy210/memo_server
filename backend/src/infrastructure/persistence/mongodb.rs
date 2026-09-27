@@ -1061,7 +1061,7 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
         Ok(event)
     }
 
-    async fn enqueue_projection_intent(
+    async fn enqueue_encrypted_projection_intent(
         &self,
         user_id: Uuid,
         memo_id: Uuid,
@@ -1071,11 +1071,11 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
             .await
     }
 
-    async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
+    async fn list_encrypted_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
         <Self as MemoAuthoritativeStore>::list_projection_intents(self).await
     }
 
-    async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+    async fn acknowledge_encrypted_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
         <Self as MemoAuthoritativeStore>::acknowledge_projection_intent(self, event).await
     }
 }
