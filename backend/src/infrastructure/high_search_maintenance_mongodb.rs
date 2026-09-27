@@ -14,13 +14,16 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
-        maintenance::{MemoMutationGuard, MemoMutationPermit},
+        maintenance::{
+            HighSearchQueryGuard, HighSearchQueryPermit, MemoMutationGuard, MemoMutationPermit,
+        },
     },
     error::{AppError, AppResult},
 };
 
 const STATE_COLLECTION: &str = "high_search_maintenance_state";
 const WRITER_LEASES_COLLECTION: &str = "high_search_writer_leases";
+const QUERY_LEASES_COLLECTION: &str = "high_search_query_leases";
 const STATE_ID: &str = "global";
 const MODE_OPEN: &str = "open";
 const MODE_MAINTENANCE: &str = "maintenance";
@@ -53,6 +56,7 @@ pub struct HighSearchMaintenanceStatus {
     holder_token: Option<String>,
     writer_epoch: i64,
     active_writer_leases: u64,
+    active_query_leases: u64,
 }
 
 impl HighSearchMaintenanceStatus {
@@ -71,11 +75,15 @@ impl HighSearchMaintenanceStatus {
     pub fn active_writer_leases(&self) -> u64 {
         self.active_writer_leases
     }
+
+    pub fn active_query_leases(&self) -> u64 {
+        self.active_query_leases
+    }
 }
 
-struct WriterAcquireContext {
+struct ActivityAcquireContext {
     state: Collection<Document>,
-    writers: Collection<Document>,
+    leases: Collection<Document>,
     lease_id: String,
 }
 
@@ -87,6 +95,7 @@ struct MaintenanceAcquireContext {
 struct RecoveryContext {
     state: Collection<Document>,
     writers: Collection<Document>,
+    queries: Collection<Document>,
     expected: HighSearchMaintenanceStatus,
 }
 
@@ -100,6 +109,7 @@ pub struct MongoHighSearchMaintenanceRecovery {
     client: Client,
     state: Collection<Document>,
     writers: Collection<Document>,
+    queries: Collection<Document>,
 }
 
 impl MongoHighSearchMaintenanceRecovery {
@@ -126,6 +136,7 @@ impl MongoHighSearchMaintenanceRecovery {
             client: database.client().clone(),
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
+            queries: database.collection(QUERY_LEASES_COLLECTION),
         }
     }
 
@@ -192,12 +203,18 @@ impl MongoHighSearchMaintenanceRecovery {
             .count_documents(doc! {})
             .await
             .map_err(|error| maintenance_db_error("inspect memo writer leases", error))?;
+        let active_query_leases = self
+            .queries
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| maintenance_db_error("inspect protected query leases", error))?;
 
         Ok(HighSearchMaintenanceStatus {
             mode,
             holder_token,
             writer_epoch,
             active_writer_leases,
+            active_query_leases,
         })
     }
 
@@ -218,6 +235,7 @@ impl MongoHighSearchMaintenanceRecovery {
         let context = RecoveryContext {
             state: self.state.clone(),
             writers: self.writers.clone(),
+            queries: self.queries.clone(),
             expected: expected.clone(),
         };
 
@@ -228,6 +246,11 @@ impl MongoHighSearchMaintenanceRecovery {
                 async move {
                     context
                         .writers
+                        .delete_many(doc! {})
+                        .session(&mut *session)
+                        .await?;
+                    context
+                        .queries
                         .delete_many(doc! {})
                         .session(&mut *session)
                         .await?;
@@ -290,6 +313,7 @@ pub(crate) struct MongoHighSearchMaintenanceGuard {
     client: Client,
     state: Collection<Document>,
     writers: Collection<Document>,
+    queries: Collection<Document>,
 }
 
 impl MongoHighSearchMaintenanceGuard {
@@ -298,6 +322,7 @@ impl MongoHighSearchMaintenanceGuard {
             client: database.client().clone(),
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
+            queries: database.collection(QUERY_LEASES_COLLECTION),
         };
         guard.initialize_state().await?;
         Ok(guard)
@@ -342,16 +367,18 @@ impl MongoHighSearchMaintenanceGuard {
         }
     }
 
-    async fn acquire_writer_lease(&self) -> AppResult<MongoMemoMutationPermit> {
+    async fn acquire_activity_lease(
+        &self,
+        leases: Collection<Document>,
+        activity: &'static str,
+    ) -> AppResult<MongoMaintenanceActivityPermit> {
         let lease_id = Uuid::new_v4().to_string();
-        let mut session = self
-            .client
-            .start_session()
-            .await
-            .map_err(|error| maintenance_db_error("start writer lease session", error))?;
-        let context = WriterAcquireContext {
+        let mut session = self.client.start_session().await.map_err(|error| {
+            maintenance_db_error("start maintenance activity lease session", error)
+        })?;
+        let context = ActivityAcquireContext {
             state: self.state.clone(),
-            writers: self.writers.clone(),
+            leases: leases.clone(),
             lease_id: lease_id.clone(),
         };
 
@@ -360,9 +387,13 @@ impl MongoHighSearchMaintenanceGuard {
             .write_concern(WriteConcern::majority())
             .and_run(context, |session, context| {
                 async move {
-                    // Writer acquisition and maintenance acquisition both
-                    // write the singleton gate. MongoDB therefore resolves a
-                    // race before the writer lease transaction can commit.
+                    // Every admitted protected activity and maintenance
+                    // acquisition writes the singleton gate. MongoDB therefore
+                    // serializes their race before an activity lease commits.
+                    //
+                    // The persisted field keeps its historical `writer_epoch`
+                    // name for compatibility, but now acts as the maintenance
+                    // activity generation fence for writers and protected reads.
                     let gate = context
                         .state
                         .update_one(
@@ -377,7 +408,7 @@ impl MongoHighSearchMaintenanceGuard {
                     }
 
                     context
-                        .writers
+                        .leases
                         .insert_one(doc! { "_id": context.lease_id.clone() })
                         .session(&mut *session)
                         .await?;
@@ -388,17 +419,31 @@ impl MongoHighSearchMaintenanceGuard {
             .await;
 
         match result {
-            Ok(()) => Ok(MongoMemoMutationPermit {
-                writers: self.writers.clone(),
+            Ok(()) => Ok(MongoMaintenanceActivityPermit {
+                leases,
                 lease_id,
+                activity,
             }),
             Err(error) if error.get_custom::<MaintenanceActive>().is_some() => {
-                Err(AppError::ServiceUnavailable(
-                    "memo mutations are temporarily frozen by HIGH search maintenance".into(),
-                ))
+                Err(AppError::ServiceUnavailable(format!(
+                    "{activity} are temporarily frozen by HIGH search maintenance"
+                )))
             }
-            Err(error) => Err(maintenance_db_error("acquire memo writer lease", error)),
+            Err(error) => Err(maintenance_db_error(
+                "acquire HIGH search maintenance activity lease",
+                error,
+            )),
         }
+    }
+
+    async fn acquire_writer_lease(&self) -> AppResult<MongoMaintenanceActivityPermit> {
+        self.acquire_activity_lease(self.writers.clone(), "memo mutations")
+            .await
+    }
+
+    async fn acquire_query_lease(&self) -> AppResult<MongoMaintenanceActivityPermit> {
+        self.acquire_activity_lease(self.queries.clone(), "protected HIGH search queries")
+            .await
     }
 
     async fn acquire_maintenance_barrier(&self) -> AppResult<MongoHighSearchOfflineWindowPermit> {
@@ -462,29 +507,51 @@ impl MongoHighSearchMaintenanceGuard {
             .await
             .map_err(|error| maintenance_db_error("count active memo writer leases", error))
     }
-}
 
-struct MongoMemoMutationPermit {
-    writers: Collection<Document>,
-    lease_id: String,
-}
-
-#[async_trait]
-impl MemoMutationPermit for MongoMemoMutationPermit {
-    async fn release(self: Box<Self>) -> AppResult<()> {
-        let result = self
-            .writers
-            .delete_one(doc! { "_id": self.lease_id.clone() })
+    async fn active_query_count(&self) -> AppResult<u64> {
+        self.queries
+            .count_documents(doc! {})
             .await
-            .map_err(|error| maintenance_db_error("release memo writer lease", error))?;
+            .map_err(|error| maintenance_db_error("count active protected query leases", error))
+    }
+}
+
+struct MongoMaintenanceActivityPermit {
+    leases: Collection<Document>,
+    lease_id: String,
+    activity: &'static str,
+}
+
+impl MongoMaintenanceActivityPermit {
+    async fn release_lease(self) -> AppResult<()> {
+        let result = self
+            .leases
+            .delete_one(doc! { "_id": self.lease_id })
+            .await
+            .map_err(|error| maintenance_db_error("release maintenance activity lease", error))?;
 
         if result.deleted_count != 1 {
-            return Err(AppError::ServiceUnavailable(
-                "memo writer lease disappeared before release".into(),
-            ));
+            return Err(AppError::ServiceUnavailable(format!(
+                "{} lease disappeared before release",
+                self.activity
+            )));
         }
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl MemoMutationPermit for MongoMaintenanceActivityPermit {
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        (*self).release_lease().await
+    }
+}
+
+#[async_trait]
+impl HighSearchQueryPermit for MongoMaintenanceActivityPermit {
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        (*self).release_lease().await
     }
 }
 
@@ -551,13 +618,20 @@ impl MemoMutationGuard for MongoHighSearchMaintenanceGuard {
 }
 
 #[async_trait]
+impl HighSearchQueryGuard for MongoHighSearchMaintenanceGuard {
+    async fn acquire_query(&self) -> AppResult<Box<dyn HighSearchQueryPermit>> {
+        Ok(Box::new(self.acquire_query_lease().await?))
+    }
+}
+
+#[async_trait]
 impl HighSearchOfflineWindowGuard for MongoHighSearchMaintenanceGuard {
     async fn acquire_offline_window(&self) -> AppResult<Box<dyn HighSearchOfflineWindowPermit>> {
         let permit = self.acquire_maintenance_barrier().await?;
 
         loop {
             permit.assert_still_enforced().await?;
-            if self.active_writer_count().await? == 0 {
+            if self.active_writer_count().await? == 0 && self.active_query_count().await? == 0 {
                 return Ok(Box::new(permit));
             }
             sleep(DRAIN_POLL_INTERVAL).await;
@@ -577,7 +651,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a local MongoDB replica set"]
-    async fn mongodb_maintenance_barrier_drains_and_blocks_writers() {
+    async fn mongodb_maintenance_barrier_drains_and_blocks_writers_and_protected_queries() {
         let uri = std::env::var("MONGODB_TEST_URI")
             .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
         let client = Client::with_uri_str(&uri).await.unwrap();
@@ -588,6 +662,7 @@ mod tests {
             .await
             .unwrap();
         let first_writer = guard.acquire_mutation().await.unwrap();
+        let first_query = guard.acquire_query().await.unwrap();
 
         let maintenance_guard = guard.clone();
         let maintenance_task =
@@ -610,9 +685,18 @@ mod tests {
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
         ));
+        assert!(matches!(
+            guard.acquire_query().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
         assert!(!maintenance_task.is_finished());
 
         first_writer.release().await.unwrap();
+        assert!(
+            !maintenance_task.is_finished(),
+            "maintenance must also drain the protected query lease"
+        );
+        first_query.release().await.unwrap();
         let maintenance = maintenance_task.await.unwrap().unwrap();
         maintenance.assert_still_enforced().await.unwrap();
 
@@ -620,10 +704,16 @@ mod tests {
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
         ));
+        assert!(matches!(
+            guard.acquire_query().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
 
         maintenance.release().await.unwrap();
         let writer_after_release = guard.acquire_mutation().await.unwrap();
         writer_after_release.release().await.unwrap();
+        let query_after_release = guard.acquire_query().await.unwrap();
+        query_after_release.release().await.unwrap();
 
         database.drop().await.unwrap();
     }
@@ -642,14 +732,17 @@ mod tests {
             .unwrap();
         let recovery = MongoHighSearchMaintenanceRecovery::from_database(database.clone());
 
-        // Simulate a cancelled mutation: dropping without explicit release
-        // intentionally leaves a fail-closed writer lease behind.
+        // Simulate cancelled mutation/query work: dropping without explicit
+        // release intentionally leaves fail-closed activity leases behind.
         let abandoned_writer = guard.acquire_mutation().await.unwrap();
+        let abandoned_query = guard.acquire_query().await.unwrap();
         drop(abandoned_writer);
+        drop(abandoned_query);
 
         let open_snapshot = recovery.inspect().await.unwrap();
         assert_eq!(open_snapshot.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(open_snapshot.active_writer_leases(), 1);
+        assert_eq!(open_snapshot.active_query_leases(), 1);
 
         let mut stale_snapshot = open_snapshot.clone();
         stale_snapshot.writer_epoch -= 1;
@@ -657,11 +750,14 @@ mod tests {
             recovery.recover_stale_state(&stale_snapshot).await,
             Err(AppError::Conflict(_))
         ));
-        assert_eq!(recovery.inspect().await.unwrap().active_writer_leases(), 1);
+        let after_stale = recovery.inspect().await.unwrap();
+        assert_eq!(after_stale.active_writer_leases(), 1);
+        assert_eq!(after_stale.active_query_leases(), 1);
 
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(recovered.active_writer_leases(), 0);
+        assert_eq!(recovered.active_query_leases(), 0);
         assert_eq!(recovered.writer_epoch(), open_snapshot.writer_epoch() + 1);
 
         // Simulate cancellation while maintenance owns the barrier. The task
@@ -691,8 +787,13 @@ mod tests {
         );
         assert!(maintenance_snapshot.holder_token().is_some());
         assert_eq!(maintenance_snapshot.active_writer_leases(), 0);
+        assert_eq!(maintenance_snapshot.active_query_leases(), 0);
         assert!(matches!(
             guard.acquire_mutation().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert!(matches!(
+            guard.acquire_query().await,
             Err(AppError::ServiceUnavailable(_))
         ));
 
@@ -709,6 +810,8 @@ mod tests {
 
         let writer_after_recovery = guard.acquire_mutation().await.unwrap();
         writer_after_recovery.release().await.unwrap();
+        let query_after_recovery = guard.acquire_query().await.unwrap();
+        query_after_recovery.release().await.unwrap();
 
         database.drop().await.unwrap();
     }

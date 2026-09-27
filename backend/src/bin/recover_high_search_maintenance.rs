@@ -61,8 +61,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .into(),
                 );
             }
-            if status.active_writer_leases() == 0 {
-                return Err("nothing to recover: gate is open and no writer leases exist".into());
+            if status.active_writer_leases() == 0 && status.active_query_leases() == 0 {
+                return Err(
+                    "nothing to recover: gate is open and no writer or protected query leases exist"
+                        .into(),
+                );
             }
         }
         HighSearchMaintenanceMode::Maintenance => {
@@ -152,6 +155,10 @@ fn print_status(
     println!(
         "{label}.active_writer_leases={}",
         status.active_writer_leases()
+    );
+    println!(
+        "{label}.active_query_leases={}",
+        status.active_query_leases()
     );
     println!(
         "{label}.holder_token={}",
