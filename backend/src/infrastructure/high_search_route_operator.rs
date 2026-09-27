@@ -129,11 +129,8 @@ pub async fn run_legacy_high_search_rollback(
 ) -> AppResult<HighSearchRouteChangeReport> {
     validate_legacy_high_search_rollback(config, expected_generation)?;
 
-    let source = MongoDbAuthoritativeStore::new(
-        &config.authoritative_uri,
-        &config.mongodb_database,
-    )
-    .await?;
+    let source =
+        MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?;
     let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
     let permit = guard.acquire_offline_window().await?;
     let previous = permit.current_query_route().await?;
