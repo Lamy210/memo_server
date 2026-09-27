@@ -512,11 +512,7 @@ mod tests {
             Ok(())
         }
 
-        async fn delete_memo(
-            &self,
-            _owner_partition: Uuid,
-            _memo_id: Uuid,
-        ) -> AppResult<()> {
+        async fn delete_memo(&self, _owner_partition: Uuid, _memo_id: Uuid) -> AppResult<()> {
             self.events.push("cache-delete");
             Ok(())
         }
