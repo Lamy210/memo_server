@@ -312,6 +312,19 @@ mod tests {
         }
     }
 
+    fn observer(
+        reader: Arc<FakeReader>,
+        max_concurrency: usize,
+        timeout: Duration,
+    ) -> AppResult<HighSearchShadowObserver> {
+        HighSearchShadowObserver::new(
+            reader,
+            Arc::new(crate::application::maintenance::UnrestrictedHighSearchQueryGuard),
+            max_concurrency,
+            timeout,
+        )
+    }
+
     async fn wait_for_completion(observer: &HighSearchShadowObserver) {
         tokio::time::timeout(Duration::from_millis(100), async {
             while observer.stats().completed == 0 {
@@ -330,9 +343,9 @@ mod tests {
         });
 
         assert!(
-            HighSearchShadowObserver::new(reader.clone(), 0, Duration::from_millis(10),).is_err()
+            observer(reader.clone(), 0, Duration::from_millis(10)).is_err()
         );
-        assert!(HighSearchShadowObserver::new(reader, 1, Duration::ZERO).is_err());
+        assert!(observer(reader, 1, Duration::ZERO).is_err());
     }
 
     #[tokio::test]
@@ -345,7 +358,7 @@ mod tests {
             }))),
             block: None,
         });
-        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
+        let observer = observer(reader, 1, Duration::from_millis(50)).unwrap();
 
         observer.observe(HighSearchShadowObservation {
             query: "private query",
@@ -389,7 +402,7 @@ mod tests {
             }))),
             block: None,
         });
-        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
+        let observer = observer(reader, 1, Duration::from_millis(50)).unwrap();
 
         observer.observe(HighSearchShadowObservation {
             query: "private query",
@@ -418,7 +431,7 @@ mod tests {
             )))),
             block: None,
         });
-        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
+        let observer = observer(reader, 1, Duration::from_millis(50)).unwrap();
 
         observer.observe(HighSearchShadowObservation {
             query: "private query",
@@ -457,7 +470,7 @@ mod tests {
             result: Mutex::new(None),
             block: Some(block),
         });
-        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(1)).unwrap();
+        let observer = observer(reader, 1, Duration::from_millis(1)).unwrap();
 
         observer.observe(HighSearchShadowObservation {
             query: "private query",
@@ -494,7 +507,7 @@ mod tests {
             result: Mutex::new(None),
             block: Some(block.clone()),
         });
-        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_secs(1)).unwrap();
+        let observer = observer(reader, 1, Duration::from_secs(1)).unwrap();
 
         observer.observe(HighSearchShadowObservation {
             query: "first",
