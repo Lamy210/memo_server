@@ -75,6 +75,8 @@ Document tags remain additionally bounded by the memo-domain tag-count invariant
 
 The budget is an operational admission-control policy rather than token semantics: changing only a budget does not change blind tokens for inputs that remain accepted, so it does not by itself require a new `analysis_version`. However all indexing, reindex, and query workers in one deployment must use the same reviewed budget policy. Production values must be selected from representative corpus measurements and projection-size/load testing rather than guessed defaults.
 
+The local `measure_high_search_workload` operator command supports that sizing step without KMS/Manticore access. It accepts only a bounded local JSON corpus and emits aggregate analyzer measurements: document/query term-count distributions, tag-count distribution, normalized-term byte-length distribution, and zero-term counts. It never emits input plaintext, identifiers, normalized terms, blind tokens, or key material. The input corpus must be generated or separately approved/sanitized; production/user content must not be committed to the repository.
+
 ## Language-aware analyzer candidate
 
 The staged production candidate uses ICU4X components pinned exactly to 2.3.0:

@@ -139,7 +139,19 @@ assets:
           query_unique_terms: caller_configured
           normalized_term_bytes: caller_configured
           fail_before_crypto: true
-          production_values: pending_corpus_validation
+          production_values: pending_operator_reviewed_workload_measurement
+          workload_measurement:
+            command: measure_high_search_workload
+            analyzer_only: true
+            external_services: forbidden
+            input: sanitized_or_generated_local_json
+            input_file_bytes_cap: 16777216
+            document_count_cap: 10000
+            query_count_cap: 10000
+            output: aggregate_only
+            plaintext_output: forbidden
+            identifiers_output: forbidden
+            blind_tokens_output: forbidden
         tag_semantics: normalized_exact_term
         dependency_versions_exact_pinned: true
         synthetic_conformance_corpus:
