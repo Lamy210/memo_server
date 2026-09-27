@@ -76,11 +76,13 @@ pub trait MemoAuthoritativeStore: Send + Sync {
 
 #[async_trait]
 pub trait MemoCache: Send + Sync {
-    async fn get_memo(&self, key: &str) -> AppResult<Option<Memo>>;
-    async fn set_memo(&self, key: &str, memo: &Memo, expiration: Option<Duration>)
-        -> AppResult<()>;
-    async fn delete(&self, key: &str) -> AppResult<()>;
-    async fn exists(&self, key: &str) -> AppResult<bool>;
+    async fn get_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<Option<Memo>>;
+
+    async fn set_memo(&self, memo: &Memo, expiration: Option<Duration>) -> AppResult<()>;
+
+    async fn delete_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()>;
+
+    async fn memo_exists(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<bool>;
 }
 
 #[derive(Debug, Clone)]
