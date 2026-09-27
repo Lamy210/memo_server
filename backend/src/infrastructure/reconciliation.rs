@@ -212,7 +212,6 @@ impl ProjectionReconciler {
         memo: Option<&crate::domain::memo::entity::Memo>,
     ) -> AppResult<()> {
         let mut failures = Vec::new();
-        let cache_key = cache_key(event.user_id, event.memo_id);
 
         match memo {
             Some(memo) => {
@@ -224,8 +223,10 @@ impl ProjectionReconciler {
                         failures.push(format!("high_search_projection={error}"));
                     }
                 }
-                if let Err(error) = self.cache.set_memo(&cache_key, memo, Some(CACHE_TTL)).await {
-                    failures.push(format!("cache={error}"));
+                if let Err(error) = self.cache.delete_memo(memo.user_id, memo.id).await {
+                    failures.push(format!("cache_invalidate={error}"));
+                } else if let Err(error) = self.cache.set_memo(memo, Some(CACHE_TTL)).await {
+                    failures.push(format!("cache_replace={error}"));
                 }
             }
             None => {
@@ -240,7 +241,7 @@ impl ProjectionReconciler {
                         failures.push(format!("high_search_projection={error}"));
                     }
                 }
-                if let Err(error) = self.cache.delete(&cache_key).await {
+                if let Err(error) = self.cache.delete_memo(event.user_id, event.memo_id).await {
                     failures.push(format!("cache={error}"));
                 }
             }
@@ -395,10 +396,6 @@ fn target_reached(
     }
 }
 
-fn cache_key(user_id: Uuid, memo_id: Uuid) -> String {
-    format!("memo:{user_id}:{memo_id}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,33 +493,38 @@ mod tests {
 
     struct FakeCache {
         events: Arc<TestEvents>,
+        fail_set: bool,
     }
 
     #[async_trait::async_trait]
     impl MemoCache for FakeCache {
         async fn get_memo(
             &self,
-            _key: &str,
+            _owner_partition: Uuid,
+            _memo_id: Uuid,
         ) -> AppResult<Option<crate::domain::memo::entity::Memo>> {
             Ok(None)
         }
 
         async fn set_memo(
             &self,
-            _key: &str,
             _memo: &crate::domain::memo::entity::Memo,
             _expiration: Option<Duration>,
         ) -> AppResult<()> {
             self.events.push("cache-set");
-            Ok(())
+            if self.fail_set {
+                Err(AppError::DatabaseError("cache set failed".into()))
+            } else {
+                Ok(())
+            }
         }
 
-        async fn delete(&self, _key: &str) -> AppResult<()> {
+        async fn delete_memo(&self, _owner_partition: Uuid, _memo_id: Uuid) -> AppResult<()> {
             self.events.push("cache-delete");
             Ok(())
         }
 
-        async fn exists(&self, _key: &str) -> AppResult<bool> {
+        async fn memo_exists(&self, _owner_partition: Uuid, _memo_id: Uuid) -> AppResult<bool> {
             Ok(false)
         }
     }
@@ -648,6 +650,7 @@ mod tests {
         });
         let cache = Arc::new(FakeCache {
             events: events.clone(),
+            fail_set: false,
         });
         let legacy = Arc::new(FakeLegacyProjection {
             events: events.clone(),
@@ -690,6 +693,7 @@ mod tests {
                 "guard-acquire",
                 "legacy-index",
                 "high-index",
+                "cache-delete",
                 "cache-set",
                 "guard-release",
                 "ack"
@@ -714,6 +718,53 @@ mod tests {
                 "guard-acquire",
                 "legacy-index",
                 "high-index",
+                "cache-delete",
+                "cache-set",
+                "guard-release"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_replace_failure_keeps_intent_and_invalidates_old_entry_first() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
+        let events = Arc::new(TestEvents::default());
+        let store = Arc::new(FakeAuthoritativeStore {
+            memo: Mutex::new(Some(memo)),
+            acknowledged: AtomicU64::new(0),
+            events: events.clone(),
+        });
+        let cache = Arc::new(FakeCache {
+            events: events.clone(),
+            fail_set: true,
+        });
+        let legacy = Arc::new(FakeLegacyProjection {
+            events: events.clone(),
+        });
+        let high = Arc::new(FakeHighProjection {
+            events: events.clone(),
+            fail_replace: false,
+            deleted: Mutex::new(None),
+        });
+        let guard = Arc::new(FakeMutationGuard {
+            events: events.clone(),
+            fail_release: false,
+        });
+        let reconciler = ProjectionReconciler::new(store.clone(), cache, legacy, Some(high), guard);
+
+        assert!(reconciler.reconcile_event(&event).await.is_err());
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "legacy-index",
+                "high-index",
+                "cache-delete",
                 "cache-set",
                 "guard-release"
             ]
@@ -740,6 +791,7 @@ mod tests {
                 "guard-acquire",
                 "legacy-index",
                 "high-index",
+                "cache-delete",
                 "cache-set",
                 "guard-release"
             ]
@@ -831,17 +883,6 @@ mod tests {
 
         memo.version = 2;
         assert_eq!(projection_state(Some(&memo)), Some(2));
-    }
-
-    #[test]
-    fn cache_key_is_tenant_scoped() {
-        let user_id = Uuid::new_v4();
-        let memo_id = Uuid::new_v4();
-
-        assert_eq!(
-            cache_key(user_id, memo_id),
-            format!("memo:{user_id}:{memo_id}")
-        );
     }
 
     #[test]

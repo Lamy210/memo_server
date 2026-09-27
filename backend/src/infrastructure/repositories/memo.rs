@@ -35,17 +35,12 @@ impl MemoRepositoryImpl {
             reconciler,
         }
     }
-
-    fn cache_key(user_id: Uuid, id: Uuid) -> String {
-        format!("memo:{user_id}:{id}")
-    }
 }
 
 #[async_trait]
 impl MemoRepository for MemoRepositoryImpl {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
-        let cache_key = Self::cache_key(user_id, id);
-        match self.cache.get_memo(&cache_key).await {
+        match self.cache.get_memo(user_id, id).await {
             Ok(Some(memo)) => return Ok(Some(memo)),
             Ok(None) => {}
             Err(error) => {
@@ -56,11 +51,7 @@ impl MemoRepository for MemoRepositoryImpl {
         }
 
         if let Some(memo) = self.authoritative_store.find_by_id(user_id, id).await? {
-            if let Err(error) = self
-                .cache
-                .set_memo(&cache_key, &memo, Some(CACHE_TTL))
-                .await
-            {
+            if let Err(error) = self.cache.set_memo(&memo, Some(CACHE_TTL)).await {
                 log::warn!(
                     "Cache fill failed after authoritative store read: memo_id={id} user_id={user_id} error={error}"
                 );
@@ -123,8 +114,7 @@ impl MemoRepository for MemoRepositoryImpl {
     }
 
     async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
-        let cache_key = Self::cache_key(user_id, id);
-        match self.cache.exists(&cache_key).await {
+        match self.cache.memo_exists(user_id, id).await {
             Ok(true) => return Ok(true),
             Ok(false) => {}
             Err(error) => {

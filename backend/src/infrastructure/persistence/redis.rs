@@ -16,6 +16,7 @@ use crate::{
 
 use super::ports::MemoCache;
 
+const LEGACY_CACHE_NAMESPACE: &str = "memo";
 const HIGH_CACHE_NAMESPACE: &str = "memo:high:v1";
 
 pub struct RedisCache {
@@ -120,8 +121,25 @@ impl RedisCache {
             })
     }
 
+    fn legacy_cache_key(owner_partition: uuid::Uuid, memo_id: uuid::Uuid) -> String {
+        format!("{LEGACY_CACHE_NAMESPACE}:{owner_partition}:{memo_id}")
+    }
+
     fn high_cache_key(owner_partition: uuid::Uuid, memo_id: uuid::Uuid) -> String {
         format!("{HIGH_CACHE_NAMESPACE}:{owner_partition}:{memo_id}")
+    }
+
+    fn validate_cached_memo(
+        owner_partition: uuid::Uuid,
+        memo_id: uuid::Uuid,
+        memo: &Memo,
+    ) -> AppResult<()> {
+        if memo.user_id != owner_partition || memo.id != memo_id {
+            return Err(AppError::DatabaseError(
+                "Legacy cache memo identity does not match the requested cache key".into(),
+            ));
+        }
+        Ok(())
     }
 
     fn validate_cached_envelope(
@@ -137,6 +155,20 @@ impl RedisCache {
         }
         Ok(())
     }
+
+    async fn purge_invalid_cached_value(
+        &self,
+        key: &str,
+        context: &str,
+        primary: AppError,
+    ) -> AppError {
+        match self.delete(key).await {
+            Ok(()) => primary,
+            Err(purge) => AppError::DatabaseError(format!(
+                "{context} and invalid-entry purge also failed; primary={primary}; purge={purge}"
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -147,10 +179,29 @@ impl HighEncryptedMemoCache for RedisCache {
         memo_id: uuid::Uuid,
     ) -> AppResult<Option<HighEncryptedMemoEnvelope>> {
         let key = Self::high_cache_key(owner_partition, memo_id);
-        let envelope = self.get::<HighEncryptedMemoEnvelope>(&key).await?;
+        let envelope = match self.get::<HighEncryptedMemoEnvelope>(&key).await {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                return Err(self
+                    .purge_invalid_cached_value(
+                        &key,
+                        "HIGH cache envelope deserialization failed",
+                        error,
+                    )
+                    .await);
+            }
+        };
 
         if let Some(envelope) = envelope.as_ref() {
-            Self::validate_cached_envelope(owner_partition, memo_id, envelope)?;
+            if let Err(error) = Self::validate_cached_envelope(owner_partition, memo_id, envelope) {
+                return Err(self
+                    .purge_invalid_cached_value(
+                        &key,
+                        "HIGH cache envelope validation failed",
+                        error,
+                    )
+                    .await);
+            }
         }
 
         Ok(envelope)
@@ -159,11 +210,17 @@ impl HighEncryptedMemoCache for RedisCache {
     async fn set_envelope(
         &self,
         envelope: &HighEncryptedMemoEnvelope,
-        expiration: Option<Duration>,
+        expiration: Duration,
     ) -> AppResult<()> {
         envelope.validate_structure()?;
+        if expiration.as_secs() == 0 {
+            return Err(AppError::ValidationError(
+                "HIGH encrypted cache TTL must be at least one second".into(),
+            ));
+        }
+
         let key = Self::high_cache_key(envelope.owner_partition, envelope.memo_id);
-        self.set(&key, envelope, expiration).await
+        self.set(&key, envelope, Some(expiration)).await
     }
 
     async fn delete_envelope(
@@ -187,25 +244,61 @@ impl HighEncryptedMemoCache for RedisCache {
 
 #[async_trait]
 impl MemoCache for RedisCache {
-    async fn get_memo(&self, key: &str) -> AppResult<Option<Memo>> {
-        self.get::<Memo>(key).await
-    }
-
-    async fn set_memo(
+    async fn get_memo(
         &self,
-        key: &str,
-        memo: &Memo,
-        expiration: Option<Duration>,
-    ) -> AppResult<()> {
-        self.set(key, memo, expiration).await
+        owner_partition: uuid::Uuid,
+        memo_id: uuid::Uuid,
+    ) -> AppResult<Option<Memo>> {
+        let key = Self::legacy_cache_key(owner_partition, memo_id);
+        let memo = match self.get::<Memo>(&key).await {
+            Ok(memo) => memo,
+            Err(error) => {
+                return Err(self
+                    .purge_invalid_cached_value(
+                        &key,
+                        "Legacy cache memo deserialization failed",
+                        error,
+                    )
+                    .await);
+            }
+        };
+
+        if let Some(memo) = memo.as_ref() {
+            if let Err(error) = Self::validate_cached_memo(owner_partition, memo_id, memo) {
+                return Err(self
+                    .purge_invalid_cached_value(
+                        &key,
+                        "Legacy cache memo identity validation failed",
+                        error,
+                    )
+                    .await);
+            }
+        }
+
+        Ok(memo)
     }
 
-    async fn delete(&self, key: &str) -> AppResult<()> {
-        RedisCache::delete(self, key).await
+    async fn set_memo(&self, memo: &Memo, expiration: Option<Duration>) -> AppResult<()> {
+        self.set(
+            &Self::legacy_cache_key(memo.user_id, memo.id),
+            memo,
+            expiration,
+        )
+        .await
     }
 
-    async fn exists(&self, key: &str) -> AppResult<bool> {
-        RedisCache::exists(self, key).await
+    async fn delete_memo(&self, owner_partition: uuid::Uuid, memo_id: uuid::Uuid) -> AppResult<()> {
+        RedisCache::delete(self, &Self::legacy_cache_key(owner_partition, memo_id)).await
+    }
+
+    async fn memo_exists(
+        &self,
+        owner_partition: uuid::Uuid,
+        memo_id: uuid::Uuid,
+    ) -> AppResult<bool> {
+        // Existence is integrity-sensitive too: a Redis key containing a memo
+        // for another owner/id must never satisfy the repository fast path.
+        Ok(self.get_memo(owner_partition, memo_id).await?.is_some())
     }
 }
 
@@ -244,6 +337,27 @@ mod tests {
     }
 
     #[test]
+    fn legacy_cache_key_is_namespaced_and_owner_scoped() {
+        let envelope = envelope();
+        assert_eq!(
+            RedisCache::legacy_cache_key(envelope.owner_partition, envelope.memo_id),
+            format!("memo:{}:{}", envelope.owner_partition, envelope.memo_id)
+        );
+    }
+
+    #[test]
+    fn legacy_cached_memo_identity_must_match_requested_key() {
+        let owner = uuid::Uuid::new_v4();
+        let memo_id = uuid::Uuid::new_v4();
+        let mut memo = Memo::new("title".into(), "content".into(), vec![], owner);
+        memo.id = memo_id;
+
+        assert!(RedisCache::validate_cached_memo(owner, memo_id, &memo).is_ok());
+        assert!(RedisCache::validate_cached_memo(uuid::Uuid::new_v4(), memo_id, &memo).is_err());
+        assert!(RedisCache::validate_cached_memo(owner, uuid::Uuid::new_v4(), &memo).is_err());
+    }
+
+    #[test]
     fn high_cache_key_is_namespaced_and_owner_scoped() {
         let envelope = envelope();
         let key = RedisCache::high_cache_key(envelope.owner_partition, envelope.memo_id);
@@ -277,6 +391,12 @@ mod tests {
         assert!(!object.contains_key("tags"));
         assert!(!object.contains_key("created_at"));
         assert!(!object.contains_key("updated_at"));
+    }
+
+    #[test]
+    fn high_cache_ttl_requires_at_least_one_redis_second() {
+        assert_eq!(Duration::from_secs(1).as_secs(), 1);
+        assert_eq!(Duration::from_millis(999).as_secs(), 0);
     }
 
     #[test]
