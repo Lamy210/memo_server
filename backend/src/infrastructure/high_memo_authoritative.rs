@@ -179,7 +179,9 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
     }
 
     async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
-        self.encrypted_store.list_encrypted_projection_intents().await
+        self.encrypted_store
+            .list_encrypted_projection_intents()
+            .await
     }
 
     async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
@@ -300,7 +302,10 @@ mod tests {
             Ok(self.intents.lock().unwrap().clone())
         }
 
-        async fn acknowledge_encrypted_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+        async fn acknowledge_encrypted_projection_intent(
+            &self,
+            event: &ProjectionIntent,
+        ) -> AppResult<()> {
             self.intents
                 .lock()
                 .unwrap()
