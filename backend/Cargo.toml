@@ -7,6 +7,7 @@ default-run = "memo_app_backend"
 [features]
 default = []
 aws-kms-search = ["dep:aws-config", "dep:aws-sdk-kms"]
+aws-kms-memo = ["dep:aws-config", "dep:aws-sdk-kms"]
 
 [dependencies]
 tokio = { version = "1.36.0", features = ["full"] }
