@@ -3,7 +3,10 @@ use std::sync::Arc;
 use crate::{
     application::{
         health::HealthProbe,
-        maintenance::{MemoMutationGuard, UnrestrictedMemoMutationGuard},
+        maintenance::{
+            HighSearchQueryGuard, MemoMutationGuard, UnrestrictedHighSearchQueryGuard,
+            UnrestrictedMemoMutationGuard,
+        },
     },
     config::{AppConfig, AuthoritativeBackend, HighSearchConfig, SearchBackend},
     error::{AppError, AppResult},
@@ -27,6 +30,7 @@ pub(crate) struct PersistenceStack {
     pub(crate) cache_health: Arc<dyn HealthProbe>,
     pub(crate) search_health: Arc<dyn HealthProbe>,
     pub(crate) mutation_guard: Arc<dyn MemoMutationGuard>,
+    pub(crate) high_search_query_guard: Arc<dyn HighSearchQueryGuard>,
 }
 
 impl PersistenceStack {
@@ -53,8 +57,14 @@ impl PersistenceStack {
             }
         };
 
-        let mutation_guard: Arc<dyn MemoMutationGuard> = match config.high_search {
-            HighSearchConfig::Disabled => Arc::new(UnrestrictedMemoMutationGuard),
+        let (mutation_guard, high_search_query_guard): (
+            Arc<dyn MemoMutationGuard>,
+            Arc<dyn HighSearchQueryGuard>,
+        ) = match config.high_search {
+            HighSearchConfig::Disabled => (
+                Arc::new(UnrestrictedMemoMutationGuard),
+                Arc::new(UnrestrictedHighSearchQueryGuard),
+            ),
             HighSearchConfig::AwsKms { .. } => {
                 let database = mongodb_database.ok_or_else(|| {
                     AppError::ServiceUnavailable(
@@ -62,7 +72,8 @@ impl PersistenceStack {
                             .into(),
                     )
                 })?;
-                Arc::new(MongoHighSearchMaintenanceGuard::new(database).await?)
+                let guard = Arc::new(MongoHighSearchMaintenanceGuard::new(database).await?);
+                (guard.clone(), guard)
             }
         };
 
@@ -93,6 +104,7 @@ impl PersistenceStack {
             cache_health,
             search_health,
             mutation_guard,
+            high_search_query_guard,
         })
     }
 }
