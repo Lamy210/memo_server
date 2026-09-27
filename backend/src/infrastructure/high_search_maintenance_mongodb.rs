@@ -981,6 +981,16 @@ mod tests {
         assert_eq!(after_stale.active_writer_leases(), 1);
         assert_eq!(after_stale.active_query_leases(), 1);
 
+        let mut stale_route_snapshot = open_snapshot.clone();
+        stale_route_snapshot.query_route_generation += 1;
+        assert!(matches!(
+            recovery.recover_stale_state(&stale_route_snapshot).await,
+            Err(AppError::Conflict(_))
+        ));
+        let after_stale_route = recovery.inspect().await.unwrap();
+        assert_eq!(after_stale_route.active_writer_leases(), 1);
+        assert_eq!(after_stale_route.active_query_leases(), 1);
+
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(recovered.query_route(), HighSearchQueryRoute::Legacy);
