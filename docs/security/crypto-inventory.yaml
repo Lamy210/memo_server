@@ -175,6 +175,8 @@ assets:
               - rotation_reindex_rehearsed
               - rollback_rehearsed
               - security_migration_gates_reviewed
+              - all_replicas_route_aware_and_barrier_participating
+              - all_replicas_runtime_config_reviewed
             cryptographic_attestation: not_provided
             input_file_bytes_cap: 262144
             production_like_corpus_review_confirmation: required
