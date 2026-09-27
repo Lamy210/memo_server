@@ -358,6 +358,8 @@ assets:
         query_shadow_result_id_logging: forbidden
         query_shadow_capacity_behavior: drop_observation
         query_shadow_timeout_behavior: count_and_discard
+        query_shadow_route_generation_binding: required
+        query_shadow_route_generation_change_behavior: drop_before_protected_reader
         query_request_path_installed: true
         query_request_path_default_route: legacy
         query_request_path_protected_fallback_to_legacy: forbidden
