@@ -76,7 +76,9 @@ impl MemoRepository for MemoRepositoryImpl {
     }
 
     async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>> {
-        self.authoritative_store.find_many_by_ids(user_id, ids).await
+        self.authoritative_store
+            .find_many_by_ids(user_id, ids)
+            .await
     }
 
     async fn save(&self, memo: &Memo) -> AppResult<()> {
