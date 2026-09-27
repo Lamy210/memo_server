@@ -6,6 +6,7 @@ use crate::{
     application::{
         crypto_migration_batch::validate_page_size,
         crypto_search_reindex::{HighSearchReindexRunner, HighSearchReindexStats},
+        high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
     },
     error::{AppError, AppResult},
 };
@@ -18,6 +19,12 @@ use crate::{
 #[async_trait]
 pub trait HighSearchOfflineWindowPermit: Send + Sync {
     async fn assert_still_enforced(&self) -> AppResult<()>;
+    async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot>;
+    async fn switch_query_route(
+        &self,
+        expected: HighSearchQueryRouteSnapshot,
+        target: HighSearchQueryRoute,
+    ) -> AppResult<HighSearchQueryRouteSnapshot>;
     async fn release(self: Box<Self>) -> AppResult<()>;
 }
 
@@ -52,6 +59,22 @@ pub struct HighSearchRotationReady {
 impl HighSearchRotationReady {
     pub fn stats(&self) -> HighSearchReindexStats {
         self.stats
+    }
+
+    /// Read the shared user-visible query route while this prepared rotation
+    /// still owns the offline-window permit.
+    pub async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
+        self.permit.current_query_route().await
+    }
+
+    /// Atomically cut over or roll back the shared query route while the
+    /// maintenance barrier is still held.
+    pub async fn switch_query_route(
+        &self,
+        expected: HighSearchQueryRouteSnapshot,
+        target: HighSearchQueryRoute,
+    ) -> AppResult<HighSearchQueryRouteSnapshot> {
+        self.permit.switch_query_route(expected, target).await
     }
 
     /// Confirm that the offline-window lease survived the caller-owned cutover
@@ -221,6 +244,24 @@ mod tests {
             Ok(())
         }
 
+        async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Ok(HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            })
+        }
+
+        async fn switch_query_route(
+            &self,
+            expected: HighSearchQueryRouteSnapshot,
+            target: HighSearchQueryRoute,
+        ) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Ok(HighSearchQueryRouteSnapshot {
+                route: target,
+                generation: expected.generation + 1,
+            })
+        }
+
         async fn release(self: Box<Self>) -> AppResult<()> {
             self.events.push("permit-release");
             Ok(())
@@ -333,6 +374,29 @@ mod tests {
         let ready = service.rotate_and_reindex(100).await.unwrap();
 
         assert_eq!(ready.stats().source_count, 2);
+        assert_eq!(
+            ready.current_query_route().await.unwrap(),
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            }
+        );
+        assert_eq!(
+            ready
+                .switch_query_route(
+                    HighSearchQueryRouteSnapshot {
+                        route: HighSearchQueryRoute::Legacy,
+                        generation: 0,
+                    },
+                    HighSearchQueryRoute::Protected,
+                )
+                .await
+                .unwrap(),
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Protected,
+                generation: 1,
+            }
+        );
         assert_eq!(
             events.snapshot(),
             vec!["guard-acquire", "cache", "reindex", "permit-check"]

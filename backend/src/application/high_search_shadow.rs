@@ -355,6 +355,15 @@ mod tests {
 
     #[async_trait]
     impl crate::application::maintenance::HighSearchQueryPermit for FakeQueryPermit {
+        fn route_snapshot(
+            &self,
+        ) -> crate::application::high_search_routing::HighSearchQueryRouteSnapshot {
+            crate::application::high_search_routing::HighSearchQueryRouteSnapshot {
+                route: crate::application::high_search_routing::HighSearchQueryRoute::Legacy,
+                generation: 0,
+            }
+        }
+
         async fn release(self: Box<Self>) -> AppResult<()> {
             self.events.lock().unwrap().push("query-release");
             if self.fail_release {
