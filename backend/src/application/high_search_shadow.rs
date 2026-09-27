@@ -233,7 +233,6 @@ fn record_comparison(
     counters: &HighSearchShadowCounters,
     legacy_memo_ids: &[Uuid],
     legacy_total: usize,
-    legacy_route_generation: 0,
     protected_memo_ids: &[Uuid],
     protected_total: usize,
     page: usize,
