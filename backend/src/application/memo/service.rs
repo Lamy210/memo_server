@@ -270,3 +270,347 @@ impl MemoService {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::{
+        application::{
+            crypto_search_projection::HighSearchProjectionPage,
+            high_search_routing::HighSearchQueryRouteSnapshot,
+            maintenance::{
+                HighSearchQueryPermit, UnrestrictedMemoMutationGuard,
+            },
+        },
+        domain::memo::repository::MemoSearchPage,
+    };
+
+    struct FakeRepository {
+        legacy_search_calls: AtomicUsize,
+        legacy_items: Vec<Memo>,
+        legacy_total: usize,
+        hydrated_ids: Mutex<Vec<Uuid>>,
+        hydrated_items: Vec<Memo>,
+    }
+
+    #[async_trait]
+    impl MemoRepository for FakeRepository {
+        async fn find_by_id(&self, _user_id: Uuid, _id: Uuid) -> AppResult<Option<Memo>> {
+            Ok(None)
+        }
+
+        async fn find_all_by_user_id(&self, _user_id: Uuid) -> AppResult<Vec<Memo>> {
+            Ok(Vec::new())
+        }
+
+        async fn find_many_by_ids(&self, _user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>> {
+            *self.hydrated_ids.lock().unwrap() = ids.to_vec();
+            Ok(self.hydrated_items.clone())
+        }
+
+        async fn save(&self, _memo: &Memo) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn delete(&self, _user_id: Uuid, _id: Uuid) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn search(
+            &self,
+            _query: &str,
+            _tag: Option<String>,
+            _user_id: Uuid,
+            _page: usize,
+            _limit: usize,
+        ) -> AppResult<MemoSearchPage> {
+            self.legacy_search_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(MemoSearchPage {
+                items: self.legacy_items.clone(),
+                total: self.legacy_total,
+            })
+        }
+
+        async fn exists(&self, _user_id: Uuid, _id: Uuid) -> AppResult<bool> {
+            Ok(false)
+        }
+    }
+
+    struct FakeQueryReader {
+        calls: AtomicUsize,
+        owner: Mutex<Option<Uuid>>,
+        memo_ids: Vec<Uuid>,
+        total: usize,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl HighSearchQueryReader for FakeQueryReader {
+        async fn search_memo_ids(
+            &self,
+            owner_partition: Uuid,
+            _query: &str,
+            _tag: Option<&str>,
+            _page: usize,
+            _limit: usize,
+        ) -> AppResult<HighSearchProjectionPage> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            *self.owner.lock().unwrap() = Some(owner_partition);
+            if self.fail {
+                Err(AppError::ServiceUnavailable(
+                    "protected reader failed".into(),
+                ))
+            } else {
+                Ok(HighSearchProjectionPage {
+                    memo_ids: self.memo_ids.clone(),
+                    total: self.total,
+                })
+            }
+        }
+    }
+
+    struct FakeQueryGuard {
+        route: HighSearchQueryRoute,
+        release_fail: bool,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct FakeQueryPermit {
+        route: HighSearchQueryRoute,
+        release_fail: bool,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl HighSearchQueryGuard for FakeQueryGuard {
+        async fn acquire_query(&self) -> AppResult<Box<dyn HighSearchQueryPermit>> {
+            self.events.lock().unwrap().push("acquire");
+            Ok(Box::new(FakeQueryPermit {
+                route: self.route,
+                release_fail: self.release_fail,
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl HighSearchQueryPermit for FakeQueryPermit {
+        fn route_snapshot(&self) -> HighSearchQueryRouteSnapshot {
+            HighSearchQueryRouteSnapshot {
+                route: self.route,
+                generation: 7,
+            }
+        }
+
+        async fn release(self: Box<Self>) -> AppResult<()> {
+            self.events.lock().unwrap().push("release");
+            if self.release_fail {
+                Err(AppError::ServiceUnavailable(
+                    "query lease release failed".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn memo(user_id: Uuid, id: Uuid, title: &str) -> Memo {
+        let mut memo = Memo::new(title.into(), "content".into(), Vec::new(), user_id);
+        memo.id = id;
+        memo
+    }
+
+    fn service(
+        repository: Arc<FakeRepository>,
+        route: HighSearchQueryRoute,
+        reader: Option<Arc<FakeQueryReader>>,
+        release_fail: bool,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    ) -> MemoService {
+        MemoService::new(
+            repository,
+            Arc::new(UnrestrictedMemoMutationGuard),
+            Arc::new(FakeQueryGuard {
+                route,
+                release_fail,
+                events,
+            }),
+            reader.map(|reader| reader as Arc<dyn HighSearchQueryReader>),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn legacy_route_uses_legacy_search_and_releases_query_lease() {
+        let user_id = Uuid::new_v4();
+        let legacy = memo(user_id, Uuid::new_v4(), "legacy");
+        let repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: vec![legacy.clone()],
+            legacy_total: 1,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let reader = Arc::new(FakeQueryReader {
+            calls: AtomicUsize::new(0),
+            owner: Mutex::new(None),
+            memo_ids: Vec::new(),
+            total: 0,
+            fail: false,
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = service(
+            repository.clone(),
+            HighSearchQueryRoute::Legacy,
+            Some(reader.clone()),
+            false,
+            events.clone(),
+        );
+
+        let response = service
+            .search_memos("legacy", None, user_id, 1, 20)
+            .await
+            .unwrap();
+
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].id, legacy.id);
+        assert_eq!(repository.legacy_search_calls.load(Ordering::Relaxed), 1);
+        assert!(repository.hydrated_ids.lock().unwrap().is_empty());
+        assert_eq!(reader.calls.load(Ordering::Relaxed), 0);
+        assert_eq!(*events.lock().unwrap(), vec!["acquire", "release"]);
+    }
+
+    #[tokio::test]
+    async fn protected_route_uses_reader_then_owner_scoped_hydration() {
+        let user_id = Uuid::new_v4();
+        let protected = memo(user_id, Uuid::new_v4(), "protected");
+        let repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: Vec::new(),
+            legacy_total: 0,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: vec![protected.clone()],
+        });
+        let reader = Arc::new(FakeQueryReader {
+            calls: AtomicUsize::new(0),
+            owner: Mutex::new(None),
+            memo_ids: vec![protected.id],
+            total: 1,
+            fail: false,
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = service(
+            repository.clone(),
+            HighSearchQueryRoute::Protected,
+            Some(reader.clone()),
+            false,
+            events.clone(),
+        );
+
+        let response = service
+            .search_memos("protected", Some("tag".into()), user_id, 2, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].id, protected.id);
+        assert_eq!(repository.legacy_search_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(*repository.hydrated_ids.lock().unwrap(), vec![protected.id]);
+        assert_eq!(*reader.owner.lock().unwrap(), Some(user_id));
+        assert_eq!(reader.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(*events.lock().unwrap(), vec!["acquire", "release"]);
+    }
+
+    #[tokio::test]
+    async fn protected_reader_failure_still_releases_query_lease() {
+        let user_id = Uuid::new_v4();
+        let repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: Vec::new(),
+            legacy_total: 0,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let reader = Arc::new(FakeQueryReader {
+            calls: AtomicUsize::new(0),
+            owner: Mutex::new(None),
+            memo_ids: Vec::new(),
+            total: 0,
+            fail: true,
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = service(
+            repository,
+            HighSearchQueryRoute::Protected,
+            Some(reader),
+            false,
+            events.clone(),
+        );
+
+        assert!(matches!(
+            service.search_memos("protected", None, user_id, 1, 20).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert_eq!(*events.lock().unwrap(), vec!["acquire", "release"]);
+    }
+
+    #[tokio::test]
+    async fn missing_protected_reader_still_releases_query_lease() {
+        let user_id = Uuid::new_v4();
+        let repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: Vec::new(),
+            legacy_total: 0,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = service(
+            repository,
+            HighSearchQueryRoute::Protected,
+            None,
+            false,
+            events.clone(),
+        );
+
+        assert!(matches!(
+            service.search_memos("protected", None, user_id, 1, 20).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert_eq!(*events.lock().unwrap(), vec!["acquire", "release"]);
+    }
+
+    #[tokio::test]
+    async fn query_lease_release_failure_fails_closed() {
+        let user_id = Uuid::new_v4();
+        let repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: Vec::new(),
+            legacy_total: 0,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = service(
+            repository,
+            HighSearchQueryRoute::Legacy,
+            None,
+            true,
+            events.clone(),
+        );
+
+        assert!(matches!(
+            service.search_memos("", None, user_id, 1, 20).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert_eq!(*events.lock().unwrap(), vec!["acquire", "release"]);
+    }
+}
