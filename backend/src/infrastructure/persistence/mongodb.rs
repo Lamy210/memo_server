@@ -1022,9 +1022,7 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("find encrypted MongoDB memos by ids", error))?
             .try_collect()
             .await
-            .map_err(|error| {
-                mongo_error("read encrypted MongoDB memo hydration cursor", error)
-            })?;
+            .map_err(|error| mongo_error("read encrypted MongoDB memo hydration cursor", error))?;
 
         let mut by_id = HashMap::with_capacity(documents.len());
         for document in documents {
@@ -1069,10 +1067,8 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
         memo_id: Uuid,
         target: ProjectionTarget,
     ) -> AppResult<ProjectionIntent> {
-        <Self as MemoAuthoritativeStore>::enqueue_projection_intent(
-            self, user_id, memo_id, target,
-        )
-        .await
+        <Self as MemoAuthoritativeStore>::enqueue_projection_intent(self, user_id, memo_id, target)
+            .await
     }
 
     async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
@@ -1407,11 +1403,9 @@ mod tests {
         };
 
         let create_intent =
-            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(
-                &store, &v1,
-            )
-            .await
-            .unwrap();
+            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(&store, &v1)
+                .await
+                .unwrap();
         assert_eq!(create_intent.target, ProjectionTarget::Version(1));
         assert_eq!(
             HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(&store, owner, memo_id)
@@ -1419,47 +1413,36 @@ mod tests {
                 .unwrap(),
             Some(v1.clone())
         );
-        assert!(
-            HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(
-                &store,
-                other_owner,
-                memo_id,
-            )
-            .await
-            .unwrap()
-            .is_none()
-        );
-        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(
+        assert!(HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(
             &store,
-            &create_intent,
+            other_owner,
+            memo_id,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_none());
+        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(&store, &create_intent)
+            .await
+            .unwrap();
 
         let mut v2 = v1.clone();
         v2.version = 2;
         v2.ciphertext[0] ^= 0x55;
         let update_intent =
-            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(
-                &store, &v2,
-            )
+            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(&store, &v2)
+                .await
+                .unwrap();
+        assert_eq!(update_intent.target, ProjectionTarget::Version(2));
+        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(&store, &update_intent)
             .await
             .unwrap();
-        assert_eq!(update_intent.target, ProjectionTarget::Version(2));
-        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(
-            &store,
-            &update_intent,
-        )
-        .await
-        .unwrap();
 
         let mut stale_v2 = v1.clone();
         stale_v2.version = 2;
         stale_v2.ciphertext[0] ^= 0x77;
         assert!(matches!(
             HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(
-                &store,
-                &stale_v2,
+                &store, &stale_v2,
             )
             .await,
             Err(AppError::Conflict(_))
@@ -1500,12 +1483,9 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(
-            &store,
-            &delete_intent,
-        )
-        .await
-        .unwrap();
+        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(&store, &delete_intent)
+            .await
+            .unwrap();
         assert!(
             HighEncryptedMemoAuthoritativeStore::list_projection_intents(&store)
                 .await
