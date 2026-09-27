@@ -223,8 +223,10 @@ impl ProjectionReconciler {
                         failures.push(format!("high_search_projection={error}"));
                     }
                 }
-                if let Err(error) = self.cache.set_memo(memo, Some(CACHE_TTL)).await {
-                    failures.push(format!("cache={error}"));
+                if let Err(error) = self.cache.delete_memo(memo.user_id, memo.id).await {
+                    failures.push(format!("cache_invalidate={error}"));
+                } else if let Err(error) = self.cache.set_memo(memo, Some(CACHE_TTL)).await {
+                    failures.push(format!("cache_replace={error}"));
                 }
             }
             None => {
