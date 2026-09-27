@@ -14,13 +14,16 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
-        maintenance::{MemoMutationGuard, MemoMutationPermit},
+        maintenance::{
+            HighSearchQueryGuard, HighSearchQueryPermit, MemoMutationGuard, MemoMutationPermit,
+        },
     },
     error::{AppError, AppResult},
 };
 
 const STATE_COLLECTION: &str = "high_search_maintenance_state";
 const WRITER_LEASES_COLLECTION: &str = "high_search_writer_leases";
+const QUERY_LEASES_COLLECTION: &str = "high_search_query_leases";
 const STATE_ID: &str = "global";
 const MODE_OPEN: &str = "open";
 const MODE_MAINTENANCE: &str = "maintenance";
@@ -53,6 +56,7 @@ pub struct HighSearchMaintenanceStatus {
     holder_token: Option<String>,
     writer_epoch: i64,
     active_writer_leases: u64,
+    active_query_leases: u64,
 }
 
 impl HighSearchMaintenanceStatus {
@@ -71,11 +75,15 @@ impl HighSearchMaintenanceStatus {
     pub fn active_writer_leases(&self) -> u64 {
         self.active_writer_leases
     }
+
+    pub fn active_query_leases(&self) -> u64 {
+        self.active_query_leases
+    }
 }
 
-struct WriterAcquireContext {
+struct ActivityAcquireContext {
     state: Collection<Document>,
-    writers: Collection<Document>,
+    leases: Collection<Document>,
     lease_id: String,
 }
 
@@ -87,6 +95,7 @@ struct MaintenanceAcquireContext {
 struct RecoveryContext {
     state: Collection<Document>,
     writers: Collection<Document>,
+    queries: Collection<Document>,
     expected: HighSearchMaintenanceStatus,
 }
 
@@ -100,6 +109,7 @@ pub struct MongoHighSearchMaintenanceRecovery {
     client: Client,
     state: Collection<Document>,
     writers: Collection<Document>,
+    queries: Collection<Document>,
 }
 
 impl MongoHighSearchMaintenanceRecovery {
@@ -126,6 +136,7 @@ impl MongoHighSearchMaintenanceRecovery {
             client: database.client().clone(),
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
+            queries: database.collection(QUERY_LEASES_COLLECTION),
         }
     }
 
@@ -192,12 +203,18 @@ impl MongoHighSearchMaintenanceRecovery {
             .count_documents(doc! {})
             .await
             .map_err(|error| maintenance_db_error("inspect memo writer leases", error))?;
+        let active_query_leases = self
+            .queries
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| maintenance_db_error("inspect protected query leases", error))?;
 
         Ok(HighSearchMaintenanceStatus {
             mode,
             holder_token,
             writer_epoch,
             active_writer_leases,
+            active_query_leases,
         })
     }
 
@@ -218,6 +235,7 @@ impl MongoHighSearchMaintenanceRecovery {
         let context = RecoveryContext {
             state: self.state.clone(),
             writers: self.writers.clone(),
+            queries: self.queries.clone(),
             expected: expected.clone(),
         };
 
@@ -228,6 +246,11 @@ impl MongoHighSearchMaintenanceRecovery {
                 async move {
                     context
                         .writers
+                        .delete_many(doc! {})
+                        .session(&mut *session)
+                        .await?;
+                    context
+                        .queries
                         .delete_many(doc! {})
                         .session(&mut *session)
                         .await?;
@@ -290,6 +313,7 @@ pub(crate) struct MongoHighSearchMaintenanceGuard {
     client: Client,
     state: Collection<Document>,
     writers: Collection<Document>,
+    queries: Collection<Document>,
 }
 
 impl MongoHighSearchMaintenanceGuard {
@@ -298,6 +322,7 @@ impl MongoHighSearchMaintenanceGuard {
             client: database.client().clone(),
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
+            queries: database.collection(QUERY_LEASES_COLLECTION),
         };
         guard.initialize_state().await?;
         Ok(guard)
