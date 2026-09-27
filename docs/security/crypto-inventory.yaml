@@ -62,6 +62,16 @@ assets:
           semantic_sort_metadata_persisted: false
           list_ordering: decrypt_then_updated_at_desc
           corrupt_or_undecryptable_envelope_behavior: fail_closed
+          authoritative_route_state:
+            storage: shared_mongodb_maintenance_singleton
+            default: plaintext
+            values: [plaintext, encrypted]
+            generation: monotonic_i64
+            mutation_admission_snapshot: atomic_with_writer_lease
+            route_change_scope: live_offline_window_permit_only
+            route_change_cas: route_and_generation
+            read_route_reader: staged
+            request_path_router: not_installed
           request_path_wired: false
         cache_foundation:
           domain_cache_contract: owner_partition_and_memo_id_typed
@@ -101,6 +111,9 @@ assets:
           kms_preflight_before_freeze: true
           staging_reset_before_full_rebuild: true
           staging_reset_scope: memos_encrypted_v1_only
+          staging_reset_required_memo_route: plaintext
+          staging_reset_route_check_timing: after_maintenance_drain_before_reset
+          encrypted_authoritative_route_reset_behavior: fail_closed
           authoritative_plaintext_mutation: forbidden
           bounded_page_size_max: 1000
           decrypt_compare_verification: full_second_pass
