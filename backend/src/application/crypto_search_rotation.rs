@@ -138,9 +138,55 @@ impl HighSearchRotationService {
     }
 
     pub async fn rotate_and_reindex(&self, page_size: usize) -> AppResult<HighSearchRotationReady> {
+        self.rotate_and_reindex_with_route_requirement(page_size, None)
+            .await
+    }
+
+    /// Prepare a rotation only when the drained user-visible query route has
+    /// the required value. This is used by destructive staged rebuilds that
+    /// must never reset the protected projection while it is serving traffic.
+    pub async fn rotate_and_reindex_requiring_route(
+        &self,
+        page_size: usize,
+        required_route: HighSearchQueryRoute,
+    ) -> AppResult<HighSearchRotationReady> {
+        self.rotate_and_reindex_with_route_requirement(page_size, Some(required_route))
+            .await
+    }
+
+    async fn rotate_and_reindex_with_route_requirement(
+        &self,
+        page_size: usize,
+        required_route: Option<HighSearchQueryRoute>,
+    ) -> AppResult<HighSearchRotationReady> {
         // Reject invalid operator input before touching key state.
         validate_page_size(page_size)?;
         let permit = self.guard.acquire_offline_window().await?;
+
+        if let Some(required_route) = required_route {
+            let route = match permit.current_query_route().await {
+                Ok(route) => route,
+                Err(error) => {
+                    return rotation_failure(
+                        "HIGH search rotation route preflight failed",
+                        error,
+                        Ok(()),
+                        permit.release().await,
+                    )
+                }
+            };
+            if route.route != required_route {
+                return rotation_failure(
+                    "HIGH search rotation route preflight failed",
+                    AppError::Conflict(format!(
+                        "HIGH search query route must be {required_route} before this reindex; observed {} generation {}",
+                        route.route, route.generation
+                    )),
+                    Ok(()),
+                    permit.release().await,
+                );
+            }
+        }
 
         // Discard keys from the previous runtime generation before any new
         // projection work. The newly composed provider will repopulate only the
@@ -415,6 +461,19 @@ mod tests {
                 "permit-release"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn required_route_is_checked_after_drain_before_cache_or_reindex() {
+        let (service, events) = service(false, false, None, false);
+
+        assert!(matches!(
+            service
+                .rotate_and_reindex_requiring_route(100, HighSearchQueryRoute::Protected)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(events.snapshot(), vec!["guard-acquire", "permit-release"]);
     }
 
     #[tokio::test]
