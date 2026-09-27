@@ -1075,7 +1075,10 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
         <Self as MemoAuthoritativeStore>::list_projection_intents(self).await
     }
 
-    async fn acknowledge_encrypted_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+    async fn acknowledge_encrypted_projection_intent(
+        &self,
+        event: &ProjectionIntent,
+    ) -> AppResult<()> {
         <Self as MemoAuthoritativeStore>::acknowledge_projection_intent(self, event).await
     }
 }
@@ -1421,9 +1424,12 @@ mod tests {
         .await
         .unwrap()
         .is_none());
-        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(&store, &create_intent)
-            .await
-            .unwrap();
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(
+            &store,
+            &create_intent,
+        )
+        .await
+        .unwrap();
 
         let mut v2 = v1.clone();
         v2.version = 2;
@@ -1433,9 +1439,12 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(update_intent.target, ProjectionTarget::Version(2));
-        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(&store, &update_intent)
-            .await
-            .unwrap();
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(
+            &store,
+            &update_intent,
+        )
+        .await
+        .unwrap();
 
         let mut stale_v2 = v1.clone();
         stale_v2.version = 2;
@@ -1483,9 +1492,12 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(&store, &delete_intent)
-            .await
-            .unwrap();
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(
+            &store,
+            &delete_intent,
+        )
+        .await
+        .unwrap();
         assert!(
             HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents(&store)
                 .await
