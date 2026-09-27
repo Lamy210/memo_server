@@ -224,14 +224,6 @@ mod tests {
     #[test]
     fn status_is_the_non_destructive_default() {
         assert_eq!(parse_command(vec![]).unwrap(), Command::Status);
-        assert!(parse_command(vec![
-            "--apply".to_string(),
-            "--confirm-app-stopped".to_string(),
-            "--expected-writer-epoch".to_string(),
-            "7".to_string(),
-        ])
-        .is_err());
-
         assert_eq!(
             parse_command(vec!["--status".to_string()]).unwrap(),
             Command::Status
@@ -244,6 +236,24 @@ mod tests {
         assert!(parse_command(vec![
             "--apply".to_string(),
             "--confirm-app-stopped".to_string(),
+        ])
+        .is_err());
+        assert!(parse_command(vec![
+            "--apply".to_string(),
+            "--confirm-app-stopped".to_string(),
+            "--expected-writer-epoch".to_string(),
+            "7".to_string(),
+        ])
+        .is_err());
+        assert!(parse_command(vec![
+            "--apply".to_string(),
+            "--confirm-app-stopped".to_string(),
+            "--expected-writer-epoch".to_string(),
+            "7".to_string(),
+            "--expected-query-route".to_string(),
+            "invalid".to_string(),
+            "--expected-query-route-generation".to_string(),
+            "0".to_string(),
         ])
         .is_err());
 
