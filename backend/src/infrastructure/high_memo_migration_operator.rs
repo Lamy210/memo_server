@@ -9,9 +9,7 @@ use crate::{
             validate_page_size, HighMemoBatchMigrationService, HighMemoBatchMigrationStats,
             PlaintextMemoMigrationSource,
         },
-        crypto_search_rotation::{
-            HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit,
-        },
+        crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
     },
     config::{AppConfig, AuthoritativeBackend, HighMemoCryptoConfig},
     error::{AppError, AppResult},
@@ -75,8 +73,7 @@ pub async fn run_high_memo_migration(
     let source = Arc::new(
         MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?,
     );
-    let guard =
-        MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
+    let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
     let permit = guard.acquire_offline_window().await?;
 
     let result = run_under_permit(
@@ -153,9 +150,7 @@ mod tests {
     use super::*;
     use crate::{
         application::{
-            crypto::{
-                HighEncryptedMemoEnvelope, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID,
-            },
+            crypto::{HighEncryptedMemoEnvelope, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID},
             crypto_migration::{EncryptedMemoStageResult, HighMemoStagingCryptography},
             high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
         },
