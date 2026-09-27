@@ -8,6 +8,7 @@ pub mod crypto_search_projection;
 pub mod crypto_search_reindex;
 pub mod crypto_search_rotation;
 pub mod health;
+pub mod high_search_routing;
 pub mod high_search_shadow;
 pub mod maintenance;
 pub mod memo;
