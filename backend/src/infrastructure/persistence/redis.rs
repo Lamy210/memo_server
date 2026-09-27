@@ -240,12 +240,10 @@ impl MemoCache for RedisCache {
         RedisCache::delete(self, &Self::legacy_cache_key(owner_partition, memo_id)).await
     }
 
-    async fn memo_exists(
-        &self,
-        owner_partition: uuid::Uuid,
-        memo_id: uuid::Uuid,
-    ) -> AppResult<bool> {
-        RedisCache::exists(self, &Self::legacy_cache_key(owner_partition, memo_id)).await
+    async fn memo_exists(&self, owner_partition: uuid::Uuid, memo_id: uuid::Uuid) -> AppResult<bool> {
+        // Existence is integrity-sensitive too: a Redis key containing a memo
+        // for another owner/id must never satisfy the repository fast path.
+        Ok(self.get_memo(owner_partition, memo_id).await?.is_some())
     }
 }
 
