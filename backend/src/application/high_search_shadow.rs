@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -21,6 +22,12 @@ pub struct HighSearchShadowStats {
     pub completed: u64,
     pub total_matches: u64,
     pub total_mismatches: u64,
+    pub complete_set_observations: u64,
+    pub complete_set_matches: u64,
+    pub complete_set_mismatches: u64,
+    pub page_overlap_intersection: u64,
+    pub page_overlap_legacy_only: u64,
+    pub page_overlap_protected_only: u64,
     pub failures: u64,
     pub timeouts: u64,
     pub dropped_capacity: u64,
@@ -31,9 +38,25 @@ struct HighSearchShadowCounters {
     completed: AtomicU64,
     total_matches: AtomicU64,
     total_mismatches: AtomicU64,
+    complete_set_observations: AtomicU64,
+    complete_set_matches: AtomicU64,
+    complete_set_mismatches: AtomicU64,
+    page_overlap_intersection: AtomicU64,
+    page_overlap_legacy_only: AtomicU64,
+    page_overlap_protected_only: AtomicU64,
     failures: AtomicU64,
     timeouts: AtomicU64,
     dropped_capacity: AtomicU64,
+}
+
+pub struct HighSearchShadowObservation<'a, I> {
+    pub query: &'a str,
+    pub tag: Option<&'a str>,
+    pub owner_partition: Uuid,
+    pub page: usize,
+    pub limit: usize,
+    pub legacy_memo_ids: I,
+    pub legacy_total: usize,
 }
 
 pub struct HighSearchShadowObserver {
@@ -69,15 +92,10 @@ impl HighSearchShadowObserver {
     /// Query plaintext and result IDs are deliberately never logged. When the
     /// bounded worker pool is saturated the observation is dropped rather than
     /// adding unbounded tasks or backpressure to the request path.
-    pub fn observe(
-        &self,
-        query: &str,
-        tag: Option<&str>,
-        owner_partition: Uuid,
-        page: usize,
-        limit: usize,
-        legacy_total: usize,
-    ) {
+    pub fn observe<I>(&self, observation: HighSearchShadowObservation<'_, I>)
+    where
+        I: IntoIterator<Item = Uuid>,
+    {
         let Ok(permit) = self.permits.clone().try_acquire_owned() else {
             self.counters
                 .dropped_capacity
@@ -85,9 +103,19 @@ impl HighSearchShadowObserver {
             return;
         };
 
+        let HighSearchShadowObservation {
+            query,
+            tag,
+            owner_partition,
+            page,
+            limit,
+            legacy_memo_ids,
+            legacy_total,
+        } = observation;
         let reader = self.reader.clone();
         let query = query.to_owned();
         let tag = tag.map(str::to_owned);
+        let legacy_memo_ids = legacy_memo_ids.into_iter().collect::<Vec<_>>();
         let timeout_duration = self.timeout;
         let counters = self.counters.clone();
 
@@ -99,11 +127,15 @@ impl HighSearchShadowObserver {
             .await
             {
                 Ok(Ok(result)) => {
-                    if result.total == legacy_total {
-                        counters.total_matches.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        counters.total_mismatches.fetch_add(1, Ordering::Relaxed);
-                    }
+                    record_comparison(
+                        &counters,
+                        &legacy_memo_ids,
+                        legacy_total,
+                        &result.memo_ids,
+                        result.total,
+                        page,
+                        limit,
+                    );
                 }
                 Ok(Err(_)) => {
                     counters.failures.fetch_add(1, Ordering::Relaxed);
@@ -121,10 +153,16 @@ impl HighSearchShadowObserver {
             if completed.is_multiple_of(METRICS_LOG_EVERY_COMPLETIONS) {
                 let stats = snapshot(&counters);
                 log::info!(
-                    "HIGH search shadow aggregate: completed={} total_matches={} total_mismatches={} failures={} timeouts={} dropped_capacity={}",
+                    "HIGH search shadow aggregate: completed={} total_matches={} total_mismatches={} complete_set_observations={} complete_set_matches={} complete_set_mismatches={} page_overlap_intersection={} page_overlap_legacy_only={} page_overlap_protected_only={} failures={} timeouts={} dropped_capacity={}",
                     stats.completed,
                     stats.total_matches,
                     stats.total_mismatches,
+                    stats.complete_set_observations,
+                    stats.complete_set_matches,
+                    stats.complete_set_mismatches,
+                    stats.page_overlap_intersection,
+                    stats.page_overlap_legacy_only,
+                    stats.page_overlap_protected_only,
                     stats.failures,
                     stats.timeouts,
                     stats.dropped_capacity
@@ -138,11 +176,67 @@ impl HighSearchShadowObserver {
     }
 }
 
+fn record_comparison(
+    counters: &HighSearchShadowCounters,
+    legacy_memo_ids: &[Uuid],
+    legacy_total: usize,
+    protected_memo_ids: &[Uuid],
+    protected_total: usize,
+    page: usize,
+    limit: usize,
+) {
+    if protected_total == legacy_total {
+        counters.total_matches.fetch_add(1, Ordering::Relaxed);
+    } else {
+        counters.total_mismatches.fetch_add(1, Ordering::Relaxed);
+    }
+
+    let legacy_set = legacy_memo_ids.iter().copied().collect::<HashSet<_>>();
+    let protected_set = protected_memo_ids.iter().copied().collect::<HashSet<_>>();
+    let intersection = legacy_set.intersection(&protected_set).count();
+    let legacy_only = legacy_set.len().saturating_sub(intersection);
+    let protected_only = protected_set.len().saturating_sub(intersection);
+
+    counters
+        .page_overlap_intersection
+        .fetch_add(intersection as u64, Ordering::Relaxed);
+    counters
+        .page_overlap_legacy_only
+        .fetch_add(legacy_only as u64, Ordering::Relaxed);
+    counters
+        .page_overlap_protected_only
+        .fetch_add(protected_only as u64, Ordering::Relaxed);
+
+    let complete_legacy = page == 1 && legacy_total <= limit && legacy_set.len() == legacy_total;
+    let complete_protected =
+        page == 1 && protected_total <= limit && protected_set.len() == protected_total;
+    if complete_legacy && complete_protected {
+        counters
+            .complete_set_observations
+            .fetch_add(1, Ordering::Relaxed);
+        if legacy_set == protected_set {
+            counters
+                .complete_set_matches
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            counters
+                .complete_set_mismatches
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 fn snapshot(counters: &HighSearchShadowCounters) -> HighSearchShadowStats {
     HighSearchShadowStats {
         completed: counters.completed.load(Ordering::Relaxed),
         total_matches: counters.total_matches.load(Ordering::Relaxed),
         total_mismatches: counters.total_mismatches.load(Ordering::Relaxed),
+        complete_set_observations: counters.complete_set_observations.load(Ordering::Relaxed),
+        complete_set_matches: counters.complete_set_matches.load(Ordering::Relaxed),
+        complete_set_mismatches: counters.complete_set_mismatches.load(Ordering::Relaxed),
+        page_overlap_intersection: counters.page_overlap_intersection.load(Ordering::Relaxed),
+        page_overlap_legacy_only: counters.page_overlap_legacy_only.load(Ordering::Relaxed),
+        page_overlap_protected_only: counters.page_overlap_protected_only.load(Ordering::Relaxed),
         failures: counters.failures.load(Ordering::Relaxed),
         timeouts: counters.timeouts.load(Ordering::Relaxed),
         dropped_capacity: counters.dropped_capacity.load(Ordering::Relaxed),
@@ -211,24 +305,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shadow_records_total_match_without_exposing_request_data() {
+    async fn shadow_records_complete_set_match_without_exposing_request_data() {
+        let memo_id = Uuid::new_v4();
         let reader = Arc::new(FakeReader {
             result: Mutex::new(Some(Ok(HighSearchProjectionPage {
-                memo_ids: vec![Uuid::new_v4()],
-                total: 7,
+                memo_ids: vec![memo_id],
+                total: 1,
             }))),
             block: None,
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
 
-        observer.observe(
-            "private query",
-            Some("private-tag"),
-            Uuid::new_v4(),
-            1,
-            20,
-            7,
-        );
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: Some("private-tag"),
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: vec![memo_id],
+            legacy_total: 1,
+        });
         wait_for_completion(&observer).await;
 
         assert_eq!(
@@ -237,11 +333,50 @@ mod tests {
                 completed: 1,
                 total_matches: 1,
                 total_mismatches: 0,
+                complete_set_observations: 1,
+                complete_set_matches: 1,
+                complete_set_mismatches: 0,
+                page_overlap_intersection: 1,
+                page_overlap_legacy_only: 0,
+                page_overlap_protected_only: 0,
                 failures: 0,
                 timeouts: 0,
                 dropped_capacity: 0,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn shadow_records_page_overlap_without_logging_or_persisting_ids() {
+        let shared = Uuid::new_v4();
+        let legacy_only = Uuid::new_v4();
+        let protected_only = Uuid::new_v4();
+        let reader = Arc::new(FakeReader {
+            result: Mutex::new(Some(Ok(HighSearchProjectionPage {
+                memo_ids: vec![shared, protected_only],
+                total: 9,
+            }))),
+            block: None,
+        });
+        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
+
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 2,
+            limit: 2,
+            legacy_memo_ids: vec![shared, legacy_only],
+            legacy_total: 8,
+        });
+        wait_for_completion(&observer).await;
+
+        let stats = observer.stats();
+        assert_eq!(stats.total_mismatches, 1);
+        assert_eq!(stats.complete_set_observations, 0);
+        assert_eq!(stats.page_overlap_intersection, 1);
+        assert_eq!(stats.page_overlap_legacy_only, 1);
+        assert_eq!(stats.page_overlap_protected_only, 1);
     }
 
     #[tokio::test]
@@ -254,7 +389,15 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
 
-        observer.observe("private query", None, Uuid::new_v4(), 1, 20, 3);
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 3,
+        });
         wait_for_completion(&observer).await;
 
         assert_eq!(
@@ -263,6 +406,12 @@ mod tests {
                 completed: 1,
                 total_matches: 0,
                 total_mismatches: 0,
+                complete_set_observations: 0,
+                complete_set_matches: 0,
+                complete_set_mismatches: 0,
+                page_overlap_intersection: 0,
+                page_overlap_legacy_only: 0,
+                page_overlap_protected_only: 0,
                 failures: 1,
                 timeouts: 0,
                 dropped_capacity: 0,
@@ -279,7 +428,15 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(1)).unwrap();
 
-        observer.observe("private query", None, Uuid::new_v4(), 1, 20, 0);
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
         wait_for_completion(&observer).await;
 
         assert_eq!(observer.stats().timeouts, 1);
@@ -287,7 +444,15 @@ mod tests {
 
         // The timed-out task has dropped its owned semaphore permit, so the
         // next observation can be admitted rather than being permanently stuck.
-        observer.observe("next query", None, Uuid::new_v4(), 1, 20, 0);
+        observer.observe(HighSearchShadowObservation {
+            query: "next query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
         assert_eq!(observer.stats().dropped_capacity, 0);
     }
 
@@ -300,8 +465,24 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_secs(1)).unwrap();
 
-        observer.observe("first", None, Uuid::new_v4(), 1, 20, 0);
-        observer.observe("second", None, Uuid::new_v4(), 1, 20, 0);
+        observer.observe(HighSearchShadowObservation {
+            query: "first",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
+        observer.observe(HighSearchShadowObservation {
+            query: "second",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
 
         assert_eq!(observer.stats().dropped_capacity, 1);
         block.notify_one();

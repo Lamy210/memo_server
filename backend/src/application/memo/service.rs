@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
 use crate::{
     application::{
-        high_search_shadow::HighSearchShadowObserver,
+        high_search_shadow::{HighSearchShadowObservation, HighSearchShadowObserver},
         maintenance::{MemoMutationGuard, MemoMutationPermit},
     },
     domain::memo::{
@@ -151,14 +151,15 @@ impl MemoService {
             .await?;
 
         if let Some(observer) = self.high_search_shadow.as_ref() {
-            observer.observe(
+            observer.observe(HighSearchShadowObservation {
                 query,
-                tag.as_deref(),
-                user_id,
+                tag: tag.as_deref(),
+                owner_partition: user_id,
                 page,
                 limit,
-                search_page.total,
-            );
+                legacy_memo_ids: search_page.items.iter().map(|memo| memo.id),
+                legacy_total: search_page.total,
+            });
         }
 
         let total_pages = search_page.total.div_ceil(limit);

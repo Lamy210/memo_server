@@ -315,7 +315,11 @@ assets:
         reconciler_ack_after_lease_release: true
         query_shadow_observer: opt_in_bounded_best_effort
         query_shadow_user_response_influence: forbidden
-        query_shadow_comparison: aggregate_total_only
+        query_shadow_comparison: aggregate_total_and_ephemeral_page_set_overlap
+        query_shadow_complete_set_comparison: only_when_both_results_fit_first_page
+        query_shadow_page_overlap_metrics: intersection_legacy_only_protected_only_counts
+        query_shadow_result_ids_memory_scope: observation_task_only
+        query_shadow_result_id_persistence: forbidden
         query_shadow_plaintext_logging: forbidden
         query_shadow_result_id_logging: forbidden
         query_shadow_capacity_behavior: drop_observation
