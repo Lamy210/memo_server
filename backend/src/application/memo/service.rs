@@ -6,7 +6,7 @@ use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
 use crate::{
     application::{
         crypto_search_orchestration::HighSearchQueryReader,
-        high_search_routing::HighSearchQueryRoute,
+        high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
         high_search_shadow::{HighSearchShadowObservation, HighSearchShadowObserver},
         maintenance::{
             HighSearchQueryGuard, HighSearchQueryPermit, MemoMutationGuard, MemoMutationPermit,
@@ -155,11 +155,11 @@ impl MemoService {
 
         let page = page.max(1);
         let limit = limit.clamp(1, 100);
-        let (search_page, route) = self
+        let (search_page, route_snapshot) = self
             .search_memos_routed(query, tag.as_deref(), user_id, page, limit)
             .await?;
 
-        if route == HighSearchQueryRoute::Legacy {
+        if route_snapshot.route == HighSearchQueryRoute::Legacy {
             if let Some(observer) = self.high_search_shadow.as_ref() {
                 observer.observe(HighSearchShadowObservation {
                     query,
@@ -169,6 +169,7 @@ impl MemoService {
                     limit,
                     legacy_memo_ids: search_page.items.iter().map(|memo| memo.id),
                     legacy_total: search_page.total,
+                    legacy_route_generation: route_snapshot.generation,
                 });
             }
         }
@@ -195,11 +196,11 @@ impl MemoService {
         user_id: Uuid,
         page: usize,
         limit: usize,
-    ) -> AppResult<(MemoSearchPage, HighSearchQueryRoute)> {
+    ) -> AppResult<(MemoSearchPage, HighSearchQueryRouteSnapshot)> {
         let permit = self.high_search_query_guard.acquire_query().await?;
-        let route = permit.route_snapshot().route;
+        let route_snapshot = permit.route_snapshot();
 
-        let result = match route {
+        let result = match route_snapshot.route {
             HighSearchQueryRoute::Legacy => {
                 self.memo_repository
                     .search(query, tag.map(str::to_owned), user_id, page, limit)
@@ -213,7 +214,7 @@ impl MemoService {
 
         Self::finish_query(result, permit)
             .await
-            .map(|page| (page, route))
+            .map(|page| (page, route_snapshot))
     }
 
     async fn search_memos_protected(
