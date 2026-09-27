@@ -9,9 +9,9 @@ pub(crate) mod crypto_search_keys;
 #[cfg(feature = "aws-kms-search")]
 pub(crate) mod crypto_search_seed_aws_kms;
 pub(crate) mod crypto_search_seed_provider;
+pub(crate) mod high_memo_authoritative;
 pub(crate) mod high_memo_aws_runtime;
 pub(crate) mod high_memo_cache;
-pub(crate) mod high_memo_authoritative;
 pub mod high_memo_migration_operator;
 pub(crate) mod high_search_aws_runtime;
 pub mod high_search_cutover_approval;
