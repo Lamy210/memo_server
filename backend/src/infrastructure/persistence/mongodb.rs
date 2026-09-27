@@ -584,6 +584,149 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("count MongoDB encrypted migration memos", error))
     }
 
+    async fn save_encrypted_transaction(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+        event: &ProjectionIntent,
+    ) -> AppResult<()> {
+        let document = EncryptedMemoDocument::try_from(envelope)?;
+        let mut session = self
+            .client
+            .start_session()
+            .await
+            .map_err(|error| mongo_error("start encrypted MongoDB memo session", error))?;
+        let context = EncryptedSaveTransactionContext {
+            memos: self.encrypted_memos.clone(),
+            intents: self.projection_intents.clone(),
+            memo: document,
+            intent: ProjectionIntentDocument::from_intent(event)?,
+        };
+
+        let result = session
+            .start_transaction()
+            .write_concern(WriteConcern::majority())
+            .and_run(context, |session, context| {
+                async move {
+                    if context.memo.version == 1 {
+                        context
+                            .memos
+                            .insert_one(context.memo.clone())
+                            .session(&mut *session)
+                            .await?;
+                    } else {
+                        let expected_version = context.memo.version - 1;
+                        let update = doc! {
+                            "$set": {
+                                "ciphertext": context.memo.ciphertext.clone(),
+                                "nonce": context.memo.nonce.clone(),
+                                "wrapped_dek": context.memo.wrapped_dek.clone(),
+                                "version": context.memo.version,
+                                "crypto_suite_id": context.memo.crypto_suite_id.clone(),
+                                "key_version": context.memo.key_version.clone(),
+                                "schema_version": context.memo.schema_version,
+                            }
+                        };
+                        let result = context
+                            .memos
+                            .update_one(
+                                doc! {
+                                    "_id": context.memo.id.clone(),
+                                    "owner_partition": context.memo.owner_partition.clone(),
+                                    "version": expected_version,
+                                },
+                                update,
+                            )
+                            .session(&mut *session)
+                            .await?;
+
+                        if result.matched_count != 1 {
+                            return Err(MongoError::custom(OptimisticConflict));
+                        }
+                    }
+
+                    context
+                        .intents
+                        .insert_one(context.intent.clone())
+                        .session(&mut *session)
+                        .await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if error.get_custom::<OptimisticConflict>().is_some() => Err(
+                AppError::Conflict("Memo has been updated by another client".into()),
+            ),
+            Err(error) => Err(mongo_error(
+                "commit encrypted MongoDB memo transaction",
+                error,
+            )),
+        }
+    }
+
+    async fn delete_encrypted_transaction(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+        event: &ProjectionIntent,
+    ) -> AppResult<()> {
+        let mut session = self
+            .client
+            .start_session()
+            .await
+            .map_err(|error| mongo_error("start encrypted MongoDB delete session", error))?;
+        let context = EncryptedDeleteTransactionContext {
+            memos: self.encrypted_memos.clone(),
+            intents: self.projection_intents.clone(),
+            owner_partition: owner_partition.to_string(),
+            memo_id: memo_id.to_string(),
+            intent: ProjectionIntentDocument::from_intent(event)?,
+        };
+
+        let result = session
+            .start_transaction()
+            .write_concern(WriteConcern::majority())
+            .and_run(context, |session, context| {
+                async move {
+                    let result = context
+                        .memos
+                        .delete_one(doc! {
+                            "_id": context.memo_id.clone(),
+                            "owner_partition": context.owner_partition.clone(),
+                        })
+                        .session(&mut *session)
+                        .await?;
+
+                    if result.deleted_count != 1 {
+                        return Err(MongoError::custom(MissingMemo));
+                    }
+
+                    context
+                        .intents
+                        .insert_one(context.intent.clone())
+                        .session(&mut *session)
+                        .await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if error.get_custom::<MissingMemo>().is_some() => {
+                Err(AppError::NotFound("Memo not found".into()))
+            }
+            Err(error) => Err(mongo_error(
+                "commit encrypted MongoDB delete transaction",
+                error,
+            )),
+        }
+    }
+
     async fn save_transaction(&self, memo: &Memo, event: &ProjectionIntent) -> AppResult<()> {
         let mut session = self
             .client
