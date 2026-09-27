@@ -99,7 +99,7 @@ Forbidden:
 - normalized search term
 - plaintext VAULT content
 
-Cache keys must preserve the user/owner boundary.
+Cache keys must preserve the user/owner boundary. Domain/application cache callers must pass owner and memo identifiers separately; persistence adapters own namespace/key construction. HIGH cache writes require an explicit positive TTL and may persist only the encrypted envelope representation.
 
 ## 6. Manticore / search
 
