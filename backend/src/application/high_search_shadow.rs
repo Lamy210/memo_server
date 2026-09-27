@@ -49,6 +49,16 @@ struct HighSearchShadowCounters {
     dropped_capacity: AtomicU64,
 }
 
+pub struct HighSearchShadowObservation<'a, I> {
+    pub query: &'a str,
+    pub tag: Option<&'a str>,
+    pub owner_partition: Uuid,
+    pub page: usize,
+    pub limit: usize,
+    pub legacy_memo_ids: I,
+    pub legacy_total: usize,
+}
+
 pub struct HighSearchShadowObserver {
     reader: Arc<dyn HighSearchQueryReader>,
     permits: Arc<Semaphore>,
@@ -82,16 +92,8 @@ impl HighSearchShadowObserver {
     /// Query plaintext and result IDs are deliberately never logged. When the
     /// bounded worker pool is saturated the observation is dropped rather than
     /// adding unbounded tasks or backpressure to the request path.
-    pub fn observe<I>(
-        &self,
-        query: &str,
-        tag: Option<&str>,
-        owner_partition: Uuid,
-        page: usize,
-        limit: usize,
-        legacy_memo_ids: I,
-        legacy_total: usize,
-    ) where
+    pub fn observe<I>(&self, observation: HighSearchShadowObservation<'_, I>)
+    where
         I: IntoIterator<Item = Uuid>,
     {
         let Ok(permit) = self.permits.clone().try_acquire_owned() else {
@@ -101,6 +103,15 @@ impl HighSearchShadowObserver {
             return;
         };
 
+        let HighSearchShadowObservation {
+            query,
+            tag,
+            owner_partition,
+            page,
+            limit,
+            legacy_memo_ids,
+            legacy_total,
+        } = observation;
         let reader = self.reader.clone();
         let query = query.to_owned();
         let tag = tag.map(str::to_owned);
@@ -305,15 +316,15 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
 
-        observer.observe(
-            "private query",
-            Some("private-tag"),
-            Uuid::new_v4(),
-            1,
-            20,
-            vec![memo_id],
-            1,
-        );
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: Some("private-tag"),
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: vec![memo_id],
+            legacy_total: 1,
+        });
         wait_for_completion(&observer).await;
 
         assert_eq!(
@@ -349,15 +360,15 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
 
-        observer.observe(
-            "private query",
-            None,
-            Uuid::new_v4(),
-            2,
-            2,
-            vec![shared, legacy_only],
-            8,
-        );
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 2,
+            limit: 2,
+            legacy_memo_ids: vec![shared, legacy_only],
+            legacy_total: 8,
+        });
         wait_for_completion(&observer).await;
 
         let stats = observer.stats();
@@ -378,15 +389,15 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
 
-        observer.observe(
-            "private query",
-            None,
-            Uuid::new_v4(),
-            1,
-            20,
-            Vec::<Uuid>::new(),
-            3,
-        );
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 3,
+        });
         wait_for_completion(&observer).await;
 
         assert_eq!(
@@ -417,15 +428,15 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(1)).unwrap();
 
-        observer.observe(
-            "private query",
-            None,
-            Uuid::new_v4(),
-            1,
-            20,
-            Vec::<Uuid>::new(),
-            0,
-        );
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
         wait_for_completion(&observer).await;
 
         assert_eq!(observer.stats().timeouts, 1);
@@ -433,15 +444,15 @@ mod tests {
 
         // The timed-out task has dropped its owned semaphore permit, so the
         // next observation can be admitted rather than being permanently stuck.
-        observer.observe(
-            "next query",
-            None,
-            Uuid::new_v4(),
-            1,
-            20,
-            Vec::<Uuid>::new(),
-            0,
-        );
+        observer.observe(HighSearchShadowObservation {
+            query: "next query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
         assert_eq!(observer.stats().dropped_capacity, 0);
     }
 
@@ -454,8 +465,24 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_secs(1)).unwrap();
 
-        observer.observe("first", None, Uuid::new_v4(), 1, 20, Vec::<Uuid>::new(), 0);
-        observer.observe("second", None, Uuid::new_v4(), 1, 20, Vec::<Uuid>::new(), 0);
+        observer.observe(HighSearchShadowObservation {
+            query: "first",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
+        observer.observe(HighSearchShadowObservation {
+            query: "second",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+        });
 
         assert_eq!(observer.stats().dropped_capacity, 1);
         block.notify_one();
