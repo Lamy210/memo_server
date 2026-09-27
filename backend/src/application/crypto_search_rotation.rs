@@ -118,6 +118,12 @@ impl HighSearchRotationReady {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RouteRequirement {
+    Route(HighSearchQueryRoute),
+    Snapshot(HighSearchQueryRouteSnapshot),
+}
+
 pub struct HighSearchRotationService {
     guard: Arc<dyn HighSearchOfflineWindowGuard>,
     cache: Arc<dyn HighSearchKeyCacheControl>,
@@ -150,20 +156,38 @@ impl HighSearchRotationService {
         page_size: usize,
         required_route: HighSearchQueryRoute,
     ) -> AppResult<HighSearchRotationReady> {
-        self.rotate_and_reindex_with_route_requirement(page_size, Some(required_route))
-            .await
+        self.rotate_and_reindex_with_route_requirement(
+            page_size,
+            Some(RouteRequirement::Route(required_route)),
+        )
+        .await
+    }
+
+    /// Prepare a rotation only when both the drained route and generation match
+    /// the operator-observed snapshot. This prevents a stale cutover command
+    /// from clearing caches or resetting the protected projection.
+    pub async fn rotate_and_reindex_requiring_snapshot(
+        &self,
+        page_size: usize,
+        required_snapshot: HighSearchQueryRouteSnapshot,
+    ) -> AppResult<HighSearchRotationReady> {
+        self.rotate_and_reindex_with_route_requirement(
+            page_size,
+            Some(RouteRequirement::Snapshot(required_snapshot)),
+        )
+        .await
     }
 
     async fn rotate_and_reindex_with_route_requirement(
         &self,
         page_size: usize,
-        required_route: Option<HighSearchQueryRoute>,
+        requirement: Option<RouteRequirement>,
     ) -> AppResult<HighSearchRotationReady> {
         // Reject invalid operator input before touching key state.
         validate_page_size(page_size)?;
         let permit = self.guard.acquire_offline_window().await?;
 
-        if let Some(required_route) = required_route {
+        if let Some(requirement) = requirement {
             let route = match permit.current_query_route().await {
                 Ok(route) => route,
                 Err(error) => {
@@ -175,11 +199,15 @@ impl HighSearchRotationService {
                     )
                 }
             };
-            if route.route != required_route {
+            let matches = match requirement {
+                RouteRequirement::Route(required_route) => route.route == required_route,
+                RouteRequirement::Snapshot(required_snapshot) => route == required_snapshot,
+            };
+            if !matches {
                 return rotation_failure(
                     "HIGH search rotation route preflight failed",
                     AppError::Conflict(format!(
-                        "HIGH search query route must be {required_route} before this reindex; observed {} generation {}",
+                        "HIGH search query route snapshot does not satisfy reindex requirement; observed {} generation {}",
                         route.route, route.generation
                     )),
                     Ok(()),
@@ -470,6 +498,25 @@ mod tests {
         assert!(matches!(
             service
                 .rotate_and_reindex_requiring_route(100, HighSearchQueryRoute::Protected)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(events.snapshot(), vec!["guard-acquire", "permit-release"]);
+    }
+
+    #[tokio::test]
+    async fn stale_route_generation_fails_before_cache_or_reindex() {
+        let (service, events) = service(false, false, None, false);
+
+        assert!(matches!(
+            service
+                .rotate_and_reindex_requiring_snapshot(
+                    100,
+                    HighSearchQueryRouteSnapshot {
+                        route: HighSearchQueryRoute::Legacy,
+                        generation: 7,
+                    },
+                )
                 .await,
             Err(AppError::Conflict(_))
         ));
