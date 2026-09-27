@@ -210,11 +210,17 @@ impl HighEncryptedMemoCache for RedisCache {
     async fn set_envelope(
         &self,
         envelope: &HighEncryptedMemoEnvelope,
-        expiration: Option<Duration>,
+        expiration: Duration,
     ) -> AppResult<()> {
         envelope.validate_structure()?;
+        if expiration.as_secs() == 0 {
+            return Err(AppError::ValidationError(
+                "HIGH encrypted cache TTL must be at least one second".into(),
+            ));
+        }
+
         let key = Self::high_cache_key(envelope.owner_partition, envelope.memo_id);
-        self.set(&key, envelope, expiration).await
+        self.set(&key, envelope, Some(expiration)).await
     }
 
     async fn delete_envelope(
@@ -385,6 +391,12 @@ mod tests {
         assert!(!object.contains_key("tags"));
         assert!(!object.contains_key("created_at"));
         assert!(!object.contains_key("updated_at"));
+    }
+
+    #[test]
+    fn high_cache_ttl_requires_at_least_one_redis_second() {
+        assert_eq!(Duration::from_secs(1).as_secs(), 1);
+        assert_eq!(Duration::from_millis(999).as_secs(), 0);
     }
 
     #[test]
