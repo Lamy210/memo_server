@@ -272,7 +272,6 @@ impl MemoService {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -283,15 +282,9 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::{
-        application::{
-            crypto_search_projection::HighSearchProjectionPage,
-            high_search_routing::HighSearchQueryRouteSnapshot,
-            maintenance::{
-                HighSearchQueryPermit, UnrestrictedMemoMutationGuard,
-            },
-        },
-        domain::memo::repository::MemoSearchPage,
+    use crate::application::{
+        crypto_search_projection::HighSearchProjectionPage,
+        maintenance::UnrestrictedMemoMutationGuard,
     };
 
     struct FakeRepository {
