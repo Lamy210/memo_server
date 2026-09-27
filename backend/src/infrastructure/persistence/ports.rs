@@ -3,7 +3,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::{domain::memo::entity::Memo, error::AppResult};
+use crate::{
+    application::crypto::HighEncryptedMemoEnvelope,
+    domain::memo::entity::Memo,
+    error::AppResult,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectionTarget {
@@ -28,6 +32,54 @@ impl ProjectionIntent {
             target,
         }
     }
+}
+
+#[async_trait]
+pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
+    async fn find_envelope_by_id(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<Option<HighEncryptedMemoEnvelope>>;
+
+    async fn find_all_envelopes_by_owner(
+        &self,
+        owner_partition: Uuid,
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>>;
+
+    /// Load encrypted envelopes in the same order as the requested IDs.
+    /// Missing IDs are omitted.
+    async fn find_many_envelopes_by_ids(
+        &self,
+        owner_partition: Uuid,
+        memo_ids: &[Uuid],
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>>;
+
+    /// Persist an encrypted authoritative memo and its projection intent in one
+    /// atomic transaction.
+    async fn save_envelope_with_projection_intent(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+    ) -> AppResult<ProjectionIntent>;
+
+    /// Delete an encrypted authoritative memo and persist its projection intent
+    /// in the same atomic transaction.
+    async fn delete_envelope_with_projection_intent(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<ProjectionIntent>;
+
+    async fn enqueue_projection_intent(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+        target: ProjectionTarget,
+    ) -> AppResult<ProjectionIntent>;
+
+    async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>>;
+
+    async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()>;
 }
 
 #[async_trait]
