@@ -212,7 +212,6 @@ impl ProjectionReconciler {
         memo: Option<&crate::domain::memo::entity::Memo>,
     ) -> AppResult<()> {
         let mut failures = Vec::new();
-        let cache_key = cache_key(event.user_id, event.memo_id);
 
         match memo {
             Some(memo) => {
@@ -224,7 +223,7 @@ impl ProjectionReconciler {
                         failures.push(format!("high_search_projection={error}"));
                     }
                 }
-                if let Err(error) = self.cache.set_memo(&cache_key, memo, Some(CACHE_TTL)).await {
+                if let Err(error) = self.cache.set_memo(memo, Some(CACHE_TTL)).await {
                     failures.push(format!("cache={error}"));
                 }
             }
@@ -240,7 +239,7 @@ impl ProjectionReconciler {
                         failures.push(format!("high_search_projection={error}"));
                     }
                 }
-                if let Err(error) = self.cache.delete(&cache_key).await {
+                if let Err(error) = self.cache.delete_memo(event.user_id, event.memo_id).await {
                     failures.push(format!("cache={error}"));
                 }
             }
@@ -395,10 +394,6 @@ fn target_reached(
     }
 }
 
-fn cache_key(user_id: Uuid, memo_id: Uuid) -> String {
-    format!("memo:{user_id}:{memo_id}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,14 +497,14 @@ mod tests {
     impl MemoCache for FakeCache {
         async fn get_memo(
             &self,
-            _key: &str,
+            _owner_partition: Uuid,
+            _memo_id: Uuid,
         ) -> AppResult<Option<crate::domain::memo::entity::Memo>> {
             Ok(None)
         }
 
         async fn set_memo(
             &self,
-            _key: &str,
             _memo: &crate::domain::memo::entity::Memo,
             _expiration: Option<Duration>,
         ) -> AppResult<()> {
@@ -517,12 +512,16 @@ mod tests {
             Ok(())
         }
 
-        async fn delete(&self, _key: &str) -> AppResult<()> {
+        async fn delete_memo(
+            &self,
+            _owner_partition: Uuid,
+            _memo_id: Uuid,
+        ) -> AppResult<()> {
             self.events.push("cache-delete");
             Ok(())
         }
 
-        async fn exists(&self, _key: &str) -> AppResult<bool> {
+        async fn memo_exists(&self, _owner_partition: Uuid, _memo_id: Uuid) -> AppResult<bool> {
             Ok(false)
         }
     }
@@ -831,17 +830,6 @@ mod tests {
 
         memo.version = 2;
         assert_eq!(projection_state(Some(&memo)), Some(2));
-    }
-
-    #[test]
-    fn cache_key_is_tenant_scoped() {
-        let user_id = Uuid::new_v4();
-        let memo_id = Uuid::new_v4();
-
-        assert_eq!(
-            cache_key(user_id, memo_id),
-            format!("memo:{user_id}:{memo_id}")
-        );
     }
 
     #[test]
