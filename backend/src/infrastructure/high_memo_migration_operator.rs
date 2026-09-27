@@ -156,9 +156,7 @@ mod tests {
             crypto::{
                 HighEncryptedMemoEnvelope, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID,
             },
-            crypto_migration::{
-                EncryptedMemoStageResult, HighMemoMigrationResult, HighMemoStagingCryptography,
-            },
+            crypto_migration::{EncryptedMemoStageResult, HighMemoStagingCryptography},
             high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
         },
         config::{AuthConfig, HighSearchConfig, HighSearchShadowConfig, SearchBackend},
