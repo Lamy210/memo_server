@@ -33,6 +33,16 @@ pub trait HighMemoStagingCryptography: Send + Sync {
     async fn decrypt_staged(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo>;
 }
 
+/// Destructive administration boundary for the isolated, non-authoritative
+/// encrypted migration collection.
+///
+/// Production callers must invoke this only after authoritative memo writers
+/// have been drained by the shared maintenance barrier.
+#[async_trait]
+pub trait HighEncryptedMemoStagingAdmin: Send + Sync {
+    async fn reset_staging(&self) -> AppResult<()>;
+}
+
 /// Persistence boundary for the isolated encrypted migration collection.
 #[async_trait]
 pub trait HighEncryptedMemoStagingStore: Send + Sync {

@@ -50,6 +50,28 @@ assets:
         payload_codec: implemented
         aead_adapter: staged
         key_wrapping_provider: aws_kms_adapter_with_operator_runtime_config_staged
+        guarded_migration:
+          command: migrate_high_memo_staged
+          default_mode: plan
+          apply_confirmation:
+            - confirm_staging_reset
+            - confirm_all_writers_guarded
+          all_writer_replicas_guard_participation: required_operator_confirmation
+          source_write_freeze: shared_mongodb_offline_window
+          background_reconciliation_drain: true
+          high_search_query_drain: true
+          kms_preflight_before_freeze: true
+          staging_reset_before_full_rebuild: true
+          staging_reset_scope: memos_encrypted_v1_only
+          authoritative_plaintext_mutation: forbidden
+          bounded_page_size_max: 1000
+          decrypt_compare_verification: full_second_pass
+          exact_source_staging_count_gate: true
+          maintenance_revalidation:
+            - before_staging_reset
+            - after_staging_reset
+            - after_full_verification
+          failure_behavior: release_maintenance_and_keep_staging_non_authoritative
         runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto

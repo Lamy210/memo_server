@@ -15,7 +15,9 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto::HighEncryptedMemoEnvelope,
-        crypto_migration::{EncryptedMemoStageResult, HighEncryptedMemoStagingStore},
+        crypto_migration::{
+            EncryptedMemoStageResult, HighEncryptedMemoStagingAdmin, HighEncryptedMemoStagingStore,
+        },
         crypto_migration_batch::PlaintextMemoMigrationSource,
         health::HealthProbe,
     },
@@ -749,6 +751,17 @@ impl PlaintextMemoMigrationSource for MongoDbAuthoritativeStore {
 }
 
 #[async_trait]
+impl HighEncryptedMemoStagingAdmin for MongoDbAuthoritativeStore {
+    async fn reset_staging(&self) -> AppResult<()> {
+        self.encrypted_memos
+            .delete_many(doc! {})
+            .await
+            .map_err(|error| mongo_error("reset encrypted MongoDB migration staging", error))?;
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
     async fn find_staged(
         &self,
@@ -1179,6 +1192,16 @@ mod tests {
                 .await,
             Err(AppError::Conflict(_))
         ));
+
+        store.reset_staging().await.unwrap();
+        assert_eq!(
+            store
+                .count_staged_encrypted_memos_for_migration()
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(store.list_projection_intents().await.unwrap().is_empty());
 
         let mut migrated = Memo::new(
             "Migrated memo".into(),

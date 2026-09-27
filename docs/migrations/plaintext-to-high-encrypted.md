@@ -38,6 +38,52 @@ The key-ring JSON may contain at most 32 versions and is capped at 64 KiB. Every
 This pipeline is **not** CDC or dual-write replication. Count checks reduce migration
 risk but do not make concurrent source writes safe.
 
+## Guarded migration operator
+
+The repository-owned final staging command is non-destructive by default:
+
+```bash
+cargo run --locked --features aws-kms-memo --bin migrate_high_memo_staged -- --plan
+```
+
+Plan mode reports the current plaintext source count and encrypted staging count. It does not
+construct the AWS KMS runtime, acquire maintenance, reset staging, or create ciphertext.
+
+The guarded apply path is explicit:
+
+```bash
+cargo run --locked --features aws-kms-memo --bin migrate_high_memo_staged -- \
+  --apply \
+  --confirm-staging-reset \
+  --confirm-all-writers-guarded \
+  --page-size 500
+```
+
+Before apply, the operator must verify that every running server replica which can mutate MongoDB memos is deployed with shared maintenance-guard participation (HIGH memo crypto or HIGH search enabled on that replica). The CLI requires `--confirm-all-writers-guarded` because an old/unconfigured replica using the unrestricted mutation guard cannot be detected from the maintenance singleton.
+
+Apply mode performs these steps in order:
+
+1. validate MongoDB + HIGH memo AWS KMS deployment configuration,
+2. construct the operator-only KMS runtime and complete `DescribeKey` preflight **before** traffic is frozen,
+3. acquire the shared MongoDB maintenance/offline-window permit,
+4. drain foreground memo writers, background reconciliation, and admitted HIGH-search queries,
+5. revalidate the maintenance permit,
+6. delete all documents from the isolated, non-authoritative `memos_encrypted_v1` staging collection,
+7. revalidate the permit,
+8. perform the full bounded migration and decrypt/compare verification passes,
+9. revalidate the permit again,
+10. explicitly release maintenance.
+
+Resetting the staging collection is intentional. It removes stale envelopes for source memos
+deleted since a prior rehearsal and makes each frozen final pass a complete rebuild from the
+authoritative plaintext source. The plaintext `memos` collection is never deleted or rewritten
+by this operator.
+
+If migration fails after staging reset, the operator releases maintenance when possible and
+returns failure. The partially rebuilt encrypted collection remains non-authoritative and may be
+discarded/rebuilt on the next attempt. A simultaneous migration failure and maintenance-release
+failure is reported as a combined fail-closed error and requires the maintenance recovery runbook.
+
 ## Batch traversal
 
 The application migration source contract traverses plaintext memos in stable ascending
@@ -129,11 +175,11 @@ lose post-cutover mutations.
 This runbook does not authorize production execution yet. The following remain blockers:
 
 - least-privilege KMS identity and key-policy review for the staged deployment configuration,
-- a guarded migration command or operational job that constructs the operator-only KMS staging runtime,
+- production approval of the least-privilege KMS identity/key policy and the configured versioned key ring,
+- an operator-reviewed execution/rehearsal of the guarded `migrate_high_memo_staged` command,
 - HIGH Valkey request-path wiring and retirement of the legacy plaintext cache contract,
-- a production language-aware analyzer and production search-key provider for the staged protected Manticore orchestration,
-- an operator-guarded invocation of the protected-search reindex/verification service,
+- production approval/cutover of the already-staged protected search path,
 - encrypted authoritative-store request-path integration,
-- final cutover/rollback rehearsal.
+- final encrypted-store cutover/rollback rehearsal.
 
 The ciphertext-only Valkey adapter is implemented but deliberately not wired into normal CRUD yet. `MEMO-HIGH-1` remains runtime-ineligible until the remaining dependencies are implemented and its inventory status is deliberately changed to DEPLOYED.
