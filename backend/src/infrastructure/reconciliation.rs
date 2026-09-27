@@ -609,6 +609,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MemoMutationPermit for FakeMutationPermit {
+        fn memo_route_snapshot(
+            &self,
+        ) -> crate::application::high_memo_routing::HighMemoAuthoritativeRouteSnapshot {
+            crate::application::high_memo_routing::HighMemoAuthoritativeRouteSnapshot {
+                route: crate::application::high_memo_routing::HighMemoAuthoritativeRoute::Plaintext,
+                generation: 0,
+            }
+        }
+
         async fn release(self: Box<Self>) -> AppResult<()> {
             self.events.push("guard-release");
             if self.fail_release {
