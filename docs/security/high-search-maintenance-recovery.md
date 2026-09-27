@@ -1,4 +1,4 @@
-# HIGH Search Maintenance Recovery Runbook
+# Shared HIGH Maintenance Recovery Runbook
 
 Status: break-glass operator tooling; no automatic lease expiry.
 
@@ -15,7 +15,7 @@ Before any `--apply` recovery:
 1. Stop every memo_server application replica and any operator job that can acquire memo mutation or protected-query leases.
 2. Verify those processes are no longer running.
 3. Keep MongoDB available as the authoritative recovery source.
-4. Run status inspection and record the reported mode, writer epoch (the legacy-named shared activity generation), query route, query-route generation, active writer/query lease counts, and holder token.
+4. Run status inspection and record the reported mode, writer epoch (the legacy-named shared activity generation), query route/generation, memo authoritative route/generation, active writer/query lease counts, and holder token.
 5. Do not reuse an older snapshot after any application process has restarted.
 
 Recovery never relies on lease age or a timeout. If the operator cannot establish that all writers and protected-query workers are stopped, leave the state fail-closed.
@@ -39,6 +39,8 @@ current.mode=maintenance
 current.writer_epoch=42
 current.query_route=legacy
 current.query_route_generation=0
+current.memo_route=plaintext
+current.memo_route_generation=0
 current.active_writer_leases=0
 current.active_query_leases=0
 current.holder_token=...
@@ -48,7 +50,7 @@ The holder token is a compare-and-swap recovery value, not an authentication cre
 
 ## Recover an abandoned maintenance barrier
 
-If status reports `mode=maintenance`, recovery requires the exact writer epoch, query route, query-route generation, and holder token observed immediately before recovery:
+If status reports `mode=maintenance`, recovery requires the exact writer epoch, query route/generation, memo authoritative route/generation, and holder token observed immediately before recovery:
 
 ```bash
 MONGODB_URI='mongodb://...' \
@@ -59,8 +61,12 @@ cargo run --locked --bin recover_high_search_maintenance -- \
   --expected-writer-epoch 42 \
   --expected-query-route legacy \
   --expected-query-route-generation 0 \
+  --expected-memo-route plaintext \
+  --expected-memo-route-generation 0 \
   --expected-query-route legacy \
   --expected-query-route-generation 0 \
+  --expected-memo-route plaintext \
+  --expected-memo-route-generation 0 \
   --expected-holder-token '<observed-holder-token>'
 ```
 
@@ -83,15 +89,15 @@ Recovery is rejected when the gate is already open and neither writer nor protec
 
 ## Compare-and-swap behavior
 
-Recovery is executed in a majority-write MongoDB transaction. The transaction is accepted only when the current maintenance mode, writer epoch, query route, query-route generation, and holder token still match the inspected snapshot. Any intervening writer/query acquisition, route cutover/rollback, or maintenance ownership change causes a conflict and leaves the newer state untouched.
+Recovery is executed in a majority-write MongoDB transaction. The transaction is accepted only when the current maintenance mode, writer epoch, query route/generation, memo authoritative route/generation, and holder token still match the inspected snapshot. Any intervening writer/query acquisition, search-route change, memo-store cutover/rollback, or maintenance ownership change causes a conflict and leaves the newer state untouched.
 
-After a conflict, run status inspection again. Never substitute a newly observed token, epoch, route, or route generation without re-establishing the safety prerequisites.
+After a conflict, run status inspection again. Never substitute a newly observed token, epoch, query route, memo route, or generation without re-establishing the safety prerequisites.
 
 ## Restart
 
 After successful recovery:
 
-1. inspect status again and confirm `mode=open`, `active_writer_leases=0`, `active_query_leases=0`, and the expected query route/generation,
+1. inspect status again and confirm `mode=open`, `active_writer_leases=0`, `active_query_leases=0`, and the expected query + memo route generations,
 2. start one application replica,
 3. verify health and a controlled memo mutation,
 4. restore the remaining replicas gradually,
