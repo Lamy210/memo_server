@@ -155,7 +155,7 @@ impl DataKeyProvider for AwsKmsDataKeyProvider {
                 )
             })?
             .into_inner();
-        validate_wrapped_dek(&wrapped_dek)?;
+        validate_generated_wrapped_dek(&wrapped_dek)?;
 
         let generated = GeneratedDataKey {
             plaintext,
@@ -172,7 +172,7 @@ impl DataKeyProvider for AwsKmsDataKeyProvider {
         key_version: &str,
         aad: &HighMemoAad,
     ) -> AppResult<SecretDataKey> {
-        validate_wrapped_dek(wrapped_dek)?;
+        validate_persisted_wrapped_dek(wrapped_dek)?;
         let key_arn = self.key_arn_for_version(key_version)?;
         let context = data_key_encryption_context(aad)?
             .into_iter()
@@ -252,10 +252,23 @@ fn validate_key_ring(
     Ok(())
 }
 
-fn validate_wrapped_dek(wrapped_dek: &[u8]) -> AppResult<()> {
-    if wrapped_dek.is_empty() || wrapped_dek.len() > MAX_KMS_CIPHERTEXT_BLOB_BYTES {
+fn wrapped_dek_length_is_valid(wrapped_dek: &[u8]) -> bool {
+    !wrapped_dek.is_empty() && wrapped_dek.len() <= MAX_KMS_CIPHERTEXT_BLOB_BYTES
+}
+
+fn validate_generated_wrapped_dek(wrapped_dek: &[u8]) -> AppResult<()> {
+    if !wrapped_dek_length_is_valid(wrapped_dek) {
+        return Err(AppError::ServiceUnavailable(format!(
+            "AWS KMS MEMO-HIGH-1 GenerateDataKey returned a wrapped DEK outside 1..={MAX_KMS_CIPHERTEXT_BLOB_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_persisted_wrapped_dek(wrapped_dek: &[u8]) -> AppResult<()> {
+    if !wrapped_dek_length_is_valid(wrapped_dek) {
         return Err(AppError::DatabaseError(format!(
-            "AWS KMS MEMO-HIGH-1 wrapped DEK must be 1..={MAX_KMS_CIPHERTEXT_BLOB_BYTES} bytes"
+            "AWS KMS MEMO-HIGH-1 persisted wrapped DEK must be 1..={MAX_KMS_CIPHERTEXT_BLOB_BYTES} bytes"
         )));
     }
     Ok(())
@@ -479,9 +492,15 @@ mod tests {
 
     #[test]
     fn wrapped_dek_and_plaintext_lengths_are_bounded() {
-        assert!(validate_wrapped_dek(&[0xAA]).is_ok());
-        assert!(validate_wrapped_dek(&[]).is_err());
-        assert!(validate_wrapped_dek(&vec![0xAA; MAX_KMS_CIPHERTEXT_BLOB_BYTES + 1]).is_err());
+        assert!(validate_generated_wrapped_dek(&[0xAA]).is_ok());
+        assert!(matches!(
+            validate_generated_wrapped_dek(&[]),
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert!(matches!(
+            validate_persisted_wrapped_dek(&vec![0xAA; MAX_KMS_CIPHERTEXT_BLOB_BYTES + 1]),
+            Err(AppError::DatabaseError(_))
+        ));
 
         assert!(secret_data_key_from_bytes(&[0x11; DATA_KEY_BYTES], "bad").is_ok());
         assert!(secret_data_key_from_bytes(&[0x11; DATA_KEY_BYTES - 1], "bad").is_err());
