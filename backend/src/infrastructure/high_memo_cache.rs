@@ -43,9 +43,9 @@ impl HighMemoCiphertextCacheAdapter {
             )
         })?;
 
-        if expiration.is_zero() {
+        if expiration.as_secs() == 0 {
             return Err(AppError::ValidationError(
-                "HIGH memo ciphertext cache TTL must be positive".into(),
+                "HIGH memo ciphertext cache TTL must be at least one second".into(),
             ));
         }
 
@@ -275,6 +275,10 @@ mod tests {
 
         assert!(adapter.set_memo(&memo, None).await.is_err());
         assert!(adapter.set_memo(&memo, Some(Duration::ZERO)).await.is_err());
+        assert!(adapter
+            .set_memo(&memo, Some(Duration::from_millis(999)))
+            .await
+            .is_err());
     }
 
     #[tokio::test]
