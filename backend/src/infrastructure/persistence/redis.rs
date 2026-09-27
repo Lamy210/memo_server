@@ -14,9 +14,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::{
-    LegacyMemoCacheSweepStats, LegacyMemoPlaintextCacheMaintenance, MemoCache,
-};
+use super::ports::{LegacyMemoCacheSweepStats, LegacyMemoPlaintextCacheMaintenance, MemoCache};
 
 const LEGACY_CACHE_NAMESPACE: &str = "memo";
 const HIGH_CACHE_NAMESPACE: &str = "memo:high:v1";
