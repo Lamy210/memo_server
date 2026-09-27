@@ -19,7 +19,7 @@ blind-token projection
 memos_high_v1 in Manticore
 ```
 
-The command uses the same MongoDB maintenance barrier as memo mutations and background projection reconciliation, clears the derived-key cache, resets the isolated `memos_high_v1` protected projection, performs a bounded full rebuild, verifies source/projection convergence, revalidates the maintenance permit, and explicitly releases it. The normal outbox/reconciler now mirrors HIGH projection mutations when the runtime is enabled; the explicit reset remains part of staged full-rebuild validation so the operator starts from a known empty protected generation while the shared barrier excludes foreground and background writers.
+The command uses the same MongoDB maintenance barrier as memo mutations, background projection reconciliation, and protected HIGH shadow queries, clears the derived-key cache, resets the isolated `memos_high_v1` protected projection, performs a bounded full rebuild, verifies source/projection convergence, revalidates the maintenance permit, and explicitly releases it. The normal outbox/reconciler now mirrors HIGH projection mutations when the runtime is enabled; the explicit reset remains part of staged full-rebuild validation so the operator starts from a known empty protected generation while the shared barrier excludes foreground and background writers.
 
 It does **not** install SEARCH-HIGH-1 into the HTTP request path and does not perform a production routing cutover.
 
@@ -82,7 +82,8 @@ The maintenance barrier is released only after reindex convergence and permit re
 - Projection reset occurs only after the barrier is held and only while protected request routing is operator-confirmed inactive.
 - If reset succeeds but rebuild later fails, the protected projection may be incomplete; request routing remains inactive and the command must be rerun after resolving the failure.
 - New memo mutations are rejected while the barrier is closed.
-- Existing mutation leases must drain before reindex begins.
+- Existing mutation/reconciliation writer leases and protected-query leases must drain before reindex begins.
+- New protected HIGH shadow queries are rejected while the barrier is closed, so reset/rebuild cannot race an in-flight protected read.
 - KMS, analyzer, projection, or convergence failures keep the operation failed.
 - Rotation orchestration clears cached target-generation keys on reindex failure.
 - Barrier release is explicit and awaited.
