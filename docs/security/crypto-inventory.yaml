@@ -50,6 +50,18 @@ assets:
         payload_codec: implemented
         aead_adapter: staged
         key_wrapping_provider: aws_kms_adapter_with_operator_runtime_config_staged
+        cache_foundation:
+          domain_cache_contract: owner_partition_and_memo_id_typed
+          legacy_plaintext_key_derivation: redis_adapter_internal_only
+          ciphertext_adapter: staged
+          ciphertext_port: HighEncryptedMemoCache
+          ciphertext_namespace: memo:high:v1
+          cache_payload: encrypted_envelope_only
+          ttl_required: explicit_positive
+          invalid_envelope_behavior: purge_then_authoritative_fallback
+          decrypted_identity_revalidation: required
+          request_path_wired: false
+          legacy_plaintext_cache_purge: pending
         guarded_migration:
           command: migrate_high_memo_staged
           default_mode: plan
