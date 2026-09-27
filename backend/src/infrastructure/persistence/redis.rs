@@ -129,6 +129,19 @@ impl RedisCache {
         format!("{HIGH_CACHE_NAMESPACE}:{owner_partition}:{memo_id}")
     }
 
+    fn validate_cached_memo(
+        owner_partition: uuid::Uuid,
+        memo_id: uuid::Uuid,
+        memo: &Memo,
+    ) -> AppResult<()> {
+        if memo.user_id != owner_partition || memo.id != memo_id {
+            return Err(AppError::DatabaseError(
+                "Legacy cache memo identity does not match the requested cache key".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_cached_envelope(
         owner_partition: uuid::Uuid,
         memo_id: uuid::Uuid,
@@ -197,8 +210,21 @@ impl MemoCache for RedisCache {
         owner_partition: uuid::Uuid,
         memo_id: uuid::Uuid,
     ) -> AppResult<Option<Memo>> {
-        self.get::<Memo>(&Self::legacy_cache_key(owner_partition, memo_id))
-            .await
+        let key = Self::legacy_cache_key(owner_partition, memo_id);
+        let memo = self.get::<Memo>(&key).await?;
+
+        if let Some(memo) = memo.as_ref() {
+            if let Err(error) = Self::validate_cached_memo(owner_partition, memo_id, memo) {
+                if let Err(purge) = RedisCache::delete(self, &key).await {
+                    return Err(AppError::DatabaseError(format!(
+                        "Legacy cache memo identity validation failed and invalid-entry purge also failed; primary={error}; purge={purge}"
+                    )));
+                }
+                return Err(error);
+            }
+        }
+
+        Ok(memo)
     }
 
     async fn set_memo(&self, memo: &Memo, expiration: Option<Duration>) -> AppResult<()> {
@@ -264,6 +290,18 @@ mod tests {
             RedisCache::legacy_cache_key(envelope.owner_partition, envelope.memo_id),
             format!("memo:{}:{}", envelope.owner_partition, envelope.memo_id)
         );
+    }
+
+    #[test]
+    fn legacy_cached_memo_identity_must_match_requested_key() {
+        let owner = uuid::Uuid::new_v4();
+        let memo_id = uuid::Uuid::new_v4();
+        let mut memo = Memo::new("title".into(), "content".into(), vec![], owner);
+        memo.id = memo_id;
+
+        assert!(RedisCache::validate_cached_memo(owner, memo_id, &memo).is_ok());
+        assert!(RedisCache::validate_cached_memo(uuid::Uuid::new_v4(), memo_id, &memo).is_err());
+        assert!(RedisCache::validate_cached_memo(owner, uuid::Uuid::new_v4(), &memo).is_err());
     }
 
     #[test]
