@@ -493,6 +493,7 @@ mod tests {
 
     struct FakeCache {
         events: Arc<TestEvents>,
+        fail_set: bool,
     }
 
     #[async_trait::async_trait]
@@ -511,7 +512,11 @@ mod tests {
             _expiration: Option<Duration>,
         ) -> AppResult<()> {
             self.events.push("cache-set");
-            Ok(())
+            if self.fail_set {
+                Err(AppError::DatabaseError("cache set failed".into()))
+            } else {
+                Ok(())
+            }
         }
 
         async fn delete_memo(&self, _owner_partition: Uuid, _memo_id: Uuid) -> AppResult<()> {
@@ -645,6 +650,7 @@ mod tests {
         });
         let cache = Arc::new(FakeCache {
             events: events.clone(),
+            fail_set: false,
         });
         let legacy = Arc::new(FakeLegacyProjection {
             events: events.clone(),
@@ -703,6 +709,53 @@ mod tests {
         let event =
             ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
         let (reconciler, store, _, events) = test_reconciler(Some(memo), true, false);
+
+        assert!(reconciler.reconcile_event(&event).await.is_err());
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "legacy-index",
+                "high-index",
+                "cache-delete",
+                "cache-set",
+                "guard-release"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_replace_failure_keeps_intent_and_invalidates_old_entry_first() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
+        let events = Arc::new(TestEvents::default());
+        let store = Arc::new(FakeAuthoritativeStore {
+            memo: Mutex::new(Some(memo)),
+            acknowledged: AtomicU64::new(0),
+            events: events.clone(),
+        });
+        let cache = Arc::new(FakeCache {
+            events: events.clone(),
+            fail_set: true,
+        });
+        let legacy = Arc::new(FakeLegacyProjection {
+            events: events.clone(),
+        });
+        let high = Arc::new(FakeHighProjection {
+            events: events.clone(),
+            fail_replace: false,
+            deleted: Mutex::new(None),
+        });
+        let guard = Arc::new(FakeMutationGuard {
+            events: events.clone(),
+            fail_release: false,
+        });
+        let reconciler =
+            ProjectionReconciler::new(store.clone(), cache, legacy, Some(high), guard);
 
         assert!(reconciler.reconcile_event(&event).await.is_err());
         assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
