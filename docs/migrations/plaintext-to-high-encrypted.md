@@ -55,8 +55,11 @@ The guarded apply path is explicit:
 cargo run --locked --features aws-kms-memo --bin migrate_high_memo_staged -- \
   --apply \
   --confirm-staging-reset \
+  --confirm-all-writers-guarded \
   --page-size 500
 ```
+
+Before apply, the operator must verify that every running server replica which can mutate MongoDB memos is deployed with shared maintenance-guard participation (HIGH memo crypto or HIGH search enabled on that replica). The CLI requires `--confirm-all-writers-guarded` because an old/unconfigured replica using the unrestricted mutation guard cannot be detected from the maintenance singleton.
 
 Apply mode performs these steps in order:
 
