@@ -44,7 +44,10 @@ fn maintenance_participation(
 
     // MEMO-HIGH-1 migration only needs to freeze memo mutations. Protected
     // search reads need query leases only when SEARCH-HIGH-1 itself is enabled.
-    (high_memo_enabled || high_search_enabled, high_search_enabled)
+    (
+        high_memo_enabled || high_search_enabled,
+        high_search_enabled,
+    )
 }
 
 impl PersistenceStack {
@@ -189,10 +192,7 @@ mod tests {
     #[test]
     fn disabled_high_modes_need_no_shared_guard() {
         assert_eq!(
-            maintenance_participation(
-                &HighMemoCryptoConfig::Disabled,
-                &HighSearchConfig::Disabled,
-            ),
+            maintenance_participation(&HighMemoCryptoConfig::Disabled, &HighSearchConfig::Disabled,),
             (false, false)
         );
     }
