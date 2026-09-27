@@ -14,6 +14,10 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
+        high_memo_routing::{
+            HighMemoAuthoritativeRoute, HighMemoAuthoritativeRouteReader,
+            HighMemoAuthoritativeRouteSnapshot,
+        },
         high_search_routing::{
             HighSearchQueryRoute, HighSearchQueryRouteReader, HighSearchQueryRouteSnapshot,
         },
@@ -32,6 +36,8 @@ const MODE_OPEN: &str = "open";
 const MODE_MAINTENANCE: &str = "maintenance";
 const QUERY_ROUTE_FIELD: &str = "query_route";
 const QUERY_ROUTE_GENERATION_FIELD: &str = "query_route_generation";
+const MEMO_ROUTE_FIELD: &str = "memo_route";
+const MEMO_ROUTE_GENERATION_FIELD: &str = "memo_route_generation";
 const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
@@ -42,6 +48,9 @@ struct RecoverySnapshotMismatch;
 
 #[derive(Debug)]
 struct InvalidQueryRouteState;
+
+#[derive(Debug)]
+struct InvalidMemoRouteState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighSearchMaintenanceMode {
@@ -65,6 +74,8 @@ pub struct HighSearchMaintenanceStatus {
     writer_epoch: i64,
     query_route: HighSearchQueryRoute,
     query_route_generation: i64,
+    memo_route: HighMemoAuthoritativeRoute,
+    memo_route_generation: i64,
     active_writer_leases: u64,
     active_query_leases: u64,
 }
@@ -88,6 +99,14 @@ impl HighSearchMaintenanceStatus {
 
     pub fn query_route_generation(&self) -> i64 {
         self.query_route_generation
+    }
+
+    pub fn memo_route(&self) -> HighMemoAuthoritativeRoute {
+        self.memo_route
+    }
+
+    pub fn memo_route_generation(&self) -> i64 {
+        self.memo_route_generation
     }
 
     pub fn active_writer_leases(&self) -> u64 {
@@ -192,6 +211,7 @@ impl MongoHighSearchMaintenanceRecovery {
         })?;
 
         let route_snapshot = app_query_route_snapshot(&state)?;
+        let memo_route_snapshot = app_memo_route_snapshot(&state)?;
 
         let holder_token = match state.get("holder_token") {
             None | Some(Bson::Null) => None,
@@ -235,6 +255,8 @@ impl MongoHighSearchMaintenanceRecovery {
             writer_epoch,
             query_route: route_snapshot.route,
             query_route_generation: route_snapshot.generation,
+            memo_route: memo_route_snapshot.route,
+            memo_route_generation: memo_route_snapshot.generation,
             active_writer_leases,
             active_query_leases,
         })
@@ -283,6 +305,8 @@ impl MongoHighSearchMaintenanceRecovery {
                         "writer_epoch": context.expected.writer_epoch,
                         "query_route": context.expected.query_route.as_persisted_str(),
                         "query_route_generation": context.expected.query_route_generation,
+                        "memo_route": context.expected.memo_route.as_persisted_str(),
+                        "memo_route_generation": context.expected.memo_route_generation,
                     };
                     match context.expected.holder_token.as_deref() {
                         Some(holder_token) => {
@@ -364,6 +388,8 @@ impl MongoHighSearchMaintenanceGuard {
                         "writer_epoch": 0_i64,
                         "query_route": HighSearchQueryRoute::Legacy.as_persisted_str(),
                         "query_route_generation": 0_i64,
+                        "memo_route": HighMemoAuthoritativeRoute::Plaintext.as_persisted_str(),
+                        "memo_route_generation": 0_i64,
                     }
                 },
             )
@@ -406,6 +432,22 @@ impl MongoHighSearchMaintenanceGuard {
             .map_err(|error| {
                 maintenance_db_error("backfill HIGH search query route generation", error)
             })?;
+        self.state
+            .update_one(
+                doc! { "_id": STATE_ID, "memo_route": { "$exists": false } },
+                doc! { "$set": { "memo_route": HighMemoAuthoritativeRoute::Plaintext.as_persisted_str() } },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("backfill HIGH memo authoritative route", error))?;
+        self.state
+            .update_one(
+                doc! { "_id": STATE_ID, "memo_route_generation": { "$exists": false } },
+                doc! { "$set": { "memo_route_generation": 0_i64 } },
+            )
+            .await
+            .map_err(|error| {
+                maintenance_db_error("backfill HIGH memo authoritative route generation", error)
+            })?;
 
         let state = self
             .state
@@ -418,6 +460,7 @@ impl MongoHighSearchMaintenanceGuard {
                 )
             })?;
         app_query_route_snapshot(&state)?;
+        app_memo_route_snapshot(&state)?;
         Ok(())
     }
 
@@ -455,25 +498,27 @@ impl MongoHighSearchMaintenanceGuard {
                         .session(&mut *session)
                         .await?
                         .ok_or_else(|| MongoError::custom(MaintenanceActive))?;
-                    let route_snapshot = mongo_query_route_snapshot(&gate)?;
+                    let query_route_snapshot = mongo_query_route_snapshot(&gate)?;
+                    let memo_route_snapshot = mongo_memo_route_snapshot(&gate)?;
 
                     context
                         .leases
                         .insert_one(doc! { "_id": context.lease_id.clone() })
                         .session(&mut *session)
                         .await?;
-                    Ok(route_snapshot)
+                    Ok((query_route_snapshot, memo_route_snapshot))
                 }
                 .boxed()
             })
             .await;
 
         match result {
-            Ok(route_snapshot) => Ok(MongoMaintenanceActivityPermit {
+            Ok((query_route_snapshot, memo_route_snapshot)) => Ok(MongoMaintenanceActivityPermit {
                 leases,
                 lease_id,
                 activity,
-                route_snapshot,
+                query_route_snapshot,
+                memo_route_snapshot,
             }),
             Err(error) if error.get_custom::<MaintenanceActive>().is_some() => {
                 Err(AppError::ServiceUnavailable(format!(
@@ -482,6 +527,9 @@ impl MongoHighSearchMaintenanceGuard {
             }
             Err(error) if error.get_custom::<InvalidQueryRouteState>().is_some() => Err(
                 AppError::ServiceUnavailable("HIGH search query route state is invalid".into()),
+            ),
+            Err(error) if error.get_custom::<InvalidMemoRouteState>().is_some() => Err(
+                AppError::ServiceUnavailable("HIGH memo authoritative route state is invalid".into()),
             ),
             Err(error) => Err(maintenance_db_error(
                 "acquire HIGH search maintenance activity lease",
@@ -574,7 +622,8 @@ struct MongoMaintenanceActivityPermit {
     leases: Collection<Document>,
     lease_id: String,
     activity: &'static str,
-    route_snapshot: HighSearchQueryRouteSnapshot,
+    query_route_snapshot: HighSearchQueryRouteSnapshot,
+    memo_route_snapshot: HighMemoAuthoritativeRouteSnapshot,
 }
 
 impl MongoMaintenanceActivityPermit {
@@ -598,6 +647,10 @@ impl MongoMaintenanceActivityPermit {
 
 #[async_trait]
 impl MemoMutationPermit for MongoMaintenanceActivityPermit {
+    fn memo_route_snapshot(&self) -> HighMemoAuthoritativeRouteSnapshot {
+        self.memo_route_snapshot
+    }
+
     async fn release(self: Box<Self>) -> AppResult<()> {
         (*self).release_lease().await
     }
@@ -606,7 +659,7 @@ impl MemoMutationPermit for MongoMaintenanceActivityPermit {
 #[async_trait]
 impl HighSearchQueryPermit for MongoMaintenanceActivityPermit {
     fn route_snapshot(&self) -> HighSearchQueryRouteSnapshot {
-        self.route_snapshot
+        self.query_route_snapshot
     }
 
     async fn release(self: Box<Self>) -> AppResult<()> {
@@ -748,6 +801,23 @@ impl HighSearchQueryGuard for MongoHighSearchMaintenanceGuard {
 }
 
 #[async_trait]
+impl HighMemoAuthoritativeRouteReader for MongoHighSearchMaintenanceGuard {
+    async fn current_memo_route(&self) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+        let state = self
+            .state
+            .find_one(doc! { "_id": STATE_ID })
+            .await
+            .map_err(|error| maintenance_db_error("read HIGH memo authoritative route state", error))?
+            .ok_or_else(|| {
+                AppError::ServiceUnavailable(
+                    "HIGH search maintenance state is not initialized".into(),
+                )
+            })?;
+        app_memo_route_snapshot(&state)
+    }
+}
+
+#[async_trait]
 impl HighSearchQueryRouteReader for MongoHighSearchMaintenanceGuard {
     async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
         let state = self
@@ -777,6 +847,44 @@ impl HighSearchOfflineWindowGuard for MongoHighSearchMaintenanceGuard {
             sleep(DRAIN_POLL_INTERVAL).await;
         }
     }
+}
+
+fn mongo_memo_route_snapshot(
+    state: &Document,
+) -> Result<HighMemoAuthoritativeRouteSnapshot, MongoError> {
+    let route = state
+        .get_str(MEMO_ROUTE_FIELD)
+        .ok()
+        .and_then(HighMemoAuthoritativeRoute::from_persisted_str)
+        .ok_or_else(|| MongoError::custom(InvalidMemoRouteState))?;
+    let generation = state
+        .get_i64(MEMO_ROUTE_GENERATION_FIELD)
+        .map_err(|_| MongoError::custom(InvalidMemoRouteState))?;
+    if generation < 0 {
+        return Err(MongoError::custom(InvalidMemoRouteState));
+    }
+    Ok(HighMemoAuthoritativeRouteSnapshot { route, generation })
+}
+
+fn app_memo_route_snapshot(state: &Document) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+    let route = state
+        .get_str(MEMO_ROUTE_FIELD)
+        .ok()
+        .and_then(HighMemoAuthoritativeRoute::from_persisted_str)
+        .ok_or_else(|| {
+            AppError::ServiceUnavailable("HIGH memo authoritative route state is invalid".into())
+        })?;
+    let generation = state.get_i64(MEMO_ROUTE_GENERATION_FIELD).map_err(|_| {
+        AppError::ServiceUnavailable(
+            "HIGH memo authoritative route generation is invalid".into(),
+        )
+    })?;
+    if generation < 0 {
+        return Err(AppError::ServiceUnavailable(
+            "HIGH memo authoritative route generation is invalid".into(),
+        ));
+    }
+    Ok(HighMemoAuthoritativeRouteSnapshot { route, generation })
 }
 
 fn mongo_query_route_snapshot(
