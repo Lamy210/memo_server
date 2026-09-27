@@ -4,7 +4,7 @@ Status: break-glass operator tooling; no automatic lease expiry.
 
 ## Purpose
 
-The MongoDB HIGH search maintenance barrier intentionally fails closed. A cancelled memo mutation can leave a writer lease behind, and an interrupted rotation can leave the shared maintenance barrier closed. The recovery command exists to restore service only after an operator has independently established that the abandoned work is no longer running.
+The MongoDB HIGH search maintenance barrier intentionally fails closed. A cancelled memo mutation/background reconciliation can leave a writer lease behind, a cancelled protected query can leave a query lease behind, and an interrupted rotation can leave the shared maintenance barrier closed. The recovery command exists to restore service only after an operator has independently established that the abandoned work is no longer running.
 
 Do not use this command as a normal rotation or deployment step.
 
@@ -12,13 +12,13 @@ Do not use this command as a normal rotation or deployment step.
 
 Before any `--apply` recovery:
 
-1. Stop every memo_server application replica and any operator job that can acquire memo mutation leases.
+1. Stop every memo_server application replica and any operator job that can acquire memo mutation or protected-query leases.
 2. Verify those processes are no longer running.
 3. Keep MongoDB available as the authoritative recovery source.
-4. Run status inspection and record the reported mode, writer epoch, active writer lease count, and holder token.
+4. Run status inspection and record the reported mode, writer epoch (the legacy-named shared activity generation), active writer/query lease counts, and holder token.
 5. Do not reuse an older snapshot after any application process has restarted.
 
-Recovery never relies on lease age or a timeout. If the operator cannot establish that writers are stopped, leave the state fail-closed.
+Recovery never relies on lease age or a timeout. If the operator cannot establish that all writers and protected-query workers are stopped, leave the state fail-closed.
 
 ## Inspect
 
@@ -38,6 +38,7 @@ Example fields:
 current.mode=maintenance
 current.writer_epoch=42
 current.active_writer_leases=0
+current.active_query_leases=0
 current.holder_token=...
 ```
 
@@ -57,11 +58,11 @@ cargo run --locked --bin recover_high_search_maintenance -- \
   --expected-holder-token '<observed-holder-token>'
 ```
 
-The command transactionally clears stale writer leases, changes the gate back to `open`, removes the holder token, and increments `writer_epoch`.
+The command transactionally clears stale writer and protected-query leases, changes the gate back to `open`, removes the holder token, and increments the legacy-named `writer_epoch` activity generation.
 
-## Recover abandoned writer leases while the gate is open
+## Recover abandoned activity leases while the gate is open
 
-If status reports `mode=open` with a non-zero writer lease count, omit the holder token:
+If status reports `mode=open` with a non-zero writer or protected-query lease count, omit the holder token:
 
 ```bash
 MONGODB_URI='mongodb://...' \
@@ -72,11 +73,11 @@ cargo run --locked --bin recover_high_search_maintenance -- \
   --expected-writer-epoch 42
 ```
 
-Recovery is rejected when the gate is already open and no writer leases exist.
+Recovery is rejected when the gate is already open and neither writer nor protected-query leases exist.
 
 ## Compare-and-swap behavior
 
-Recovery is executed in a majority-write MongoDB transaction. The transaction is accepted only when the current maintenance mode, writer epoch, and holder token still match the inspected snapshot. Any intervening writer acquisition or maintenance ownership change causes a conflict and leaves the newer state untouched.
+Recovery is executed in a majority-write MongoDB transaction. The transaction is accepted only when the current maintenance mode, writer epoch, and holder token still match the inspected snapshot. Any intervening writer/query acquisition or maintenance ownership change increments/changes the guarded state and causes a conflict, leaving the newer state untouched.
 
 After a conflict, run status inspection again. Never substitute a newly observed token or epoch without re-establishing the safety prerequisites.
 
@@ -84,7 +85,7 @@ After a conflict, run status inspection again. Never substitute a newly observed
 
 After successful recovery:
 
-1. inspect status again and confirm `mode=open` and `active_writer_leases=0`,
+1. inspect status again and confirm `mode=open`, `active_writer_leases=0`, and `active_query_leases=0`,
 2. start one application replica,
 3. verify health and a controlled memo mutation,
 4. restore the remaining replicas gradually,
