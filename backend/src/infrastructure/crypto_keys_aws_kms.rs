@@ -125,9 +125,7 @@ impl DataKeyProvider for AwsKmsDataKeyProvider {
             .send()
             .await
             .map_err(|_| {
-                AppError::ServiceUnavailable(
-                    "AWS KMS MEMO-HIGH-1 GenerateDataKey failed".into(),
-                )
+                AppError::ServiceUnavailable("AWS KMS MEMO-HIGH-1 GenerateDataKey failed".into())
             })?;
 
         if response.key_id() != Some(key_arn) {
@@ -417,9 +415,7 @@ mod tests {
             .map(|index| {
                 (
                     format!("memo-key-{index}"),
-                    format!(
-                        "arn:aws:kms:ap-northeast-1:111122223333:key/{index:032x}"
-                    ),
+                    format!("arn:aws:kms:ap-northeast-1:111122223333:key/{index:032x}"),
                 )
             })
             .collect();
