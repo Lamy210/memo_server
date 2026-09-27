@@ -443,7 +443,7 @@ mod tests {
                 release_fail,
                 events,
             }),
-            reader.map(|reader| reader as Arc<dyn HighSearchQueryReader>),
+            reader.map(|reader| -> Arc<dyn HighSearchQueryReader> { reader }),
             None,
         )
     }
