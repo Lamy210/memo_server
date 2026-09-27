@@ -97,20 +97,19 @@ pub async fn run_protected_high_search_cutover(
     let cache: Arc<dyn HighSearchKeyCacheControl> = stack;
     let rotation = HighSearchRotationService::new(guard, cache, reindex);
 
+    let required_snapshot = HighSearchQueryRouteSnapshot {
+        route: HighSearchQueryRoute::Legacy,
+        generation: expected_generation,
+    };
     let ready = rotation
-        .rotate_and_reindex_requiring_route(page_size, HighSearchQueryRoute::Legacy)
+        .rotate_and_reindex_requiring_snapshot(page_size, required_snapshot)
         .await?;
     let previous = ready.current_query_route().await?;
-
-    if previous.generation != expected_generation {
-        return abort_pre_switch(
-            ready,
-            AppError::Conflict(format!(
-                "HIGH search cutover expected route generation {expected_generation}, observed {}",
-                previous.generation
-            )),
-        )
-        .await;
+    if previous != required_snapshot {
+        return Err(AppError::ServiceUnavailable(
+            "HIGH search route changed after the drained cutover preflight; maintenance barrier remains closed"
+                .into(),
+        ));
     }
 
     let (_, current, stats) = switch_prepared_route_fail_closed(
