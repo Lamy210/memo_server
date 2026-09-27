@@ -1421,7 +1421,7 @@ mod tests {
         .await
         .unwrap()
         .is_none());
-        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(&store, &create_intent)
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(&store, &create_intent)
             .await
             .unwrap();
 
@@ -1433,7 +1433,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(update_intent.target, ProjectionTarget::Version(2));
-        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(&store, &update_intent)
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(&store, &update_intent)
             .await
             .unwrap();
 
@@ -1448,7 +1448,7 @@ mod tests {
             Err(AppError::Conflict(_))
         ));
         assert!(
-            HighEncryptedMemoAuthoritativeStore::list_projection_intents(&store)
+            HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents(&store)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1464,7 +1464,7 @@ mod tests {
             Err(AppError::NotFound(_))
         ));
         assert!(
-            HighEncryptedMemoAuthoritativeStore::list_projection_intents(&store)
+            HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents(&store)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1483,11 +1483,11 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(&store, &delete_intent)
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(&store, &delete_intent)
             .await
             .unwrap();
         assert!(
-            HighEncryptedMemoAuthoritativeStore::list_projection_intents(&store)
+            HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents(&store)
                 .await
                 .unwrap()
                 .is_empty()
