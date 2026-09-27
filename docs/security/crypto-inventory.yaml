@@ -53,7 +53,10 @@ assets:
         guarded_migration:
           command: migrate_high_memo_staged
           default_mode: plan
-          apply_confirmation: confirm_staging_reset
+          apply_confirmation:
+            - confirm_staging_reset
+            - confirm_all_writers_guarded
+          all_writer_replicas_guard_participation: required_operator_confirmation
           source_write_freeze: shared_mongodb_offline_window
           background_reconciliation_drain: true
           high_search_query_drain: true
