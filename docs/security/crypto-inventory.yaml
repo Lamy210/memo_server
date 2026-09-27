@@ -139,7 +139,7 @@ assets:
           query_unique_terms: caller_configured
           normalized_term_bytes: caller_configured
           fail_before_crypto: true
-          production_values: pending_operator_reviewed_workload_measurement
+          production_values: pending_operator_approved_workload_manifest
           workload_measurement:
             command: measure_high_search_workload
             analyzer_only: true
@@ -152,6 +152,17 @@ assets:
             plaintext_output: forbidden
             identifiers_output: forbidden
             blind_tokens_output: forbidden
+          workload_approval:
+            schema: high-search-workload-approval-v1
+            validator_command: validate_high_search_workload_approval
+            input_file_bytes_cap: 262144
+            production_like_corpus_review_confirmation: required
+            projection_load_test_confirmation: required
+            analyzer_version_match: required
+            selected_budget_floor: measured_maxima
+            runtime_budget_exact_match_check: available
+            cryptographic_attestation: not_provided
+            request_path_cutover_authorization: not_by_itself
         tag_semantics: normalized_exact_term
         dependency_versions_exact_pinned: true
         synthetic_conformance_corpus:
@@ -171,7 +182,7 @@ assets:
             - exact_tag_semantics
             - term_count_distribution
             - max_normalized_term_bytes
-          production_workload_distribution_validation: pending
+          production_workload_distribution_validation: operator_manifest_gate_available
         runtime_wired: false
       runtime_configuration:
         mode_default: disabled
