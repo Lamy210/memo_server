@@ -65,7 +65,16 @@ assets:
           cache_replace_failure: outbox_retry_without_old_fast_path_value
           decrypted_identity_revalidation: required
           request_path_wired: false
-          legacy_plaintext_cache_purge: pending
+          legacy_plaintext_cache_purge: primitive_staged
+          legacy_plaintext_cache_sweep:
+            redis_scan_match: memo:*
+            deletion_filter: exact_memo_owner_uuid_memo_uuid_shape
+            high_namespace_excluded: true
+            high_namespace: memo:high:v1
+            scan_count_range: 1..=10000
+            deletion_command: UNLINK
+            operator_command: not_exposed
+            safe_execution_requirement: future_cache_mode_cutover_maintenance_window
         guarded_migration:
           command: migrate_high_memo_staged
           default_mode: plan
