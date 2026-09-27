@@ -155,6 +155,20 @@ impl RedisCache {
         }
         Ok(())
     }
+
+    async fn purge_invalid_cached_value(
+        &self,
+        key: &str,
+        context: &str,
+        primary: AppError,
+    ) -> AppError {
+        match self.delete(key).await {
+            Ok(()) => primary,
+            Err(purge) => AppError::DatabaseError(format!(
+                "{context} and invalid-entry purge also failed; primary={primary}; purge={purge}"
+            )),
+        }
+    }
 }
 
 #[async_trait]
@@ -165,10 +179,29 @@ impl HighEncryptedMemoCache for RedisCache {
         memo_id: uuid::Uuid,
     ) -> AppResult<Option<HighEncryptedMemoEnvelope>> {
         let key = Self::high_cache_key(owner_partition, memo_id);
-        let envelope = self.get::<HighEncryptedMemoEnvelope>(&key).await?;
+        let envelope = match self.get::<HighEncryptedMemoEnvelope>(&key).await {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                return Err(self
+                    .purge_invalid_cached_value(
+                        &key,
+                        "HIGH cache envelope deserialization failed",
+                        error,
+                    )
+                    .await);
+            }
+        };
 
         if let Some(envelope) = envelope.as_ref() {
-            Self::validate_cached_envelope(owner_partition, memo_id, envelope)?;
+            if let Err(error) = Self::validate_cached_envelope(owner_partition, memo_id, envelope) {
+                return Err(self
+                    .purge_invalid_cached_value(
+                        &key,
+                        "HIGH cache envelope validation failed",
+                        error,
+                    )
+                    .await);
+            }
         }
 
         Ok(envelope)
@@ -211,16 +244,28 @@ impl MemoCache for RedisCache {
         memo_id: uuid::Uuid,
     ) -> AppResult<Option<Memo>> {
         let key = Self::legacy_cache_key(owner_partition, memo_id);
-        let memo = self.get::<Memo>(&key).await?;
+        let memo = match self.get::<Memo>(&key).await {
+            Ok(memo) => memo,
+            Err(error) => {
+                return Err(self
+                    .purge_invalid_cached_value(
+                        &key,
+                        "Legacy cache memo deserialization failed",
+                        error,
+                    )
+                    .await);
+            }
+        };
 
         if let Some(memo) = memo.as_ref() {
             if let Err(error) = Self::validate_cached_memo(owner_partition, memo_id, memo) {
-                if let Err(purge) = RedisCache::delete(self, &key).await {
-                    return Err(AppError::DatabaseError(format!(
-                        "Legacy cache memo identity validation failed and invalid-entry purge also failed; primary={error}; purge={purge}"
-                    )));
-                }
-                return Err(error);
+                return Err(self
+                    .purge_invalid_cached_value(
+                        &key,
+                        "Legacy cache memo identity validation failed",
+                        error,
+                    )
+                    .await);
             }
         }
 
