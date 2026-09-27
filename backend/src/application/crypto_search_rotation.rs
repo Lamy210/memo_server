@@ -61,6 +61,22 @@ impl HighSearchRotationReady {
         self.stats
     }
 
+    /// Read the shared user-visible query route while this prepared rotation
+    /// still owns the offline-window permit.
+    pub async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
+        self.permit.current_query_route().await
+    }
+
+    /// Atomically cut over or roll back the shared query route while the
+    /// maintenance barrier is still held.
+    pub async fn switch_query_route(
+        &self,
+        expected: HighSearchQueryRouteSnapshot,
+        target: HighSearchQueryRoute,
+    ) -> AppResult<HighSearchQueryRouteSnapshot> {
+        self.permit.switch_query_route(expected, target).await
+    }
+
     /// Confirm that the offline-window lease survived the caller-owned cutover
     /// and only then allow this permit to be dropped.
     pub async fn finish_after_cutover(self) -> AppResult<HighSearchReindexStats> {
@@ -358,6 +374,29 @@ mod tests {
         let ready = service.rotate_and_reindex(100).await.unwrap();
 
         assert_eq!(ready.stats().source_count, 2);
+        assert_eq!(
+            ready.current_query_route().await.unwrap(),
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            }
+        );
+        assert_eq!(
+            ready
+                .switch_query_route(
+                    HighSearchQueryRouteSnapshot {
+                        route: HighSearchQueryRoute::Legacy,
+                        generation: 0,
+                    },
+                    HighSearchQueryRoute::Protected,
+                )
+                .await
+                .unwrap(),
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Protected,
+                generation: 1,
+            }
+        );
         assert_eq!(
             events.snapshot(),
             vec!["guard-acquire", "cache", "reindex", "permit-check"]
