@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 
 use crate::{
-    application::high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
+    application::{
+        high_memo_routing::{HighMemoAuthoritativeRoute, HighMemoAuthoritativeRouteSnapshot},
+        high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
+    },
     error::AppResult,
 };
 
@@ -13,6 +16,10 @@ use crate::{
 /// projection reconciliation intentionally share this boundary.
 #[async_trait]
 pub trait MemoMutationPermit: Send + Sync {
+    /// Authoritative-store route captured atomically with writer-lease
+    /// admission. Mutating request paths must use this snapshot rather than
+    /// performing a separate route read.
+    fn memo_route_snapshot(&self) -> HighMemoAuthoritativeRouteSnapshot;
     async fn release(self: Box<Self>) -> AppResult<()>;
 }
 
@@ -32,6 +39,13 @@ struct UnrestrictedMemoMutationPermit;
 
 #[async_trait]
 impl MemoMutationPermit for UnrestrictedMemoMutationPermit {
+    fn memo_route_snapshot(&self) -> HighMemoAuthoritativeRouteSnapshot {
+        HighMemoAuthoritativeRouteSnapshot {
+            route: HighMemoAuthoritativeRoute::Plaintext,
+            generation: 0,
+        }
+    }
+
     async fn release(self: Box<Self>) -> AppResult<()> {
         Ok(())
     }
