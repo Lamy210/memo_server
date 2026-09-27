@@ -1376,6 +1376,146 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a local MongoDB replica set"]
+    async fn mongodb_encrypted_authoritative_store_preserves_atomic_outbox_and_versioning() {
+        let uri = std::env::var("MONGODB_TEST_URI")
+            .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
+
+        let cleanup_client = Client::with_uri_str(&uri).await.unwrap();
+        cleanup_client
+            .database(TEST_DATABASE_NAME)
+            .drop()
+            .await
+            .unwrap();
+
+        let store = MongoDbAuthoritativeStore::new(&uri, TEST_DATABASE_NAME)
+            .await
+            .unwrap();
+        let owner = Uuid::new_v4();
+        let other_owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+
+        let v1 = HighEncryptedMemoEnvelope {
+            memo_id,
+            owner_partition: owner,
+            ciphertext: vec![0x11; 48],
+            nonce: vec![0x22; 12],
+            wrapped_dek: vec![0x33; 64],
+            version: 1,
+            crypto_suite_id: crate::application::crypto::MEMO_HIGH_SUITE_ID.into(),
+            key_version: "memo-key-v1".into(),
+            schema_version: crate::application::crypto::MEMO_HIGH_SCHEMA_VERSION,
+        };
+
+        let create_intent =
+            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(
+                &store, &v1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_intent.target, ProjectionTarget::Version(1));
+        assert_eq!(
+            HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(&store, owner, memo_id)
+                .await
+                .unwrap(),
+            Some(v1.clone())
+        );
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(
+                &store,
+                other_owner,
+                memo_id,
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(
+            &store,
+            &create_intent,
+        )
+        .await
+        .unwrap();
+
+        let mut v2 = v1.clone();
+        v2.version = 2;
+        v2.ciphertext[0] ^= 0x55;
+        let update_intent =
+            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(
+                &store, &v2,
+            )
+            .await
+            .unwrap();
+        assert_eq!(update_intent.target, ProjectionTarget::Version(2));
+        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(
+            &store,
+            &update_intent,
+        )
+        .await
+        .unwrap();
+
+        let mut stale_v2 = v1.clone();
+        stale_v2.version = 2;
+        stale_v2.ciphertext[0] ^= 0x77;
+        assert!(matches!(
+            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(
+                &store,
+                &stale_v2,
+            )
+            .await,
+            Err(AppError::Conflict(_))
+        ));
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::list_projection_intents(&store)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        assert!(matches!(
+            HighEncryptedMemoAuthoritativeStore::delete_envelope_with_projection_intent(
+                &store,
+                other_owner,
+                memo_id,
+            )
+            .await,
+            Err(AppError::NotFound(_))
+        ));
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::list_projection_intents(&store)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let delete_intent =
+            HighEncryptedMemoAuthoritativeStore::delete_envelope_with_projection_intent(
+                &store, owner, memo_id,
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_intent.target, ProjectionTarget::Deleted);
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(&store, owner, memo_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        HighEncryptedMemoAuthoritativeStore::acknowledge_projection_intent(
+            &store,
+            &delete_intent,
+        )
+        .await
+        .unwrap();
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::list_projection_intents(&store)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local MongoDB replica set"]
     async fn mongodb_replica_set_preserves_atomic_outbox_and_tenant_scope() {
         let uri = std::env::var("MONGODB_TEST_URI")
             .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
