@@ -49,7 +49,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("approval.valid=true");
     println!("approval.id={}", approval.approval_id);
-    println!("approval.analysis_version={}", approval.measurement.analysis_version);
+    println!(
+        "approval.analysis_version={}",
+        approval.measurement.analysis_version
+    );
     println!("approval.documents={}", approval.measurement.documents);
     println!("approval.queries={}", approval.measurement.queries);
     println!(
