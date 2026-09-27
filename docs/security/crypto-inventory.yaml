@@ -298,12 +298,22 @@ assets:
         maintenance_release: explicit_async
         operator_recovery: explicit_cas_guarded
         recovery_requires_application_stop_confirmation: true
-        recovery_snapshot_guard: mode_holder_token_and_writer_epoch
+        recovery_snapshot_guard: mode_holder_token_writer_epoch_query_route_and_generation
         recovery_clears_stale_writer_leases: explicit_only
         recovery_clears_stale_query_leases: explicit_only
         recovery_writer_epoch_advance: required
         recovery_auto_expiry: forbidden
         protected_search_gate: query_lease_installed_for_shadow_and_reusable_by_request_path
+        query_route_state:
+          storage: shared_mongodb_maintenance_singleton
+          default: legacy
+          values: [legacy, protected]
+          generation: monotonic_i64
+          admission_snapshot: atomic_with_query_lease
+          route_change_scope: live_offline_window_permit_only
+          route_change_cas: route_and_generation
+          multi_replica_cutover_boundary: staged
+          user_visible_request_path_installed: false
       long_lived_search_root_process_exposure: forbidden
       production_search_key_provider: not_implemented
       protected_projection:
