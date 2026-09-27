@@ -53,6 +53,7 @@ impl Application {
                 Some(Arc::new(
                     HighSearchShadowObserver::new(
                         reader,
+                        persistence.high_search_query_guard.clone(),
                         max_concurrency,
                         Duration::from_millis(timeout_ms),
                     )
