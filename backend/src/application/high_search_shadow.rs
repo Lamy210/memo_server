@@ -11,7 +11,10 @@ use tokio::{sync::Semaphore, time::timeout};
 use uuid::Uuid;
 
 use crate::{
-    application::crypto_search_orchestration::HighSearchQueryReader,
+    application::{
+        crypto_search_orchestration::HighSearchQueryReader,
+        maintenance::HighSearchQueryGuard,
+    },
     error::{AppError, AppResult},
 };
 
@@ -61,6 +64,7 @@ pub struct HighSearchShadowObservation<'a, I> {
 
 pub struct HighSearchShadowObserver {
     reader: Arc<dyn HighSearchQueryReader>,
+    query_guard: Arc<dyn HighSearchQueryGuard>,
     permits: Arc<Semaphore>,
     timeout: Duration,
     counters: Arc<HighSearchShadowCounters>,
@@ -69,6 +73,7 @@ pub struct HighSearchShadowObserver {
 impl HighSearchShadowObserver {
     pub fn new(
         reader: Arc<dyn HighSearchQueryReader>,
+        query_guard: Arc<dyn HighSearchQueryGuard>,
         max_concurrency: usize,
         timeout: Duration,
     ) -> AppResult<Self> {
@@ -80,6 +85,7 @@ impl HighSearchShadowObserver {
 
         Ok(Self {
             reader,
+            query_guard,
             permits: Arc::new(Semaphore::new(max_concurrency)),
             timeout,
             counters: Arc::new(HighSearchShadowCounters::default()),
@@ -113,6 +119,7 @@ impl HighSearchShadowObserver {
             legacy_total,
         } = observation;
         let reader = self.reader.clone();
+        let query_guard = self.query_guard.clone();
         let query = query.to_owned();
         let tag = tag.map(str::to_owned);
         let legacy_memo_ids = legacy_memo_ids.into_iter().collect::<Vec<_>>();
@@ -120,28 +127,52 @@ impl HighSearchShadowObserver {
         let counters = self.counters.clone();
 
         tokio::spawn(async move {
-            match timeout(
-                timeout_duration,
-                reader.search_memo_ids(owner_partition, &query, tag.as_deref(), page, limit),
-            )
-            .await
-            {
-                Ok(Ok(result)) => {
-                    record_comparison(
-                        &counters,
-                        &legacy_memo_ids,
-                        legacy_total,
-                        &result.memo_ids,
-                        result.total,
-                        page,
-                        limit,
-                    );
-                }
-                Ok(Err(_)) => {
+            match query_guard.acquire_query().await {
+                Err(_) => {
+                    // Maintenance is expected to reject new protected reads.
+                    // Infrastructure failures are also intentionally reduced to
+                    // the aggregate shadow failure counter.
                     counters.failures.fetch_add(1, Ordering::Relaxed);
                 }
-                Err(_) => {
-                    counters.timeouts.fetch_add(1, Ordering::Relaxed);
+                Ok(query_permit) => {
+                    let query_result = timeout(
+                        timeout_duration,
+                        reader.search_memo_ids(
+                            owner_partition,
+                            &query,
+                            tag.as_deref(),
+                            page,
+                            limit,
+                        ),
+                    )
+                    .await;
+                    let release_result = query_permit.release().await;
+
+                    match (query_result, release_result) {
+                        (_, Err(_)) => {
+                            // A missing/stuck read lease must remain visible as
+                            // a failed observation; maintenance recovery is
+                            // fail-closed and will see the persisted lease.
+                            counters.failures.fetch_add(1, Ordering::Relaxed);
+                        }
+                        (Ok(Ok(result)), Ok(())) => {
+                            record_comparison(
+                                &counters,
+                                &legacy_memo_ids,
+                                legacy_total,
+                                &result.memo_ids,
+                                result.total,
+                                page,
+                                limit,
+                            );
+                        }
+                        (Ok(Err(_)), Ok(())) => {
+                            counters.failures.fetch_add(1, Ordering::Relaxed);
+                        }
+                        (Err(_), Ok(())) => {
+                            counters.timeouts.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
                 }
             }
 
