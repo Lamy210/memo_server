@@ -210,11 +210,7 @@ impl MemoCache for RedisCache {
         .await
     }
 
-    async fn delete_memo(
-        &self,
-        owner_partition: uuid::Uuid,
-        memo_id: uuid::Uuid,
-    ) -> AppResult<()> {
+    async fn delete_memo(&self, owner_partition: uuid::Uuid, memo_id: uuid::Uuid) -> AppResult<()> {
         RedisCache::delete(self, &Self::legacy_cache_key(owner_partition, memo_id)).await
     }
 
@@ -266,10 +262,7 @@ mod tests {
         let envelope = envelope();
         assert_eq!(
             RedisCache::legacy_cache_key(envelope.owner_partition, envelope.memo_id),
-            format!(
-                "memo:{}:{}",
-                envelope.owner_partition, envelope.memo_id
-            )
+            format!("memo:{}:{}", envelope.owner_partition, envelope.memo_id)
         );
     }
 
