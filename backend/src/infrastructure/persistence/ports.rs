@@ -124,6 +124,26 @@ pub trait MemoAuthoritativeStore: Send + Sync {
     async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LegacyMemoCacheSweepStats {
+    pub scanned_candidates: u64,
+    pub legacy_keys: u64,
+    pub deleted_keys: u64,
+}
+
+#[async_trait]
+pub trait LegacyMemoPlaintextCacheMaintenance: Send + Sync {
+    async fn inspect_legacy_plaintext_memo_cache(
+        &self,
+        scan_count: usize,
+    ) -> AppResult<LegacyMemoCacheSweepStats>;
+
+    async fn purge_legacy_plaintext_memo_cache(
+        &self,
+        scan_count: usize,
+    ) -> AppResult<LegacyMemoCacheSweepStats>;
+}
+
 #[async_trait]
 pub trait MemoCache: Send + Sync {
     async fn get_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<Option<Memo>>;
