@@ -154,9 +154,11 @@ The final production reindex still requires the authoritative source to be write
 
 ## Runtime status
 
-Protected HIGH search is still not wired into normal query request routing. User-visible search results continue to come exclusively from the legacy search path.
+The normal memo search request path is now wired to the shared HIGH-search query lease and route snapshot. The persisted shared route defaults to `legacy`, so user-visible search remains legacy until a separate guarded operator cutover changes that shared state. No cutover command is installed by this request-path change.
 
-An explicit `HIGH_SEARCH_SHADOW_MODE=observe` mode can now schedule the protected query path as a bounded best-effort background observation after the legacy result is already available. Shadow work has an explicitly configured concurrency limit and timeout; capacity exhaustion drops the observation instead of queueing unbounded work or backpressuring the user request. Query/tag plaintext, owner identifiers, and result IDs are not logged. Only aggregate counters are retained/logged periodically.
+When the route snapshot is `protected`, the request path executes the protected blind-token query, then hydrates returned IDs through the owner-scoped authoritative store. It does not silently fall back to the legacy projection on protected-path failure, and it treats query-lease release failure as a failed request. This keeps protected-route faults observable and prevents traffic from escaping a deliberate cutover.
+
+An explicit `HIGH_SEARCH_SHADOW_MODE=observe` mode can schedule the protected query path as a bounded best-effort background observation after a legacy-routed result is already available. Shadow execution is skipped when the admitted user-visible route is protected. Shadow work has an explicitly configured concurrency limit and timeout; capacity exhaustion drops the observation instead of queueing unbounded work or backpressuring the user request. Query/tag plaintext, owner identifiers, and result IDs are not logged. Only aggregate counters are retained/logged periodically.
 
 Shadow comparison records aggregate total equality and ephemeral page-set overlap counts. Memo IDs are used only inside the bounded observation task to compute intersection/legacy-only/protected-only counts and are never logged or persisted. When both legacy and protected result sets fit completely on page 1, the observer additionally counts exact complete-set matches/mismatches; for paginated results, page overlap remains diagnostic because the two paths intentionally use different ordering.
 
@@ -164,16 +166,15 @@ These metrics are **not** by themselves a parity or cutover gate: the legacy Man
 
 When HIGH search is enabled, the existing durable projection outbox now mirrors authoritative create/update/delete state into `memos_high_v1` as a secondary projection. The same reconciler continues to maintain the legacy plaintext search projection and cache, and it acquires the shared MongoDB maintenance writer lease before any secondary mutation. An error in the HIGH mirror or in lease release leaves the outbox intent unacknowledged for retry.
 
-The staged protected projection also has an operator-only `reindex_high_search_staged` command. It runs behind the MongoDB write-freeze barrier and verifies source/projection convergence, but deliberately performs no request-path cutover. Each staged full rebuild still resets only `memos_high_v1` while the offline permit is held; the maintenance barrier now also drains and blocks background reconciler work, so the reset/rebuild cannot race an outbox retry. This reset remains valid only while protected query routing is inactive.
+The staged protected projection also has an operator-only `reindex_high_search_staged` command. It runs behind the MongoDB write-freeze barrier and verifies source/projection convergence, but deliberately performs no route cutover. Each staged full rebuild resets only `memos_high_v1` after the drained shared route is mechanically verified as `legacy`; the maintenance barrier also drains and blocks background reconciler/query work, so reset/rebuild cannot race an outbox retry or admitted query.
 
 Runtime cutover still requires:
 
 - representative-corpus validation and approval of the staged ICU4X analyzer,
 - promotion of the staged AWS KMS search-key provider/operator path to the approved production deployment,
-- a cutover-aware invocation once protected routing generations exist; the current staged command only validates the inactive projection,
+- a guarded operator cutover invocation that validates deployment prerequisites and switches the shared route generation only while the maintenance permit is held,
 - an explicit search-key rotation protocol that prevents old/new key-version query gaps (for example generation-based reindex plus atomic switch or verified dual-read),
 - an explicit analysis-version migration protocol for tokenizer/normalizer changes,
-- request-path orchestration wiring,
 - rollback rehearsal.
 
 Changing either the search-key version or analysis version in place while only one version is queried can make valid documents temporarily undiscoverable. Runtime activation must therefore treat projection generations as a coordinated migration, not as a per-request configuration flip.
