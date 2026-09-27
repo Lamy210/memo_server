@@ -24,9 +24,10 @@ use super::{
 
 /// Owns the staged HIGH search runtime for the application lifetime.
 ///
-/// The runtime is not installed into request handling yet. Keeping it here
-/// proves production provider/startup composition and owns cache maintenance
-/// without widening route-level access prematurely.
+/// The runtime exposes its protected query reader to the route-aware memo
+/// service when HIGH search is explicitly enabled. The shared MongoDB query
+/// route still defaults to legacy, so startup composition alone does not move
+/// user-visible traffic to the protected projection.
 pub(crate) struct HighSearchRuntimeHandle {
     stack: Option<Arc<HighSearchRuntimeStack>>,
     cache_sweeper: Option<JoinHandle<()>>,
