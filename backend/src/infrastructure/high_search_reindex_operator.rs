@@ -127,7 +127,9 @@ pub async fn run_staged_high_search_reindex(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AuthConfig, HighSearchConfig, HighSearchShadowConfig};
+    use crate::config::{
+        AuthConfig, HighMemoCryptoConfig, HighSearchConfig, HighSearchShadowConfig,
+    };
 
     fn disabled_config() -> AppConfig {
         AppConfig {
@@ -137,6 +139,7 @@ mod tests {
             redis_uri: "redis://unused".into(),
             search_backend: SearchBackend::Manticore,
             search_uri: "not-a-manticore-uri".into(),
+            high_memo_crypto: HighMemoCryptoConfig::Disabled,
             high_search: HighSearchConfig::Disabled,
             high_search_shadow: HighSearchShadowConfig::Disabled,
             port: 8080,

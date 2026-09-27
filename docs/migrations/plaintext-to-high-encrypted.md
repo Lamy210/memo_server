@@ -24,6 +24,17 @@ Before starting it:
 4. keep the plaintext store unchanged until encrypted cutover verification completes,
 5. use the reviewed AWS KMS MEMO-HIGH-1 provider/configuration; test providers are not acceptable.
 
+The staged production configuration is explicit and remains disabled by default:
+
+- `HIGH_MEMO_CRYPTO_MODE=aws-kms`,
+- `HIGH_MEMO_AWS_REGION=<region>`,
+- `HIGH_MEMO_ACTIVE_KEY_VERSION=<application-owned-alias>`,
+- `HIGH_MEMO_AWS_KMS_KEYS_JSON=[{"key_version":"...","key_arn":"arn:...:kms:...:key/..."}]`.
+
+The key-ring JSON may contain at most 32 versions and is capped at 64 KiB. Every key ARN must be a pinned KMS key ARN in the configured Region; KMS aliases, duplicate application aliases, duplicate KMS ARNs, and an active alias absent from the ring are rejected. The environment contains routing metadata only, never plaintext DEKs or other raw key material.
+
+`HighMemoStagingRuntimeHandle` consumes this configuration only for operator/migration composition. It pins the AWS SDK Region, uses the standard refreshable AWS credential provider chain, and runs `DescribeKey` preflight for every configured historical/current key before exposing the staging cryptography port. Normal server startup deliberately does not construct this runtime yet.
+
 This pipeline is **not** CDC or dual-write replication. Count checks reduce migration
 risk but do not make concurrent source writes safe.
 
@@ -117,9 +128,8 @@ lose post-cutover mutations.
 
 This runbook does not authorize production execution yet. The following remain blockers:
 
-- deployment configuration for the staged AWS KMS data-key provider,
-- least-privilege KMS identity and key-policy review,
-- a guarded migration command or operational job,
+- least-privilege KMS identity and key-policy review for the staged deployment configuration,
+- a guarded migration command or operational job that constructs the operator-only KMS staging runtime,
 - HIGH Valkey request-path wiring and retirement of the legacy plaintext cache contract,
 - a production language-aware analyzer and production search-key provider for the staged protected Manticore orchestration,
 - an operator-guarded invocation of the protected-search reindex/verification service,

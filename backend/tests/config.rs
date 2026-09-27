@@ -1,6 +1,6 @@
 use memo_app_backend::config::{
-    AppConfig, AuthConfig, AuthoritativeBackend, ConfigError, HighSearchConfig,
-    HighSearchShadowConfig, SearchBackend,
+    AppConfig, AuthConfig, AuthoritativeBackend, ConfigError, HighMemoCryptoConfig,
+    HighSearchConfig, HighSearchShadowConfig, SearchBackend,
 };
 
 fn development_vars() -> Vec<(String, String)> {
@@ -18,6 +18,7 @@ fn uses_service_defaults_in_explicit_development_mode() {
     assert_eq!(config.redis_uri, "redis://127.0.0.1:6379");
     assert_eq!(config.search_backend, SearchBackend::Elasticsearch);
     assert_eq!(config.search_uri, "http://127.0.0.1:9200");
+    assert_eq!(config.high_memo_crypto, HighMemoCryptoConfig::Disabled);
     assert_eq!(config.high_search, HighSearchConfig::Disabled);
     assert_eq!(config.high_search_shadow, HighSearchShadowConfig::Disabled);
     assert_eq!(config.port, 8080);
@@ -143,6 +144,210 @@ fn rejects_unknown_search_backend() {
         error,
         ConfigError::InvalidSearchBackend("unknown".to_string())
     );
+}
+
+fn high_memo_aws_vars() -> Vec<(String, String)> {
+    vec![
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        ("AUTHORITATIVE_BACKEND".to_string(), "mongodb".to_string()),
+        ("HIGH_MEMO_CRYPTO_MODE".to_string(), "aws-kms".to_string()),
+        (
+            "HIGH_MEMO_AWS_REGION".to_string(),
+            "ap-northeast-1".to_string(),
+        ),
+        (
+            "HIGH_MEMO_ACTIVE_KEY_VERSION".to_string(),
+            "memo-key-v2".to_string(),
+        ),
+        (
+            "HIGH_MEMO_AWS_KMS_KEYS_JSON".to_string(),
+            r#"[
+                {"key_version":"memo-key-v1","key_arn":"arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"},
+                {"key_version":"memo-key-v2","key_arn":"arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+            ]"#
+            .to_string(),
+        ),
+    ]
+}
+
+#[test]
+fn high_memo_crypto_is_disabled_by_default_and_ignores_staged_settings() {
+    let config = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        (
+            "HIGH_MEMO_AWS_KMS_KEYS_JSON".to_string(),
+            "not-json-and-not-active".to_string(),
+        ),
+    ])
+    .expect("staged HIGH memo settings must not activate without an explicit mode");
+
+    assert_eq!(config.high_memo_crypto, HighMemoCryptoConfig::Disabled);
+}
+
+#[cfg(feature = "aws-kms-memo")]
+#[test]
+fn accepts_complete_high_memo_aws_kms_configuration() {
+    let config = AppConfig::from_vars(high_memo_aws_vars())
+        .expect("complete staged AWS KMS HIGH memo configuration should be valid");
+
+    let HighMemoCryptoConfig::AwsKms {
+        region,
+        active_key_version,
+        key_versions,
+    } = config.high_memo_crypto
+    else {
+        panic!("HIGH memo crypto should be AWS KMS");
+    };
+
+    assert_eq!(region, "ap-northeast-1");
+    assert_eq!(active_key_version, "memo-key-v2");
+    assert_eq!(key_versions.len(), 2);
+    assert_eq!(
+        key_versions.get("memo-key-v1").map(String::as_str),
+        Some("arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab")
+    );
+}
+
+#[cfg(not(feature = "aws-kms-memo"))]
+#[test]
+fn high_memo_aws_kms_rejects_binary_without_provider_feature() {
+    let error = AppConfig::from_vars(high_memo_aws_vars())
+        .expect_err("AWS KMS HIGH memo config must fail closed without aws-kms-memo");
+
+    assert_eq!(error, ConfigError::HighMemoCryptoBuildFeatureUnavailable);
+}
+
+#[test]
+fn high_memo_aws_kms_requires_mongodb_authoritative_storage() {
+    let mut vars = high_memo_aws_vars();
+    vars.retain(|(name, _)| name != "AUTHORITATIVE_BACKEND");
+
+    let error = AppConfig::from_vars(vars)
+        .expect_err("HIGH memo staging must not use the Scylla authoritative fallback");
+
+    assert_eq!(error, ConfigError::HighMemoCryptoRequiresMongoDb);
+}
+
+#[test]
+fn rejects_unknown_high_memo_crypto_mode() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "development".to_string()),
+        ("HIGH_MEMO_CRYPTO_MODE".to_string(), "magic".to_string()),
+    ])
+    .expect_err("unknown HIGH memo crypto modes must fail closed");
+
+    assert_eq!(
+        error,
+        ConfigError::InvalidHighMemoCryptoMode("magic".to_string())
+    );
+}
+
+#[test]
+fn high_memo_aws_kms_requires_every_setting() {
+    for missing in [
+        "HIGH_MEMO_AWS_REGION",
+        "HIGH_MEMO_ACTIVE_KEY_VERSION",
+        "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+    ] {
+        let mut vars = high_memo_aws_vars();
+        vars.retain(|(name, _)| name != missing);
+
+        let error = AppConfig::from_vars(vars)
+            .expect_err("enabled HIGH memo crypto must reject incomplete configuration");
+
+        assert_eq!(error, ConfigError::MissingHighMemoCryptoSetting(missing));
+    }
+}
+
+#[test]
+fn high_memo_aws_kms_rejects_invalid_region_aliases_and_arns() {
+    let mut invalid_region = high_memo_aws_vars();
+    invalid_region
+        .iter_mut()
+        .find(|(name, _)| name == "HIGH_MEMO_AWS_REGION")
+        .unwrap()
+        .1 = "AP Northeast 1".to_string();
+    assert!(matches!(
+        AppConfig::from_vars(invalid_region),
+        Err(ConfigError::InvalidHighMemoCryptoSetting(
+            "HIGH_MEMO_AWS_REGION",
+            _
+        ))
+    ));
+
+    let mut invalid_active = high_memo_aws_vars();
+    invalid_active
+        .iter_mut()
+        .find(|(name, _)| name == "HIGH_MEMO_ACTIVE_KEY_VERSION")
+        .unwrap()
+        .1 = "provider/key/arn".to_string();
+    assert!(matches!(
+        AppConfig::from_vars(invalid_active),
+        Err(ConfigError::InvalidHighMemoCryptoSetting(
+            "HIGH_MEMO_ACTIVE_KEY_VERSION",
+            _
+        ))
+    ));
+
+    let mut region_mismatch = high_memo_aws_vars();
+    region_mismatch
+        .iter_mut()
+        .find(|(name, _)| name == "HIGH_MEMO_AWS_KMS_KEYS_JSON")
+        .unwrap()
+        .1 = r#"[{"key_version":"memo-key-v2","key_arn":"arn:aws:kms:us-east-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}]"#.to_string();
+    assert!(matches!(
+        AppConfig::from_vars(region_mismatch),
+        Err(ConfigError::InvalidHighMemoCryptoSetting(
+            "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+            _
+        ))
+    ));
+}
+
+#[test]
+fn high_memo_aws_kms_rejects_malformed_duplicate_or_incomplete_key_rings() {
+    for raw in [
+        "not-json",
+        "[]",
+        r#"[{"key_version":"memo-key-v2","key_arn":"arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","unexpected":true}]"#,
+        r#"[
+            {"key_version":"memo-key-v2","key_arn":"arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+            {"key_version":"memo-key-v2","key_arn":"arn:aws:kms:ap-northeast-1:111122223333:key/bbbbbbbb-cccc-dddd-eeee-ffffffffffff"}
+        ]"#,
+        r#"[
+            {"key_version":"memo-key-v1","key_arn":"arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+            {"key_version":"memo-key-v2","key_arn":"arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+        ]"#,
+    ] {
+        let mut vars = high_memo_aws_vars();
+        vars.iter_mut()
+            .find(|(name, _)| name == "HIGH_MEMO_AWS_KMS_KEYS_JSON")
+            .unwrap()
+            .1 = raw.to_string();
+
+        assert!(matches!(
+            AppConfig::from_vars(vars),
+            Err(ConfigError::InvalidHighMemoCryptoSetting(
+                "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+                _
+            ))
+        ));
+    }
+
+    let mut missing_active = high_memo_aws_vars();
+    missing_active
+        .iter_mut()
+        .find(|(name, _)| name == "HIGH_MEMO_AWS_KMS_KEYS_JSON")
+        .unwrap()
+        .1 = r#"[{"key_version":"memo-key-v1","key_arn":"arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"}]"#.to_string();
+
+    assert!(matches!(
+        AppConfig::from_vars(missing_active),
+        Err(ConfigError::InvalidHighMemoCryptoSetting(
+            "HIGH_MEMO_ACTIVE_KEY_VERSION",
+            _
+        ))
+    ));
 }
 
 fn high_search_aws_vars() -> Vec<(String, String)> {
