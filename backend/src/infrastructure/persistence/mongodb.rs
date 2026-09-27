@@ -15,7 +15,9 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto::HighEncryptedMemoEnvelope,
-        crypto_migration::{EncryptedMemoStageResult, HighEncryptedMemoStagingStore},
+        crypto_migration::{
+            EncryptedMemoStageResult, HighEncryptedMemoStagingAdmin, HighEncryptedMemoStagingStore,
+        },
         crypto_migration_batch::PlaintextMemoMigrationSource,
         health::HealthProbe,
     },
@@ -745,6 +747,17 @@ impl PlaintextMemoMigrationSource for MongoDbAuthoritativeStore {
             .into_iter()
             .map(MemoDocument::try_into_memo)
             .collect()
+    }
+}
+
+#[async_trait]
+impl HighEncryptedMemoStagingAdmin for MongoDbAuthoritativeStore {
+    async fn reset_staging(&self) -> AppResult<()> {
+        self.encrypted_memos
+            .delete_many(doc! {})
+            .await
+            .map_err(|error| mongo_error("reset encrypted MongoDB migration staging", error))?;
+        Ok(())
     }
 }
 
