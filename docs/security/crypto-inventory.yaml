@@ -49,7 +49,7 @@ assets:
         envelope_contract: implemented
         payload_codec: implemented
         aead_adapter: staged
-        key_wrapping_provider: aws_kms_adapter_staged_not_runtime_wired
+        key_wrapping_provider: aws_kms_adapter_with_operator_runtime_config_staged
         runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto
@@ -95,7 +95,27 @@ assets:
       wrapped_dek_max_bytes: 6144
       plaintext_dek_zeroized_after_use: true
       provider_preflight: DescribeKey_all_configured_versions
-      runtime_wired: false
+      deployment_config:
+        mode: HIGH_MEMO_CRYPTO_MODE
+        aws_region: HIGH_MEMO_AWS_REGION
+        active_key_version: HIGH_MEMO_ACTIVE_KEY_VERSION
+        versioned_key_ring_json: HIGH_MEMO_AWS_KMS_KEYS_JSON
+        versioned_key_ring_format: array_of_key_version_and_pinned_key_arn_objects
+        max_config_bytes: 65536
+        max_key_versions: 32
+        duplicate_key_versions: rejected
+        duplicate_key_arns: rejected
+        active_version_must_exist: true
+        kms_arn_region_match_required: true
+        raw_key_material_in_config: forbidden
+      staging_runtime:
+        builder: HighMemoStagingRuntimeHandle
+        aws_sdk_region: explicit
+        credentials: aws_standard_refreshable_provider_chain
+        kms_preflight_before_use: required
+        application_startup_wired: false
+        operator_or_migration_only: true
+      runtime_wired: operator_or_migration_only
       runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto
