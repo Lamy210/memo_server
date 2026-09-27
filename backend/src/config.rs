@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 
+use serde::Deserialize;
 use thiserror::Error;
 
 const DEFAULT_SCYLLA_URI: &str = "127.0.0.1:9042";
@@ -14,6 +15,9 @@ const MAX_SEARCH_VERSION_ID_CHARS: usize = 128;
 const HIGH_SEARCH_PRF_PREFIX: &str = "prf384-v1:";
 const HIGH_SEARCH_HKDF_PREFIX: &str = "hkdf384-v1:";
 const MAX_KMS_KEY_ARN_BYTES: usize = 2048;
+const MAX_HIGH_MEMO_KEY_VERSION_ID_CHARS: usize = 128;
+const MAX_HIGH_MEMO_KMS_KEY_VERSIONS: usize = 32;
+const MAX_HIGH_MEMO_KMS_KEYS_JSON_BYTES: usize = 64 * 1024;
 const MAX_HIGH_SEARCH_SHADOW_CONCURRENCY: usize = 256;
 const MAX_HIGH_SEARCH_SHADOW_TIMEOUT_MS: u64 = 60_000;
 
@@ -41,6 +45,16 @@ pub enum AuthoritativeBackend {
 pub enum SearchBackend {
     Elasticsearch,
     Manticore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HighMemoCryptoConfig {
+    Disabled,
+    AwsKms {
+        region: String,
+        active_key_version: String,
+        key_versions: BTreeMap<String, String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +90,7 @@ pub struct AppConfig {
     pub redis_uri: String,
     pub search_backend: SearchBackend,
     pub search_uri: String,
+    pub high_memo_crypto: HighMemoCryptoConfig,
     pub high_search: HighSearchConfig,
     pub high_search_shadow: HighSearchShadowConfig,
     pub port: u16,
@@ -94,6 +109,18 @@ pub enum ConfigError {
     InvalidMongoDatabase(String),
     #[error("SEARCH_BACKEND must be `elasticsearch` or `manticore`, got `{0}`")]
     InvalidSearchBackend(String),
+    #[error("HIGH_MEMO_CRYPTO_MODE must be `disabled` or `aws-kms`, got `{0}`")]
+    InvalidHighMemoCryptoMode(String),
+    #[error("HIGH_MEMO_CRYPTO_MODE=aws-kms requires AUTHORITATIVE_BACKEND=mongodb")]
+    HighMemoCryptoRequiresMongoDb,
+    #[error(
+        "HIGH_MEMO_CRYPTO_MODE=aws-kms requires the binary to be built with feature `aws-kms-memo`"
+    )]
+    HighMemoCryptoBuildFeatureUnavailable,
+    #[error("{0} is required when HIGH_MEMO_CRYPTO_MODE=aws-kms")]
+    MissingHighMemoCryptoSetting(&'static str),
+    #[error("{0} is invalid for HIGH_MEMO_CRYPTO_MODE=aws-kms: `{1}`")]
+    InvalidHighMemoCryptoSetting(&'static str, String),
     #[error("HIGH_SEARCH_MODE must be `disabled` or `aws-kms`, got `{0}`")]
     InvalidHighSearchMode(String),
     #[error("HIGH_SEARCH_SHADOW_MODE must be `disabled` or `observe`, got `{0}`")]
@@ -187,6 +214,7 @@ impl AppConfig {
                 .unwrap_or_else(|| DEFAULT_MANTICORE_URI.to_string()),
         };
 
+        let high_memo_crypto = parse_high_memo_crypto_config(&vars, authoritative_backend)?;
         let high_search = parse_high_search_config(&vars, authoritative_backend, search_backend)?;
         let high_search_shadow = parse_high_search_shadow_config(&vars, &high_search)?;
 
@@ -219,12 +247,199 @@ impl AppConfig {
             redis_uri,
             search_backend,
             search_uri,
+            high_memo_crypto,
             high_search,
             high_search_shadow,
             port,
             auth,
         })
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HighMemoKmsKeyEntry {
+    key_version: String,
+    key_arn: String,
+}
+
+fn parse_high_memo_crypto_config(
+    vars: &HashMap<String, String>,
+    authoritative_backend: AuthoritativeBackend,
+) -> Result<HighMemoCryptoConfig, ConfigError> {
+    let mode = vars
+        .get("HIGH_MEMO_CRYPTO_MODE")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "disabled".to_string());
+
+    match mode.as_str() {
+        "disabled" => Ok(HighMemoCryptoConfig::Disabled),
+        "aws-kms" => {
+            if authoritative_backend != AuthoritativeBackend::MongoDb {
+                return Err(ConfigError::HighMemoCryptoRequiresMongoDb);
+            }
+
+            let region = required_high_memo_setting(vars, "HIGH_MEMO_AWS_REGION")?;
+            validate_high_memo_aws_region(&region)?;
+
+            let active_key_version =
+                required_high_memo_setting(vars, "HIGH_MEMO_ACTIVE_KEY_VERSION")?;
+            validate_high_memo_key_version(&active_key_version)?;
+
+            let raw_keys = required_high_memo_setting(vars, "HIGH_MEMO_AWS_KMS_KEYS_JSON")?;
+            if raw_keys.len() > MAX_HIGH_MEMO_KMS_KEYS_JSON_BYTES {
+                return Err(ConfigError::InvalidHighMemoCryptoSetting(
+                    "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+                    "configuration exceeds size limit".into(),
+                ));
+            }
+
+            let entries: Vec<HighMemoKmsKeyEntry> =
+                serde_json::from_str(&raw_keys).map_err(|_| {
+                    ConfigError::InvalidHighMemoCryptoSetting(
+                        "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+                        "must be a JSON array of key_version/key_arn objects".into(),
+                    )
+                })?;
+            if entries.is_empty() || entries.len() > MAX_HIGH_MEMO_KMS_KEY_VERSIONS {
+                return Err(ConfigError::InvalidHighMemoCryptoSetting(
+                    "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+                    format!(
+                        "must contain 1..={MAX_HIGH_MEMO_KMS_KEY_VERSIONS} key versions"
+                    ),
+                ));
+            }
+
+            let mut key_versions = BTreeMap::new();
+            let mut unique_arns = HashSet::with_capacity(entries.len());
+            for entry in entries {
+                validate_high_memo_key_version(&entry.key_version)?;
+                validate_high_memo_kms_key_arn(&entry.key_arn, &region)?;
+                if key_versions
+                    .insert(entry.key_version.clone(), entry.key_arn.clone())
+                    .is_some()
+                {
+                    return Err(ConfigError::InvalidHighMemoCryptoSetting(
+                        "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+                        format!("duplicate key_version {}", entry.key_version),
+                    ));
+                }
+                if !unique_arns.insert(entry.key_arn) {
+                    return Err(ConfigError::InvalidHighMemoCryptoSetting(
+                        "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+                        "multiple key versions must not point at the same KMS key ARN".into(),
+                    ));
+                }
+            }
+
+            if !key_versions.contains_key(&active_key_version) {
+                return Err(ConfigError::InvalidHighMemoCryptoSetting(
+                    "HIGH_MEMO_ACTIVE_KEY_VERSION",
+                    "active version is not present in HIGH_MEMO_AWS_KMS_KEYS_JSON".into(),
+                ));
+            }
+
+            if !cfg!(feature = "aws-kms-memo") {
+                return Err(ConfigError::HighMemoCryptoBuildFeatureUnavailable);
+            }
+
+            Ok(HighMemoCryptoConfig::AwsKms {
+                region,
+                active_key_version,
+                key_versions,
+            })
+        }
+        _ => Err(ConfigError::InvalidHighMemoCryptoMode(mode)),
+    }
+}
+
+fn required_high_memo_setting(
+    vars: &HashMap<String, String>,
+    name: &'static str,
+) -> Result<String, ConfigError> {
+    vars.get(name)
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .ok_or(ConfigError::MissingHighMemoCryptoSetting(name))
+}
+
+fn validate_high_memo_key_version(value: &str) -> Result<(), ConfigError> {
+    let valid = !value.is_empty()
+        && value.chars().count() <= MAX_HIGH_MEMO_KEY_VERSION_ID_CHARS
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'));
+
+    if !valid {
+        return Err(ConfigError::InvalidHighMemoCryptoSetting(
+            "HIGH_MEMO_ACTIVE_KEY_VERSION",
+            value.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_high_memo_aws_region(region: &str) -> Result<(), ConfigError> {
+    let valid = !region.is_empty()
+        && region.trim() == region
+        && region
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !region.starts_with('-')
+        && !region.ends_with('-');
+
+    if !valid {
+        return Err(ConfigError::InvalidHighMemoCryptoSetting(
+            "HIGH_MEMO_AWS_REGION",
+            region.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_high_memo_kms_key_arn(
+    key_arn: &str,
+    expected_region: &str,
+) -> Result<(), ConfigError> {
+    let parts: Vec<&str> = key_arn.splitn(6, ':').collect();
+    let partition_valid = parts.get(1).is_some_and(|partition| {
+        !partition.is_empty()
+            && partition
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !partition.starts_with('-')
+            && !partition.ends_with('-')
+    });
+    let account_valid = parts.get(4).is_some_and(|account| {
+        account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    let resource_valid = parts.get(5).is_some_and(|resource| {
+        resource.strip_prefix("key/").is_some_and(|key_id| {
+            !key_id.is_empty()
+                && !key_id.contains('/')
+                && key_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    });
+
+    let valid = key_arn.len() <= MAX_KMS_KEY_ARN_BYTES
+        && key_arn.trim() == key_arn
+        && parts.len() == 6
+        && parts[0] == "arn"
+        && partition_valid
+        && parts[2] == "kms"
+        && parts[3] == expected_region
+        && account_valid
+        && resource_valid;
+
+    if !valid {
+        return Err(ConfigError::InvalidHighMemoCryptoSetting(
+            "HIGH_MEMO_AWS_KMS_KEYS_JSON",
+            "contains an invalid or Region-mismatched pinned KMS key ARN".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_high_search_config(
