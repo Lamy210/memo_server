@@ -39,13 +39,14 @@ impl Application {
             .await
             .map_err(|error| io::Error::other(error.to_string()))?;
 
+        let high_search_query_reader = high_search_runtime.query_reader();
         let high_search_shadow = match config.high_search_shadow {
             HighSearchShadowConfig::Disabled => None,
             HighSearchShadowConfig::Observe {
                 max_concurrency,
                 timeout_ms,
             } => {
-                let reader = high_search_runtime.query_reader().ok_or_else(|| {
+                let reader = high_search_query_reader.clone().ok_or_else(|| {
                     io::Error::other(
                         "HIGH search shadow is enabled but no protected query reader is available",
                     )
@@ -84,6 +85,8 @@ impl Application {
         let memo_service = Data::new(MemoService::new(
             memo_repository,
             persistence.mutation_guard,
+            persistence.high_search_query_guard,
+            high_search_query_reader,
             high_search_shadow,
         ));
         let auth_service = Data::new(AuthService::new(config.auth));
