@@ -25,7 +25,9 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::{MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget};
+use super::ports::{
+    HighEncryptedMemoAuthoritativeStore, MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget,
+};
 
 #[cfg(test)]
 const TEST_DATABASE_NAME: &str = "memo_app_test";
@@ -277,6 +279,21 @@ struct DeleteTransactionContext {
     intent: ProjectionIntentDocument,
 }
 
+struct EncryptedSaveTransactionContext {
+    memos: Collection<EncryptedMemoDocument>,
+    intents: Collection<ProjectionIntentDocument>,
+    memo: EncryptedMemoDocument,
+    intent: ProjectionIntentDocument,
+}
+
+struct EncryptedDeleteTransactionContext {
+    memos: Collection<EncryptedMemoDocument>,
+    intents: Collection<ProjectionIntentDocument>,
+    owner_partition: String,
+    memo_id: String,
+    intent: ProjectionIntentDocument,
+}
+
 pub struct MongoDbAuthoritativeStore {
     client: Client,
     database: Database,
@@ -336,6 +353,15 @@ impl MongoDbAuthoritativeStore {
             )
             .await
             .map_err(|error| mongo_error("create MongoDB memo indexes", error))?;
+
+        self.encrypted_memos
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "owner_partition": 1 })
+                    .build(),
+            )
+            .await
+            .map_err(|error| mongo_error("create MongoDB encrypted memo indexes", error))?;
 
         self.projection_intents
             .create_index(IndexModel::builder().keys(doc! { "memo_id": 1 }).build())
