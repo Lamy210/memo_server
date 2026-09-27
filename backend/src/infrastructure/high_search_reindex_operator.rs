@@ -22,13 +22,13 @@ use super::{
     persistence::{manticore_high::HighManticoreClient, mongodb::MongoDbAuthoritativeStore},
 };
 
-struct ResettingHighSearchReindexRunner {
+pub(crate) struct ResettingHighSearchReindexRunner {
     admin: Arc<dyn HighSearchProjectionMigrationAdmin>,
     inner: Arc<dyn HighSearchReindexRunner>,
 }
 
 impl ResettingHighSearchReindexRunner {
-    fn new(
+    pub(crate) fn new(
         admin: Arc<dyn HighSearchProjectionMigrationAdmin>,
         inner: Arc<dyn HighSearchReindexRunner>,
     ) -> Self {

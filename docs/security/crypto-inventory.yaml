@@ -155,6 +155,29 @@ assets:
           workload_approval:
             schema: high-search-workload-approval-v1
             validator_command: validate_high_search_workload_approval
+          cutover_approval:
+            schema: high-search-cutover-approval-v1
+            validator_command: validate_high_search_cutover_approval
+            input_file_bytes_cap: 524288
+            embeds_workload_approval: true
+            runtime_binding_exact_match:
+              - kms_key_arn
+              - aws_region
+              - provider_seed_version
+              - cache_ttl_seconds
+              - cache_max_entries
+              - cache_sweep_seconds
+              - high_search_budget_values
+            required_operator_attestations:
+              - kms_key_and_iam_reviewed
+              - credential_provider_validated
+              - cache_capacity_reviewed
+              - rotation_reindex_rehearsed
+              - rollback_rehearsed
+              - security_migration_gates_reviewed
+              - all_replicas_route_aware_and_barrier_participating
+              - all_replicas_runtime_config_reviewed
+            cryptographic_attestation: not_provided
             input_file_bytes_cap: 262144
             production_like_corpus_review_confirmation: required
             projection_load_test_confirmation: required
@@ -316,12 +339,20 @@ assets:
           user_visible_request_path_installed: true
           route_selection_source: admitted_query_permit_snapshot_only
           protected_route_activation_default: inactive_legacy
-          protected_route_operator_cutover_command: not_implemented
+          protected_route_operator_cutover_command: cutover_high_search_route
+          protected_route_cutover_requires:
+            - cutover_approval_manifest
+            - exact_route_generation
+            - live_maintenance_permit
+            - protected_projection_full_reindex_and_convergence
+          protected_route_cutover_ambiguous_outcome: barrier_remains_closed
+          protected_route_rollback_command: cutover_high_search_route_apply_legacy
+          protected_route_rollback_requires_exact_generation: true
           protected_route_missing_reader_behavior: fail_closed
           protected_route_hydration: owner_scoped_authoritative_bulk_read
           query_lease_release_failure_behavior: fail_closed
       long_lived_search_root_process_exposure: forbidden
-      production_search_key_provider: not_implemented
+      production_search_key_provider: aws_kms_runtime_bound_to_reviewed_cutover_manifest
       protected_projection:
         adapter: staged
         table: memos_high_v1
