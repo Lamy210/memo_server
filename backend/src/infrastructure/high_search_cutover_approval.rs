@@ -56,7 +56,10 @@ impl HighSearchCutoverApproval {
                 self.credential_provider_validated,
             ),
             ("cache_capacity_reviewed", self.cache_capacity_reviewed),
-            ("rotation_reindex_rehearsed", self.rotation_reindex_rehearsed),
+            (
+                "rotation_reindex_rehearsed",
+                self.rotation_reindex_rehearsed,
+            ),
             ("rollback_rehearsed", self.rollback_rehearsed),
             (
                 "security_migration_gates_reviewed",
@@ -134,7 +137,9 @@ impl HighSearchCutoverApproval {
     }
 }
 
-pub fn parse_high_search_cutover_approval_json(input: &str) -> AppResult<HighSearchCutoverApproval> {
+pub fn parse_high_search_cutover_approval_json(
+    input: &str,
+) -> AppResult<HighSearchCutoverApproval> {
     let approval: HighSearchCutoverApproval = serde_json::from_str(input).map_err(|error| {
         AppError::ValidationError(format!(
             "HIGH search cutover approval must be valid JSON: {error}"
@@ -172,9 +177,7 @@ mod tests {
                 HighSearchApprovedBudgets, HighSearchWorkloadSource,
                 HIGH_SEARCH_WORKLOAD_APPROVAL_SCHEMA_V1,
             },
-            high_search_workload_measurement::{
-                DistributionSummary, HighSearchWorkloadReport,
-            },
+            high_search_workload_measurement::{DistributionSummary, HighSearchWorkloadReport},
         },
     };
 
@@ -325,7 +328,10 @@ mod tests {
     #[test]
     fn nested_workload_budget_drift_is_rejected() {
         let mut value = approval();
-        value.workload_approval.selected_budgets.max_query_content_terms += 1;
+        value
+            .workload_approval
+            .selected_budgets
+            .max_query_content_terms += 1;
         assert!(matches!(
             value.validate_against_config(&config()),
             Err(AppError::ValidationError(_))
