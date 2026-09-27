@@ -16,6 +16,7 @@ use crate::{
 
 use super::ports::MemoCache;
 
+const LEGACY_CACHE_NAMESPACE: &str = "memo";
 const HIGH_CACHE_NAMESPACE: &str = "memo:high:v1";
 
 pub struct RedisCache {
@@ -120,6 +121,10 @@ impl RedisCache {
             })
     }
 
+    fn legacy_cache_key(owner_partition: uuid::Uuid, memo_id: uuid::Uuid) -> String {
+        format!("{LEGACY_CACHE_NAMESPACE}:{owner_partition}:{memo_id}")
+    }
+
     fn high_cache_key(owner_partition: uuid::Uuid, memo_id: uuid::Uuid) -> String {
         format!("{HIGH_CACHE_NAMESPACE}:{owner_partition}:{memo_id}")
     }
@@ -187,25 +192,38 @@ impl HighEncryptedMemoCache for RedisCache {
 
 #[async_trait]
 impl MemoCache for RedisCache {
-    async fn get_memo(&self, key: &str) -> AppResult<Option<Memo>> {
-        self.get::<Memo>(key).await
-    }
-
-    async fn set_memo(
+    async fn get_memo(
         &self,
-        key: &str,
-        memo: &Memo,
-        expiration: Option<Duration>,
+        owner_partition: uuid::Uuid,
+        memo_id: uuid::Uuid,
+    ) -> AppResult<Option<Memo>> {
+        self.get::<Memo>(&Self::legacy_cache_key(owner_partition, memo_id))
+            .await
+    }
+
+    async fn set_memo(&self, memo: &Memo, expiration: Option<Duration>) -> AppResult<()> {
+        self.set(
+            &Self::legacy_cache_key(memo.user_id, memo.id),
+            memo,
+            expiration,
+        )
+        .await
+    }
+
+    async fn delete_memo(
+        &self,
+        owner_partition: uuid::Uuid,
+        memo_id: uuid::Uuid,
     ) -> AppResult<()> {
-        self.set(key, memo, expiration).await
+        RedisCache::delete(self, &Self::legacy_cache_key(owner_partition, memo_id)).await
     }
 
-    async fn delete(&self, key: &str) -> AppResult<()> {
-        RedisCache::delete(self, key).await
-    }
-
-    async fn exists(&self, key: &str) -> AppResult<bool> {
-        RedisCache::exists(self, key).await
+    async fn memo_exists(
+        &self,
+        owner_partition: uuid::Uuid,
+        memo_id: uuid::Uuid,
+    ) -> AppResult<bool> {
+        RedisCache::exists(self, &Self::legacy_cache_key(owner_partition, memo_id)).await
     }
 }
 
@@ -241,6 +259,18 @@ mod tests {
             key_version: "test-kms-v1".into(),
             schema_version: MEMO_HIGH_SCHEMA_VERSION,
         }
+    }
+
+    #[test]
+    fn legacy_cache_key_is_namespaced_and_owner_scoped() {
+        let envelope = envelope();
+        assert_eq!(
+            RedisCache::legacy_cache_key(envelope.owner_partition, envelope.memo_id),
+            format!(
+                "memo:{}:{}",
+                envelope.owner_partition, envelope.memo_id
+            )
+        );
     }
 
     #[test]
