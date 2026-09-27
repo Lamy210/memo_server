@@ -3,12 +3,16 @@ use std::sync::Arc;
 use crate::{
     application::{
         crypto_search_projection::HighSearchProjectionMigrationAdmin,
-        crypto_search_reindex::{HighSearchReindexRunner, HighSearchReindexService, HighSearchReindexStats},
+        crypto_search_reindex::{
+            HighSearchReindexRunner, HighSearchReindexService, HighSearchReindexStats,
+        },
         crypto_search_rotation::{
             HighSearchKeyCacheControl, HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit,
             HighSearchRotationReady, HighSearchRotationService,
         },
-        high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteReader, HighSearchQueryRouteSnapshot},
+        high_search_routing::{
+            HighSearchQueryRoute, HighSearchQueryRouteReader, HighSearchQueryRouteSnapshot,
+        },
     },
     config::{AppConfig, AuthoritativeBackend, HighSearchConfig, SearchBackend},
     error::{AppError, AppResult},
@@ -53,11 +57,8 @@ pub async fn inspect_high_search_query_route(
     config: &AppConfig,
 ) -> AppResult<HighSearchQueryRouteSnapshot> {
     validate_route_topology(config)?;
-    let source = MongoDbAuthoritativeStore::new(
-        &config.authoritative_uri,
-        &config.mongodb_database,
-    )
-    .await?;
+    let source =
+        MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?;
     let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
     guard.current_query_route().await
 }
@@ -112,12 +113,8 @@ pub async fn run_protected_high_search_cutover(
         ));
     }
 
-    let (_, current, stats) = switch_prepared_route_fail_closed(
-        ready,
-        previous,
-        HighSearchQueryRoute::Protected,
-    )
-    .await?;
+    let (_, current, stats) =
+        switch_prepared_route_fail_closed(ready, previous, HighSearchQueryRoute::Protected).await?;
 
     Ok(HighSearchRouteChangeReport {
         previous,
@@ -161,12 +158,8 @@ pub async fn run_legacy_high_search_rollback(
         });
     }
 
-    let current = switch_permit_route_fail_closed(
-        permit,
-        previous,
-        HighSearchQueryRoute::Legacy,
-    )
-    .await?;
+    let current =
+        switch_permit_route_fail_closed(permit, previous, HighSearchQueryRoute::Legacy).await?;
 
     Ok(HighSearchRouteChangeReport {
         previous,
@@ -204,10 +197,7 @@ fn validate_expected_generation(expected_generation: i64) -> AppResult<()> {
     Ok(())
 }
 
-async fn abort_pre_switch<T>(
-    ready: HighSearchRotationReady,
-    primary: AppError,
-) -> AppResult<T> {
+async fn abort_pre_switch<T>(ready: HighSearchRotationReady, primary: AppError) -> AppResult<T> {
     match ready.abort().await {
         Ok(()) => Err(primary),
         Err(abort) => Err(AppError::ServiceUnavailable(format!(
@@ -232,7 +222,11 @@ async fn switch_prepared_route_fail_closed(
     ready: HighSearchRotationReady,
     expected: HighSearchQueryRouteSnapshot,
     target: HighSearchQueryRoute,
-) -> AppResult<(HighSearchQueryRouteSnapshot, HighSearchQueryRouteSnapshot, HighSearchReindexStats)> {
+) -> AppResult<(
+    HighSearchQueryRouteSnapshot,
+    HighSearchQueryRouteSnapshot,
+    HighSearchReindexStats,
+)> {
     let target_snapshot = expected_target_snapshot(expected, target)?;
     let switch_result = ready.switch_query_route(expected, target).await;
     let observed_result = ready.current_query_route().await;
@@ -302,10 +296,14 @@ fn expected_target_snapshot(
     if target == expected.route {
         return Ok(expected);
     }
-    let generation = expected.generation.checked_add(1).ok_or_else(|| {
-        AppError::Conflict("HIGH search query route generation overflow".into())
-    })?;
-    Ok(HighSearchQueryRouteSnapshot { route: target, generation })
+    let generation = expected
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| AppError::Conflict("HIGH search query route generation overflow".into()))?;
+    Ok(HighSearchQueryRouteSnapshot {
+        route: target,
+        generation,
+    })
 }
 
 fn ambiguous_switch_error(
