@@ -174,17 +174,17 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
         target: ProjectionTarget,
     ) -> AppResult<ProjectionIntent> {
         self.encrypted_store
-            .enqueue_projection_intent(user_id, memo_id, target)
+            .enqueue_encrypted_projection_intent(user_id, memo_id, target)
             .await
     }
 
     async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
-        self.encrypted_store.list_projection_intents().await
+        self.encrypted_store.list_encrypted_projection_intents().await
     }
 
     async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
         self.encrypted_store
-            .acknowledge_projection_intent(event)
+            .acknowledge_encrypted_projection_intent(event)
             .await
     }
 }
@@ -285,7 +285,7 @@ mod tests {
             Ok(event)
         }
 
-        async fn enqueue_projection_intent(
+        async fn enqueue_encrypted_projection_intent(
             &self,
             user_id: Uuid,
             memo_id: Uuid,
@@ -296,11 +296,11 @@ mod tests {
             Ok(event)
         }
 
-        async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
+        async fn list_encrypted_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
             Ok(self.intents.lock().unwrap().clone())
         }
 
-        async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
+        async fn acknowledge_encrypted_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
             self.intents
                 .lock()
                 .unwrap()
