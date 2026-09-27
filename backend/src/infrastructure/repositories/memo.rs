@@ -35,7 +35,6 @@ impl MemoRepositoryImpl {
             reconciler,
         }
     }
-
 }
 
 #[async_trait]
