@@ -10,6 +10,7 @@ use crate::{
         crypto_search_rotation::{
             HighSearchKeyCacheControl, HighSearchOfflineWindowGuard, HighSearchRotationService,
         },
+        high_search_routing::HighSearchQueryRoute,
     },
     config::{AppConfig, AuthoritativeBackend, HighSearchConfig, SearchBackend},
     error::{AppError, AppResult},
@@ -38,11 +39,10 @@ impl ResettingHighSearchReindexRunner {
 #[async_trait::async_trait]
 impl HighSearchReindexRunner for ResettingHighSearchReindexRunner {
     async fn reindex_all(&self, page_size: usize) -> AppResult<HighSearchReindexStats> {
-        // This runner is used only while protected request routing is confirmed
-        // inactive and the rotation service already holds the MongoDB offline
-        // permit. Resetting first guarantees repeated staged rebuilds can
-        // converge after authoritative deletes instead of preserving stale
-        // protected rows.
+        // The rotation service checks the drained shared route is still
+        // `legacy` before this destructive runner is invoked. Resetting first
+        // then guarantees repeated staged rebuilds can converge after
+        // authoritative deletes instead of preserving stale protected rows.
         self.admin.reset_projection().await?;
         self.inner.reindex_all(page_size).await
     }
@@ -53,9 +53,10 @@ impl HighSearchReindexRunner for ResettingHighSearchReindexRunner {
 ///
 /// This is an operator-only staging boundary. The caller must ensure every
 /// application replica that can mutate memos participates in the shared
-/// MongoDB maintenance barrier. The current protected request path must remain
-/// inactive for the whole operation; therefore the rotation "cutover" is a
-/// deliberate no-op and only releases the verified maintenance permit.
+/// MongoDB maintenance barrier. After the barrier drains writers and queries,
+/// the operator path requires the persisted user-visible route to be `legacy`
+/// before the protected projection can be reset. The rotation "cutover" remains
+/// a deliberate no-op and only releases the verified maintenance permit.
 pub fn validate_staged_high_search_reindex(config: &AppConfig, page_size: usize) -> AppResult<()> {
     validate_page_size(page_size)?;
 
@@ -113,11 +114,13 @@ pub async fn run_staged_high_search_reindex(
     let cache: Arc<dyn HighSearchKeyCacheControl> = stack;
     let rotation = HighSearchRotationService::new(guard, cache, reindex);
 
-    let ready = rotation.rotate_and_reindex(page_size).await?;
+    let ready = rotation
+        .rotate_and_reindex_requiring_route(page_size, HighSearchQueryRoute::Legacy)
+        .await?;
 
     // SEARCH-HIGH-1 is intentionally not installed in request handling yet.
-    // There is no routing generation to switch here; finishing only revalidates
-    // and releases the maintenance permit after the verified staging pass.
+    // The shared route remains legacy; finishing only revalidates and releases
+    // the maintenance permit after the verified staging pass.
     ready.finish_after_cutover().await
 }
 
