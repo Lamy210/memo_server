@@ -1193,6 +1193,18 @@ mod tests {
             Err(AppError::Conflict(_))
         ));
 
+        HighEncryptedMemoStagingAdmin::reset_staging(&store)
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .count_staged_encrypted_memos_for_migration()
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(store.list_projection_intents().await.unwrap().is_empty());
+
         let mut migrated = Memo::new(
             "Migrated memo".into(),
             "Preserve source version".into(),
