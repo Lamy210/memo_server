@@ -13,8 +13,7 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_orchestration::HighSearchQueryReader,
-        high_search_routing::HighSearchQueryRoute,
-        maintenance::HighSearchQueryGuard,
+        high_search_routing::HighSearchQueryRoute, maintenance::HighSearchQueryGuard,
     },
     error::{AppError, AppResult},
 };
