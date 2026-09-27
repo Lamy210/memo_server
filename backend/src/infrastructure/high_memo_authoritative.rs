@@ -146,11 +146,7 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
             .encrypted_store
             .save_envelope_with_projection_intent(&envelope)
             .await?;
-        Self::validate_projection_event(
-            memo,
-            &event,
-            ProjectionTarget::Version(memo.version),
-        )?;
+        Self::validate_projection_event(memo, &event, ProjectionTarget::Version(memo.version))?;
         Ok(event)
     }
 
@@ -284,8 +280,7 @@ mod tests {
             self.envelopes.lock().unwrap().retain(|envelope| {
                 envelope.owner_partition != owner_partition || envelope.memo_id != memo_id
             });
-            let event =
-                ProjectionIntent::new(owner_partition, memo_id, ProjectionTarget::Deleted);
+            let event = ProjectionIntent::new(owner_partition, memo_id, ProjectionTarget::Deleted);
             self.intents.lock().unwrap().push(event.clone());
             Ok(event)
         }
@@ -409,9 +404,10 @@ mod tests {
         adapter.save_with_projection_intent(&newer).await.unwrap();
 
         let listed = adapter.find_all_by_user_id(owner).await.unwrap();
-        assert_eq!(listed.iter().map(|memo| memo.id).collect::<Vec<_>>(), vec![
-            newer.id, older.id
-        ]);
+        assert_eq!(
+            listed.iter().map(|memo| memo.id).collect::<Vec<_>>(),
+            vec![newer.id, older.id]
+        );
     }
 
     #[tokio::test]
