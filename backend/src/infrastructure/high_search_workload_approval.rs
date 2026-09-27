@@ -5,14 +5,11 @@ use crate::{
     error::{AppError, AppResult},
     infrastructure::{
         crypto_search_analyzer::ICU_HIGH_SEARCH_ANALYSIS_VERSION,
-        high_search_workload_measurement::{
-            DistributionSummary, HighSearchWorkloadReport,
-        },
+        high_search_workload_measurement::{DistributionSummary, HighSearchWorkloadReport},
     },
 };
 
-pub const HIGH_SEARCH_WORKLOAD_APPROVAL_SCHEMA_V1: &str =
-    "high-search-workload-approval-v1";
+pub const HIGH_SEARCH_WORKLOAD_APPROVAL_SCHEMA_V1: &str = "high-search-workload-approval-v1";
 pub const MAX_HIGH_SEARCH_WORKLOAD_APPROVAL_FILE_BYTES: u64 = 256 * 1024;
 const MAX_APPROVAL_ID_BYTES: usize = 128;
 
@@ -124,9 +121,9 @@ fn validate_approval_id(value: &str) -> AppResult<()> {
     let valid = !value.is_empty()
         && value.len() <= MAX_APPROVAL_ID_BYTES
         && value.trim() == value
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-        });
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'));
 
     if valid {
         Ok(())
@@ -201,10 +198,7 @@ fn validate_distribution(
         )));
     }
 
-    if !(summary.min <= summary.p50
-        && summary.p50 <= summary.p95
-        && summary.p95 <= summary.max)
-    {
+    if !(summary.min <= summary.p50 && summary.p50 <= summary.p95 && summary.p95 <= summary.max) {
         return Err(AppError::ValidationError(format!(
             "HIGH search workload report {name} distribution is not monotonic"
         )));
@@ -331,23 +325,35 @@ mod tests {
     fn rejects_unreviewed_or_unloadtested_approval() {
         let mut value = approval();
         value.production_like_corpus_reviewed = false;
-        assert!(matches!(value.validate(), Err(AppError::ValidationError(_))));
+        assert!(matches!(
+            value.validate(),
+            Err(AppError::ValidationError(_))
+        ));
 
         let mut value = approval();
         value.projection_load_test_completed = false;
-        assert!(matches!(value.validate(), Err(AppError::ValidationError(_))));
+        assert!(matches!(
+            value.validate(),
+            Err(AppError::ValidationError(_))
+        ));
     }
 
     #[test]
     fn rejects_analysis_version_or_budget_drift() {
         let mut value = approval();
         value.measurement.analysis_version = "other-analysis".into();
-        assert!(matches!(value.validate(), Err(AppError::ValidationError(_))));
+        assert!(matches!(
+            value.validate(),
+            Err(AppError::ValidationError(_))
+        ));
 
         let mut value = approval();
         value.selected_budgets.max_query_content_terms =
             value.measurement.query_content_terms.max - 1;
-        assert!(matches!(value.validate(), Err(AppError::ValidationError(_))));
+        assert!(matches!(
+            value.validate(),
+            Err(AppError::ValidationError(_))
+        ));
 
         let mut runtime = config();
         let HighSearchConfig::AwsKms {
@@ -368,12 +374,18 @@ mod tests {
     fn rejects_malformed_aggregate_report() {
         let mut value = approval();
         value.measurement.document_content_terms.samples -= 1;
-        assert!(matches!(value.validate(), Err(AppError::ValidationError(_))));
+        assert!(matches!(
+            value.validate(),
+            Err(AppError::ValidationError(_))
+        ));
 
         let mut value = approval();
         value.measurement.normalized_term_bytes.p95 =
             value.measurement.normalized_term_bytes.max + 1;
-        assert!(matches!(value.validate(), Err(AppError::ValidationError(_))));
+        assert!(matches!(
+            value.validate(),
+            Err(AppError::ValidationError(_))
+        ));
     }
 
     #[test]
@@ -386,6 +398,9 @@ mod tests {
 
         let mut value = approval();
         value.approval_id = "contains spaces".into();
-        assert!(matches!(value.validate(), Err(AppError::ValidationError(_))));
+        assert!(matches!(
+            value.validate(),
+            Err(AppError::ValidationError(_))
+        ));
     }
 }
