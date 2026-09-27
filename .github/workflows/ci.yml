@@ -41,10 +41,11 @@ jobs:
       - name: Configuration contract
         run: cargo test --locked --test config
 
-      - name: AWS KMS search contracts
+      - name: AWS KMS contracts
         run: |
           cargo test --locked --features aws-kms-search --test config
           cargo test --locked --features aws-kms-search --lib crypto_search_seed_aws_kms
+          cargo test --locked --features aws-kms-memo --lib crypto_keys_aws_kms
 
       - name: Check
         run: cargo check --locked

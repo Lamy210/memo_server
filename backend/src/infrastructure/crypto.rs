@@ -106,7 +106,8 @@ pub fn deserialize_high_memo_payload(
     Ok(memo)
 }
 
-// Staged until a production DataKeyProvider is configured and MEMO-HIGH-1 is deployed.
+// Staged until the production DataKeyProvider is deployment-configured,
+// request-path wiring is complete, and MEMO-HIGH-1 is deliberately deployed.
 #[allow(dead_code)]
 pub(super) struct RingHighMemoCryptography {
     data_keys: Arc<dyn DataKeyProvider>,

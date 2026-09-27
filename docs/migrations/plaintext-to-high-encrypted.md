@@ -8,9 +8,9 @@ This migration converts the current plaintext MongoDB authoritative memo records
 verified HIGH encrypted envelopes in the isolated `memos_encrypted_v1` collection.
 
 The encrypted collection remains **non-authoritative**. Request-path CRUD continues to
-use the current authoritative collection until the production key-wrapping provider,
-ciphertext-only cache, protected search projection, and encrypted-store cutover are
-implemented and reviewed.
+use the current authoritative collection until the staged AWS KMS key-wrapping provider is
+deployment-configured and request-path wired, ciphertext-only cache semantics are activated,
+the protected search projection is approved, and encrypted-store cutover is implemented and reviewed.
 
 ## Required preconditions for a final production pass
 
@@ -22,7 +22,7 @@ Before starting it:
 2. wait for in-flight mutations to finish,
 3. take and verify a backup of the plaintext authoritative store,
 4. keep the plaintext store unchanged until encrypted cutover verification completes,
-5. use a production-approved key-wrapping provider; the staged test provider is not acceptable.
+5. use the reviewed AWS KMS MEMO-HIGH-1 provider/configuration; test providers are not acceptable.
 
 This pipeline is **not** CDC or dual-write replication. Count checks reduce migration
 risk but do not make concurrent source writes safe.
@@ -117,8 +117,8 @@ lose post-cutover mutations.
 
 This runbook does not authorize production execution yet. The following remain blockers:
 
-- production key-wrapping/KMS provider,
-- deployment configuration and least-privilege KMS identity,
+- deployment configuration for the staged AWS KMS data-key provider,
+- least-privilege KMS identity and key-policy review,
 - a guarded migration command or operational job,
 - HIGH Valkey request-path wiring and retirement of the legacy plaintext cache contract,
 - a production language-aware analyzer and production search-key provider for the staged protected Manticore orchestration,

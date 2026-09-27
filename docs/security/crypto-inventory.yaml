@@ -49,7 +49,7 @@ assets:
         envelope_contract: implemented
         payload_codec: implemented
         aead_adapter: staged
-        key_wrapping_provider: not_configured
+        key_wrapping_provider: aws_kms_adapter_staged_not_runtime_wired
         runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto
@@ -79,9 +79,23 @@ assets:
       key_size_bits: 256
       reuse: forbidden
     current:
-      state: provider_boundary_staged
+      state: aws_kms_provider_staged
       plaintext_key_zeroizing: true
-      production_provider: not_implemented
+      production_provider: aws_kms_generate_data_key_staged
+      provider_feature: aws-kms-memo
+      key_spec: AES_256
+      wrapping_key_spec: SYMMETRIC_DEFAULT
+      wrapping_key_usage: ENCRYPT_DECRYPT
+      encryption_context: canonical_high_memo_aad_metadata_only
+      encryption_context_plaintext_logging_risk_documented: true
+      configured_key_versions_max: 32
+      active_key_version: application_owned_alias
+      historical_key_versions: retained_for_decrypt
+      provider_key_arn_persisted_in_envelope: false
+      wrapped_dek_max_bytes: 6144
+      plaintext_dek_zeroized_after_use: true
+      provider_preflight: DescribeKey_all_configured_versions
+      runtime_wired: false
       runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto
