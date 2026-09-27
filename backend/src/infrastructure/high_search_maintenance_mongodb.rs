@@ -653,7 +653,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a local MongoDB replica set"]
-    async fn mongodb_maintenance_barrier_drains_and_blocks_writers() {
+    async fn mongodb_maintenance_barrier_drains_and_blocks_writers_and_protected_queries() {
         let uri = std::env::var("MONGODB_TEST_URI")
             .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
         let client = Client::with_uri_str(&uri).await.unwrap();
@@ -664,6 +664,7 @@ mod tests {
             .await
             .unwrap();
         let first_writer = guard.acquire_mutation().await.unwrap();
+        let first_query = guard.acquire_query().await.unwrap();
 
         let maintenance_guard = guard.clone();
         let maintenance_task =
@@ -686,9 +687,18 @@ mod tests {
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
         ));
+        assert!(matches!(
+            guard.acquire_query().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
         assert!(!maintenance_task.is_finished());
 
         first_writer.release().await.unwrap();
+        assert!(
+            !maintenance_task.is_finished(),
+            "maintenance must also drain the protected query lease"
+        );
+        first_query.release().await.unwrap();
         let maintenance = maintenance_task.await.unwrap().unwrap();
         maintenance.assert_still_enforced().await.unwrap();
 
@@ -696,10 +706,16 @@ mod tests {
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
         ));
+        assert!(matches!(
+            guard.acquire_query().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
 
         maintenance.release().await.unwrap();
         let writer_after_release = guard.acquire_mutation().await.unwrap();
         writer_after_release.release().await.unwrap();
+        let query_after_release = guard.acquire_query().await.unwrap();
+        query_after_release.release().await.unwrap();
 
         database.drop().await.unwrap();
     }
@@ -718,14 +734,17 @@ mod tests {
             .unwrap();
         let recovery = MongoHighSearchMaintenanceRecovery::from_database(database.clone());
 
-        // Simulate a cancelled mutation: dropping without explicit release
-        // intentionally leaves a fail-closed writer lease behind.
+        // Simulate cancelled mutation/query work: dropping without explicit
+        // release intentionally leaves fail-closed activity leases behind.
         let abandoned_writer = guard.acquire_mutation().await.unwrap();
+        let abandoned_query = guard.acquire_query().await.unwrap();
         drop(abandoned_writer);
+        drop(abandoned_query);
 
         let open_snapshot = recovery.inspect().await.unwrap();
         assert_eq!(open_snapshot.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(open_snapshot.active_writer_leases(), 1);
+        assert_eq!(open_snapshot.active_query_leases(), 1);
 
         let mut stale_snapshot = open_snapshot.clone();
         stale_snapshot.writer_epoch -= 1;
@@ -733,11 +752,14 @@ mod tests {
             recovery.recover_stale_state(&stale_snapshot).await,
             Err(AppError::Conflict(_))
         ));
-        assert_eq!(recovery.inspect().await.unwrap().active_writer_leases(), 1);
+        let after_stale = recovery.inspect().await.unwrap();
+        assert_eq!(after_stale.active_writer_leases(), 1);
+        assert_eq!(after_stale.active_query_leases(), 1);
 
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(recovered.active_writer_leases(), 0);
+        assert_eq!(recovered.active_query_leases(), 0);
         assert_eq!(recovered.writer_epoch(), open_snapshot.writer_epoch() + 1);
 
         // Simulate cancellation while maintenance owns the barrier. The task
@@ -767,8 +789,13 @@ mod tests {
         );
         assert!(maintenance_snapshot.holder_token().is_some());
         assert_eq!(maintenance_snapshot.active_writer_leases(), 0);
+        assert_eq!(maintenance_snapshot.active_query_leases(), 0);
         assert!(matches!(
             guard.acquire_mutation().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert!(matches!(
+            guard.acquire_query().await,
             Err(AppError::ServiceUnavailable(_))
         ));
 
@@ -785,6 +812,8 @@ mod tests {
 
         let writer_after_recovery = guard.acquire_mutation().await.unwrap();
         writer_after_recovery.release().await.unwrap();
+        let query_after_recovery = guard.acquire_query().await.unwrap();
+        query_after_recovery.release().await.unwrap();
 
         database.drop().await.unwrap();
     }
