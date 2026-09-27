@@ -284,10 +284,7 @@ fn parse_high_memo_crypto_config(
 
             let active_key_version =
                 required_high_memo_setting(vars, "HIGH_MEMO_ACTIVE_KEY_VERSION")?;
-            validate_high_memo_key_version(
-                &active_key_version,
-                "HIGH_MEMO_ACTIVE_KEY_VERSION",
-            )?;
+            validate_high_memo_key_version(&active_key_version, "HIGH_MEMO_ACTIVE_KEY_VERSION")?;
 
             let raw_keys = required_high_memo_setting(vars, "HIGH_MEMO_AWS_KMS_KEYS_JSON")?;
             if raw_keys.len() > MAX_HIGH_MEMO_KMS_KEYS_JSON_BYTES {
@@ -307,19 +304,14 @@ fn parse_high_memo_crypto_config(
             if entries.is_empty() || entries.len() > MAX_HIGH_MEMO_KMS_KEY_VERSIONS {
                 return Err(ConfigError::InvalidHighMemoCryptoSetting(
                     "HIGH_MEMO_AWS_KMS_KEYS_JSON",
-                    format!(
-                        "must contain 1..={MAX_HIGH_MEMO_KMS_KEY_VERSIONS} key versions"
-                    ),
+                    format!("must contain 1..={MAX_HIGH_MEMO_KMS_KEY_VERSIONS} key versions"),
                 ));
             }
 
             let mut key_versions = BTreeMap::new();
             let mut unique_arns = HashSet::with_capacity(entries.len());
             for entry in entries {
-                validate_high_memo_key_version(
-                    &entry.key_version,
-                    "HIGH_MEMO_AWS_KMS_KEYS_JSON",
-                )?;
+                validate_high_memo_key_version(&entry.key_version, "HIGH_MEMO_AWS_KMS_KEYS_JSON")?;
                 validate_high_memo_kms_key_arn(&entry.key_arn, &region)?;
                 if key_versions
                     .insert(entry.key_version.clone(), entry.key_arn.clone())
@@ -369,10 +361,7 @@ fn required_high_memo_setting(
         .ok_or(ConfigError::MissingHighMemoCryptoSetting(name))
 }
 
-fn validate_high_memo_key_version(
-    value: &str,
-    setting: &'static str,
-) -> Result<(), ConfigError> {
+fn validate_high_memo_key_version(value: &str, setting: &'static str) -> Result<(), ConfigError> {
     let valid = !value.is_empty()
         && value.chars().count() <= MAX_HIGH_MEMO_KEY_VERSION_ID_CHARS
         && value
@@ -406,10 +395,7 @@ fn validate_high_memo_aws_region(region: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn validate_high_memo_kms_key_arn(
-    key_arn: &str,
-    expected_region: &str,
-) -> Result<(), ConfigError> {
+fn validate_high_memo_kms_key_arn(key_arn: &str, expected_region: &str) -> Result<(), ConfigError> {
     let parts: Vec<&str> = key_arn.splitn(6, ':').collect();
     let partition_valid = parts.get(1).is_some_and(|partition| {
         !partition.is_empty()
