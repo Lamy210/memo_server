@@ -113,7 +113,9 @@ impl MemoCache for HighMemoCiphertextCacheAdapter {
             ));
         }
 
-        self.encrypted_cache.set_envelope(&envelope, expiration).await
+        self.encrypted_cache
+            .set_envelope(&envelope, expiration)
+            .await
     }
 
     async fn delete_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
