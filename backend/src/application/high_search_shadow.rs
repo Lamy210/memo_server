@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::{
     application::{
-        crypto_search_orchestration::HighSearchQueryReader, maintenance::HighSearchQueryGuard,
+        crypto_search_orchestration::HighSearchQueryReader,
+        high_search_routing::HighSearchQueryRoute, maintenance::HighSearchQueryGuard,
     },
     error::{AppError, AppResult},
 };
@@ -32,6 +33,7 @@ pub struct HighSearchShadowStats {
     pub page_overlap_protected_only: u64,
     pub failures: u64,
     pub timeouts: u64,
+    pub dropped_route_change: u64,
     pub dropped_capacity: u64,
 }
 
@@ -48,6 +50,7 @@ struct HighSearchShadowCounters {
     page_overlap_protected_only: AtomicU64,
     failures: AtomicU64,
     timeouts: AtomicU64,
+    dropped_route_change: AtomicU64,
     dropped_capacity: AtomicU64,
 }
 
@@ -59,6 +62,7 @@ pub struct HighSearchShadowObservation<'a, I> {
     pub limit: usize,
     pub legacy_memo_ids: I,
     pub legacy_total: usize,
+    pub legacy_route_generation: i64,
 }
 
 pub struct HighSearchShadowObserver {
@@ -116,6 +120,7 @@ impl HighSearchShadowObserver {
             limit,
             legacy_memo_ids,
             legacy_total,
+            legacy_route_generation,
         } = observation;
         let reader = self.reader.clone();
         let query_guard = self.query_guard.clone();
@@ -134,42 +139,58 @@ impl HighSearchShadowObserver {
                     counters.failures.fetch_add(1, Ordering::Relaxed);
                 }
                 Ok(query_permit) => {
-                    let query_result = timeout(
-                        timeout_duration,
-                        reader.search_memo_ids(
-                            owner_partition,
-                            &query,
-                            tag.as_deref(),
-                            page,
-                            limit,
-                        ),
-                    )
-                    .await;
-                    let release_result = query_permit.release().await;
-
-                    match (query_result, release_result) {
-                        (_, Err(_)) => {
-                            // A missing/stuck read lease must remain visible as
-                            // a failed observation; maintenance recovery is
-                            // fail-closed and will see the persisted lease.
+                    let shadow_snapshot = query_permit.route_snapshot();
+                    if shadow_snapshot.route != HighSearchQueryRoute::Legacy
+                        || shadow_snapshot.generation != legacy_route_generation
+                    {
+                        if query_permit.release().await.is_err() {
                             counters.failures.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            // Do not compare a legacy result captured under one
+                            // route generation with protected results admitted
+                            // after a cutover/rollback.
+                            counters
+                                .dropped_route_change
+                                .fetch_add(1, Ordering::Relaxed);
                         }
-                        (Ok(Ok(result)), Ok(())) => {
-                            record_comparison(
-                                &counters,
-                                &legacy_memo_ids,
-                                legacy_total,
-                                &result.memo_ids,
-                                result.total,
+                    } else {
+                        let query_result = timeout(
+                            timeout_duration,
+                            reader.search_memo_ids(
+                                owner_partition,
+                                &query,
+                                tag.as_deref(),
                                 page,
                                 limit,
-                            );
-                        }
-                        (Ok(Err(_)), Ok(())) => {
-                            counters.failures.fetch_add(1, Ordering::Relaxed);
-                        }
-                        (Err(_), Ok(())) => {
-                            counters.timeouts.fetch_add(1, Ordering::Relaxed);
+                            ),
+                        )
+                        .await;
+                        let release_result = query_permit.release().await;
+
+                        match (query_result, release_result) {
+                            (_, Err(_)) => {
+                                // A missing/stuck read lease must remain visible as
+                                // a failed observation; maintenance recovery is
+                                // fail-closed and will see the persisted lease.
+                                counters.failures.fetch_add(1, Ordering::Relaxed);
+                            }
+                            (Ok(Ok(result)), Ok(())) => {
+                                record_comparison(
+                                    &counters,
+                                    &legacy_memo_ids,
+                                    legacy_total,
+                                    &result.memo_ids,
+                                    result.total,
+                                    page,
+                                    limit,
+                                );
+                            }
+                            (Ok(Err(_)), Ok(())) => {
+                                counters.failures.fetch_add(1, Ordering::Relaxed);
+                            }
+                            (Err(_), Ok(())) => {
+                                counters.timeouts.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                 }
@@ -183,7 +204,7 @@ impl HighSearchShadowObserver {
             if completed.is_multiple_of(METRICS_LOG_EVERY_COMPLETIONS) {
                 let stats = snapshot(&counters);
                 log::info!(
-                    "HIGH search shadow aggregate: completed={} total_matches={} total_mismatches={} complete_set_observations={} complete_set_matches={} complete_set_mismatches={} page_overlap_intersection={} page_overlap_legacy_only={} page_overlap_protected_only={} failures={} timeouts={} dropped_capacity={}",
+                    "HIGH search shadow aggregate: completed={} total_matches={} total_mismatches={} complete_set_observations={} complete_set_matches={} complete_set_mismatches={} page_overlap_intersection={} page_overlap_legacy_only={} page_overlap_protected_only={} failures={} timeouts={} dropped_route_change={} dropped_capacity={}",
                     stats.completed,
                     stats.total_matches,
                     stats.total_mismatches,
@@ -195,6 +216,7 @@ impl HighSearchShadowObserver {
                     stats.page_overlap_protected_only,
                     stats.failures,
                     stats.timeouts,
+                    stats.dropped_route_change,
                     stats.dropped_capacity
                 );
             }
@@ -269,6 +291,7 @@ fn snapshot(counters: &HighSearchShadowCounters) -> HighSearchShadowStats {
         page_overlap_protected_only: counters.page_overlap_protected_only.load(Ordering::Relaxed),
         failures: counters.failures.load(Ordering::Relaxed),
         timeouts: counters.timeouts.load(Ordering::Relaxed),
+        dropped_route_change: counters.dropped_route_change.load(Ordering::Relaxed),
         dropped_capacity: counters.dropped_capacity.load(Ordering::Relaxed),
     }
 }
@@ -427,6 +450,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: Vec::<Uuid>::new(),
             legacy_total: 0,
+            legacy_route_generation: 0,
         });
         wait_for_completion(&observer).await;
 
@@ -435,6 +459,50 @@ mod tests {
             vec!["query-acquire", "query-release"]
         );
         assert_eq!(observer.stats().total_matches, 1);
+        assert_eq!(observer.stats().failures, 0);
+    }
+
+    #[tokio::test]
+    async fn route_generation_change_drops_shadow_before_reader_call() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let reader = Arc::new(FakeReader {
+            result: Mutex::new(Some(Ok(HighSearchProjectionPage {
+                memo_ids: vec![Uuid::new_v4()],
+                total: 1,
+            }))),
+            block: None,
+        });
+        let reader_probe = reader.clone();
+        let observer = HighSearchShadowObserver::new(
+            reader,
+            Arc::new(FakeQueryGuard {
+                events: events.clone(),
+                reject: false,
+                fail_release: false,
+            }),
+            1,
+            Duration::from_millis(50),
+        )
+        .unwrap();
+
+        observer.observe(HighSearchShadowObservation {
+            query: "private query",
+            tag: None,
+            owner_partition: Uuid::new_v4(),
+            page: 1,
+            limit: 20,
+            legacy_memo_ids: Vec::<Uuid>::new(),
+            legacy_total: 0,
+            legacy_route_generation: 1,
+        });
+        wait_for_completion(&observer).await;
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["query-acquire", "query-release"]
+        );
+        assert!(reader_probe.result.lock().unwrap().is_some());
+        assert_eq!(observer.stats().dropped_route_change, 1);
         assert_eq!(observer.stats().failures, 0);
     }
 
@@ -469,6 +537,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: Vec::<Uuid>::new(),
             legacy_total: 0,
+            legacy_route_generation: 0,
         });
         wait_for_completion(&observer).await;
 
@@ -508,6 +577,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: Vec::<Uuid>::new(),
             legacy_total: 0,
+            legacy_route_generation: 0,
         });
         wait_for_completion(&observer).await;
 
@@ -539,6 +609,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: vec![memo_id],
             legacy_total: 1,
+            legacy_route_generation: 0,
         });
         wait_for_completion(&observer).await;
 
@@ -556,6 +627,7 @@ mod tests {
                 page_overlap_protected_only: 0,
                 failures: 0,
                 timeouts: 0,
+                dropped_route_change: 0,
                 dropped_capacity: 0,
             }
         );
@@ -583,6 +655,7 @@ mod tests {
             limit: 2,
             legacy_memo_ids: vec![shared, legacy_only],
             legacy_total: 8,
+            legacy_route_generation: 0,
         });
         wait_for_completion(&observer).await;
 
@@ -612,6 +685,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: Vec::<Uuid>::new(),
             legacy_total: 3,
+            legacy_route_generation: 0,
         });
         wait_for_completion(&observer).await;
 
@@ -629,6 +703,7 @@ mod tests {
                 page_overlap_protected_only: 0,
                 failures: 1,
                 timeouts: 0,
+                dropped_route_change: 0,
                 dropped_capacity: 0,
             }
         );
@@ -651,6 +726,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: Vec::<Uuid>::new(),
             legacy_total: 0,
+            legacy_route_generation: 0,
         });
         wait_for_completion(&observer).await;
 
@@ -667,6 +743,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: Vec::<Uuid>::new(),
             legacy_total: 0,
+            legacy_route_generation: 0,
         });
         assert_eq!(observer.stats().dropped_capacity, 0);
     }
@@ -688,6 +765,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: Vec::<Uuid>::new(),
             legacy_total: 0,
+            legacy_route_generation: 0,
         });
         observer.observe(HighSearchShadowObservation {
             query: "second",
@@ -697,6 +775,7 @@ mod tests {
             limit: 20,
             legacy_memo_ids: Vec::<Uuid>::new(),
             legacy_total: 0,
+            legacy_route_generation: 0,
         });
 
         assert_eq!(observer.stats().dropped_capacity, 1);

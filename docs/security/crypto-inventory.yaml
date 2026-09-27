@@ -183,7 +183,7 @@ assets:
             - term_count_distribution
             - max_normalized_term_bytes
           production_workload_distribution_validation: operator_manifest_gate_available
-        runtime_wired: false
+        runtime_wired: true_when_high_search_enabled
       runtime_configuration:
         mode_default: disabled
         explicit_enable_value: aws-kms
@@ -226,7 +226,7 @@ assets:
           - kms:GenerateMac
         cache_sweeper_lifetime: application_owned
         disabled_mode_aws_config_load: forbidden
-        request_path_wiring: false
+        request_path_wiring: atomic_route_snapshot_installed_default_legacy
       runtime_composition:
         stack_factory: staged
         managed_prf_client_injection: required_when_enabled
@@ -237,7 +237,7 @@ assets:
         derived_key_cache: bounded
         protected_projection: manticore
         startup_composed: true_when_explicitly_enabled
-        request_path_installed: false
+        request_path_installed: true_route_controlled_by_shared_state
       search_key_provider: boundary_staged
       owner_scoped_seed_provider: boundary_staged
       managed_prf_seed_adapter: staged
@@ -313,7 +313,13 @@ assets:
           route_change_scope: live_offline_window_permit_only
           route_change_cas: route_and_generation
           multi_replica_cutover_boundary: staged
-          user_visible_request_path_installed: false
+          user_visible_request_path_installed: true
+          route_selection_source: admitted_query_permit_snapshot_only
+          protected_route_activation_default: inactive_legacy
+          protected_route_operator_cutover_command: not_implemented
+          protected_route_missing_reader_behavior: fail_closed
+          protected_route_hydration: owner_scoped_authoritative_bulk_read
+          query_lease_release_failure_behavior: fail_closed
       long_lived_search_root_process_exposure: forbidden
       production_search_key_provider: not_implemented
       protected_projection:
@@ -352,7 +358,12 @@ assets:
         query_shadow_result_id_logging: forbidden
         query_shadow_capacity_behavior: drop_observation
         query_shadow_timeout_behavior: count_and_discard
-        query_request_path_installed: false
+        query_shadow_route_generation_binding: required
+        query_shadow_route_generation_change_behavior: drop_before_protected_reader
+        query_request_path_installed: true
+        query_request_path_default_route: legacy
+        query_request_path_protected_fallback_to_legacy: forbidden
+        query_request_path_shadow_on_protected_route: disabled
       legacy_plaintext_projection_active: true
       runtime_eligible: false
     migration_status: in_progress

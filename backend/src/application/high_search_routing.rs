@@ -44,9 +44,9 @@ pub struct HighSearchQueryRouteSnapshot {
 
 /// Read-only route visibility for operator/status surfaces.
 ///
-/// User-visible query handling must not make a route decision from this reader
-/// and then acquire a lease separately. The atomic request-path boundary is the
-/// route snapshot carried by `HighSearchQueryPermit`.
+/// User-visible query handling does not make a route decision from this reader
+/// and then acquire a lease separately. The request path routes exclusively
+/// from the atomic snapshot carried by `HighSearchQueryPermit`.
 #[async_trait]
 pub trait HighSearchQueryRouteReader: Send + Sync {
     async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot>;

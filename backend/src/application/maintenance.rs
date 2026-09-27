@@ -47,9 +47,9 @@ impl MemoMutationGuard for UnrestrictedMemoMutationGuard {
 /// Permit held while one HIGH-search-routed query is in flight.
 ///
 /// The permit carries the route snapshot read in the same admission transaction
-/// that registers the query lease. Future user-visible routing must use this
-/// snapshot rather than reading route state and acquiring a lease separately;
-/// this keeps maintenance cutover atomic across replicas.
+/// that registers the query lease. User-visible routing uses this snapshot
+/// rather than reading route state and acquiring a lease separately; this keeps
+/// maintenance cutover atomic across replicas.
 #[async_trait]
 pub trait HighSearchQueryPermit: Send + Sync {
     fn route_snapshot(&self) -> HighSearchQueryRouteSnapshot;

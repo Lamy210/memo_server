@@ -14,6 +14,7 @@ pub struct MemoSearchPage {
 pub trait MemoRepository: Send + Sync {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>>;
     async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>>;
+    async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>>;
     async fn save(&self, memo: &Memo) -> AppResult<()>;
     async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()>;
     async fn search(
