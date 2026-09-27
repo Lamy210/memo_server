@@ -9,7 +9,7 @@ use memo_app_backend::{
 
 const USAGE: &str = "usage:
   reindex_high_search_staged --plan --page-size <1..1000>
-  reindex_high_search_staged --apply --page-size <1..1000> --confirm-all-writers-guarded --confirm-request-path-inactive";
+  reindex_high_search_staged --apply --page-size <1..1000> --confirm-all-writers-guarded";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -48,7 +48,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if command.mode == Mode::Plan {
         println!(
-            "Plan only: no KMS, MongoDB, or Manticore network operation was started. Re-run with --apply and both safety confirmations."
+            "Plan only: no KMS, MongoDB, or Manticore network operation was started. Re-run with --apply and --confirm-all-writers-guarded; the shared query route is checked mechanically after maintenance drains activity."
         );
         return Ok(());
     }
@@ -71,7 +71,6 @@ fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error
     let mut mode = None;
     let mut page_size = None;
     let mut confirmed_writers_guarded = false;
-    let mut confirmed_request_path_inactive = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -93,10 +92,6 @@ fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error
                 confirmed_writers_guarded = true;
                 index += 1;
             }
-            "--confirm-request-path-inactive" => {
-                confirmed_request_path_inactive = true;
-                index += 1;
-            }
             _ => return Err(USAGE.into()),
         }
     }
@@ -104,13 +99,10 @@ fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error
     let mode = mode.ok_or(USAGE)?;
     let page_size = page_size.ok_or("--page-size is required")?;
 
-    if mode == Mode::Apply && (!confirmed_writers_guarded || !confirmed_request_path_inactive) {
-        return Err(
-            "apply requires --confirm-all-writers-guarded and --confirm-request-path-inactive"
-                .into(),
-        );
+    if mode == Mode::Apply && !confirmed_writers_guarded {
+        return Err("apply requires --confirm-all-writers-guarded".into());
     }
-    if mode == Mode::Plan && (confirmed_writers_guarded || confirmed_request_path_inactive) {
+    if mode == Mode::Plan && confirmed_writers_guarded {
         return Err("safety confirmation flags are only valid with --apply".into());
     }
 
@@ -162,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_requires_both_staging_safety_confirmations() {
+    fn apply_requires_writer_guard_confirmation_and_route_is_not_self_asserted() {
         let base = vec![
             "--apply".to_string(),
             "--page-size".to_string(),
@@ -172,7 +164,6 @@ mod tests {
 
         let mut complete = base;
         complete.push("--confirm-all-writers-guarded".to_string());
-        complete.push("--confirm-request-path-inactive".to_string());
 
         assert_eq!(
             parse_command(complete).unwrap(),
@@ -181,6 +172,14 @@ mod tests {
                 page_size: 250,
             }
         );
+        assert!(parse_command(vec![
+            "--apply".to_string(),
+            "--page-size".to_string(),
+            "250".to_string(),
+            "--confirm-all-writers-guarded".to_string(),
+            "--confirm-request-path-inactive".to_string(),
+        ])
+        .is_err());
     }
 
     #[test]
