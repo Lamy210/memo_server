@@ -367,16 +367,20 @@ impl MongoHighSearchMaintenanceGuard {
         }
     }
 
-    async fn acquire_writer_lease(&self) -> AppResult<MongoMemoMutationPermit> {
+    async fn acquire_activity_lease(
+        &self,
+        leases: Collection<Document>,
+        activity: &'static str,
+    ) -> AppResult<MongoMaintenanceActivityPermit> {
         let lease_id = Uuid::new_v4().to_string();
         let mut session = self
             .client
             .start_session()
             .await
-            .map_err(|error| maintenance_db_error("start writer lease session", error))?;
-        let context = WriterAcquireContext {
+            .map_err(|error| maintenance_db_error("start maintenance activity lease session", error))?;
+        let context = ActivityAcquireContext {
             state: self.state.clone(),
-            writers: self.writers.clone(),
+            leases: leases.clone(),
             lease_id: lease_id.clone(),
         };
 
@@ -385,9 +389,13 @@ impl MongoHighSearchMaintenanceGuard {
             .write_concern(WriteConcern::majority())
             .and_run(context, |session, context| {
                 async move {
-                    // Writer acquisition and maintenance acquisition both
-                    // write the singleton gate. MongoDB therefore resolves a
-                    // race before the writer lease transaction can commit.
+                    // Every admitted protected activity and maintenance
+                    // acquisition writes the singleton gate. MongoDB therefore
+                    // serializes their race before an activity lease commits.
+                    //
+                    // The persisted field keeps its historical `writer_epoch`
+                    // name for compatibility, but now acts as the maintenance
+                    // activity generation fence for writers and protected reads.
                     let gate = context
                         .state
                         .update_one(
@@ -402,7 +410,7 @@ impl MongoHighSearchMaintenanceGuard {
                     }
 
                     context
-                        .writers
+                        .leases
                         .insert_one(doc! { "_id": context.lease_id.clone() })
                         .session(&mut *session)
                         .await?;
@@ -413,17 +421,31 @@ impl MongoHighSearchMaintenanceGuard {
             .await;
 
         match result {
-            Ok(()) => Ok(MongoMemoMutationPermit {
-                writers: self.writers.clone(),
+            Ok(()) => Ok(MongoMaintenanceActivityPermit {
+                leases,
                 lease_id,
+                activity,
             }),
             Err(error) if error.get_custom::<MaintenanceActive>().is_some() => {
-                Err(AppError::ServiceUnavailable(
-                    "memo mutations are temporarily frozen by HIGH search maintenance".into(),
-                ))
+                Err(AppError::ServiceUnavailable(format!(
+                    "{activity} are temporarily frozen by HIGH search maintenance"
+                )))
             }
-            Err(error) => Err(maintenance_db_error("acquire memo writer lease", error)),
+            Err(error) => Err(maintenance_db_error(
+                "acquire HIGH search maintenance activity lease",
+                error,
+            )),
         }
+    }
+
+    async fn acquire_writer_lease(&self) -> AppResult<MongoMaintenanceActivityPermit> {
+        self.acquire_activity_lease(self.writers.clone(), "memo mutations")
+            .await
+    }
+
+    async fn acquire_query_lease(&self) -> AppResult<MongoMaintenanceActivityPermit> {
+        self.acquire_activity_lease(self.queries.clone(), "protected HIGH search queries")
+            .await
     }
 
     async fn acquire_maintenance_barrier(&self) -> AppResult<MongoHighSearchOfflineWindowPermit> {
@@ -487,29 +509,51 @@ impl MongoHighSearchMaintenanceGuard {
             .await
             .map_err(|error| maintenance_db_error("count active memo writer leases", error))
     }
-}
 
-struct MongoMemoMutationPermit {
-    writers: Collection<Document>,
-    lease_id: String,
-}
-
-#[async_trait]
-impl MemoMutationPermit for MongoMemoMutationPermit {
-    async fn release(self: Box<Self>) -> AppResult<()> {
-        let result = self
-            .writers
-            .delete_one(doc! { "_id": self.lease_id.clone() })
+    async fn active_query_count(&self) -> AppResult<u64> {
+        self.queries
+            .count_documents(doc! {})
             .await
-            .map_err(|error| maintenance_db_error("release memo writer lease", error))?;
+            .map_err(|error| maintenance_db_error("count active protected query leases", error))
+    }
+}
+
+struct MongoMaintenanceActivityPermit {
+    leases: Collection<Document>,
+    lease_id: String,
+    activity: &'static str,
+}
+
+impl MongoMaintenanceActivityPermit {
+    async fn release_lease(self) -> AppResult<()> {
+        let result = self
+            .leases
+            .delete_one(doc! { "_id": self.lease_id })
+            .await
+            .map_err(|error| maintenance_db_error("release maintenance activity lease", error))?;
 
         if result.deleted_count != 1 {
-            return Err(AppError::ServiceUnavailable(
-                "memo writer lease disappeared before release".into(),
-            ));
+            return Err(AppError::ServiceUnavailable(format!(
+                "{} lease disappeared before release",
+                self.activity
+            )));
         }
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl MemoMutationPermit for MongoMaintenanceActivityPermit {
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        (*self).release_lease().await
+    }
+}
+
+#[async_trait]
+impl HighSearchQueryPermit for MongoMaintenanceActivityPermit {
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        (*self).release_lease().await
     }
 }
 
@@ -576,13 +620,20 @@ impl MemoMutationGuard for MongoHighSearchMaintenanceGuard {
 }
 
 #[async_trait]
+impl HighSearchQueryGuard for MongoHighSearchMaintenanceGuard {
+    async fn acquire_query(&self) -> AppResult<Box<dyn HighSearchQueryPermit>> {
+        Ok(Box::new(self.acquire_query_lease().await?))
+    }
+}
+
+#[async_trait]
 impl HighSearchOfflineWindowGuard for MongoHighSearchMaintenanceGuard {
     async fn acquire_offline_window(&self) -> AppResult<Box<dyn HighSearchOfflineWindowPermit>> {
         let permit = self.acquire_maintenance_barrier().await?;
 
         loop {
             permit.assert_still_enforced().await?;
-            if self.active_writer_count().await? == 0 {
+            if self.active_writer_count().await? == 0 && self.active_query_count().await? == 0 {
                 return Ok(Box::new(permit));
             }
             sleep(DRAIN_POLL_INTERVAL).await;
