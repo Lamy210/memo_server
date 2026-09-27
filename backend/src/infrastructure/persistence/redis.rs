@@ -195,17 +195,13 @@ impl RedisCache {
                     ))
                 })?;
 
-            stats.scanned_candidates = stats
-                .scanned_candidates
-                .saturating_add(keys.len() as u64);
+            stats.scanned_candidates = stats.scanned_candidates.saturating_add(keys.len() as u64);
 
             let legacy_keys = keys
                 .into_iter()
                 .filter(|key| Self::parse_legacy_cache_key(key).is_some())
                 .collect::<Vec<_>>();
-            stats.legacy_keys = stats
-                .legacy_keys
-                .saturating_add(legacy_keys.len() as u64);
+            stats.legacy_keys = stats.legacy_keys.saturating_add(legacy_keys.len() as u64);
 
             if matches!(mode, LegacyMemoCacheSweepMode::Purge) && !legacy_keys.is_empty() {
                 let deleted: u64 = redis::cmd("UNLINK")
@@ -467,7 +463,11 @@ mod tests {
             "memo:not-a-uuid:not-a-uuid".to_string(),
             "other:namespace".to_string(),
         ] {
-            assert_eq!(RedisCache::parse_legacy_cache_key(&invalid), None, "{invalid}");
+            assert_eq!(
+                RedisCache::parse_legacy_cache_key(&invalid),
+                None,
+                "{invalid}"
+            );
         }
     }
 
