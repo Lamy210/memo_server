@@ -12,6 +12,13 @@ use the current authoritative collection until the staged AWS KMS key-wrapping p
 deployment-configured and request-path wired, ciphertext-only cache semantics are activated,
 the protected search projection is approved, and encrypted-store cutover is implemented and reviewed.
 
+The repository now also contains a staged encrypted-authoritative persistence port and
+`HighMemoAuthoritativeAdapter`. It can satisfy the existing domain store contract from
+`memos_encrypted_v1` while preserving owner scoping, optimistic version checks, ordered bulk
+hydration, and atomic projection intents. Because `updated_at` remains inside the encrypted
+payload, list ordering is performed after decryption rather than by adding plaintext sort metadata.
+This adapter is not startup-wired and does not make the staging collection authoritative.
+
 ## Required preconditions for a final production pass
 
 The final migration pass is an offline/frozen-write operation.
