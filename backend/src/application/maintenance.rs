@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 
-use crate::error::AppResult;
+use crate::{
+    application::high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
+    error::AppResult,
+};
 
 /// Permit held for the complete lifetime of one memo mutation.
 ///
@@ -41,17 +44,19 @@ impl MemoMutationGuard for UnrestrictedMemoMutationGuard {
     }
 }
 
-/// Permit held while one protected HIGH search query is in flight.
+/// Permit held while one HIGH-search-routed query is in flight.
 ///
-/// Protected reads participate in the same distributed maintenance barrier as
-/// memo writers so projection reset/reindex cannot race a query that is already
-/// reading the protected generation.
+/// The permit carries the route snapshot read in the same admission transaction
+/// that registers the query lease. Future user-visible routing must use this
+/// snapshot rather than reading route state and acquiring a lease separately;
+/// this keeps maintenance cutover atomic across replicas.
 #[async_trait]
 pub trait HighSearchQueryPermit: Send + Sync {
+    fn route_snapshot(&self) -> HighSearchQueryRouteSnapshot;
     async fn release(self: Box<Self>) -> AppResult<()>;
 }
 
-/// Application boundary that rejects new protected HIGH search queries while a
+/// Application boundary that rejects new HIGH-search-routed queries while a
 /// maintenance window is active and tracks admitted queries until release.
 #[async_trait]
 pub trait HighSearchQueryGuard: Send + Sync {
@@ -66,6 +71,13 @@ struct UnrestrictedHighSearchQueryPermit;
 
 #[async_trait]
 impl HighSearchQueryPermit for UnrestrictedHighSearchQueryPermit {
+    fn route_snapshot(&self) -> HighSearchQueryRouteSnapshot {
+        HighSearchQueryRouteSnapshot {
+            route: HighSearchQueryRoute::Legacy,
+            generation: 0,
+        }
+    }
+
     async fn release(self: Box<Self>) -> AppResult<()> {
         Ok(())
     }
