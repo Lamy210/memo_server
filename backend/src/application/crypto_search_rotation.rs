@@ -6,6 +6,9 @@ use crate::{
     application::{
         crypto_migration_batch::validate_page_size,
         crypto_search_reindex::{HighSearchReindexRunner, HighSearchReindexStats},
+        high_memo_routing::{
+            HighMemoAuthoritativeRoute, HighMemoAuthoritativeRouteSnapshot,
+        },
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
     },
     error::{AppError, AppResult},
@@ -25,6 +28,12 @@ pub trait HighSearchOfflineWindowPermit: Send + Sync {
         expected: HighSearchQueryRouteSnapshot,
         target: HighSearchQueryRoute,
     ) -> AppResult<HighSearchQueryRouteSnapshot>;
+    async fn current_memo_route(&self) -> AppResult<HighMemoAuthoritativeRouteSnapshot>;
+    async fn switch_memo_route(
+        &self,
+        expected: HighMemoAuthoritativeRouteSnapshot,
+        target: HighMemoAuthoritativeRoute,
+    ) -> AppResult<HighMemoAuthoritativeRouteSnapshot>;
     async fn release(self: Box<Self>) -> AppResult<()>;
 }
 
@@ -331,6 +340,24 @@ mod tests {
             target: HighSearchQueryRoute,
         ) -> AppResult<HighSearchQueryRouteSnapshot> {
             Ok(HighSearchQueryRouteSnapshot {
+                route: target,
+                generation: expected.generation + 1,
+            })
+        }
+
+        async fn current_memo_route(&self) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+            Ok(HighMemoAuthoritativeRouteSnapshot {
+                route: HighMemoAuthoritativeRoute::Plaintext,
+                generation: 0,
+            })
+        }
+
+        async fn switch_memo_route(
+            &self,
+            expected: HighMemoAuthoritativeRouteSnapshot,
+            target: HighMemoAuthoritativeRoute,
+        ) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+            Ok(HighMemoAuthoritativeRouteSnapshot {
                 route: target,
                 generation: expected.generation + 1,
             })
