@@ -1,6 +1,6 @@
 # Staged HIGH Search Reindex Validation Runbook
 
-Status: operator-only staging command. SEARCH-HIGH-1 request routing remains inactive.
+Status: operator-only staging command. Route-aware request handling is installed, but the shared route must remain `legacy` for this destructive rebuild.
 
 ## Purpose
 
@@ -21,7 +21,7 @@ memos_high_v1 in Manticore
 
 The command uses the same MongoDB maintenance barrier as memo mutations, background projection reconciliation, and protected HIGH shadow queries, clears the derived-key cache, resets the isolated `memos_high_v1` protected projection, performs a bounded full rebuild, verifies source/projection convergence, revalidates the maintenance permit, and explicitly releases it. The normal outbox/reconciler now mirrors HIGH projection mutations when the runtime is enabled; the explicit reset remains part of staged full-rebuild validation so the operator starts from a known empty protected generation while the shared barrier excludes foreground and background writers.
 
-It does **not** install SEARCH-HIGH-1 into the HTTP request path and does not perform a production routing cutover.
+It does **not** switch the shared query route. The HTTP request path may be route-aware, but this command requires the drained route to be `legacy` and leaves it unchanged.
 
 ## Preconditions
 
@@ -92,4 +92,4 @@ The maintenance barrier is released only after reindex convergence and permit re
 
 ## Non-goals
 
-This staging command does not establish that SEARCH-HIGH-1 is ready for user traffic. Analyzer corpus approval, encrypted authoritative-store request-path integration, protected-search request routing, rollback rehearsal, and other remaining migration gates still apply.
+This staging command does not establish that SEARCH-HIGH-1 is ready for protected user traffic. Production workload approval, deployment/KMS review, a guarded shared-route cutover procedure, rollback rehearsal, and other remaining migration gates still apply.
