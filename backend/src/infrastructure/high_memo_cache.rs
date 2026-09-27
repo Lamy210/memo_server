@@ -113,9 +113,7 @@ impl MemoCache for HighMemoCiphertextCacheAdapter {
             ));
         }
 
-        self.encrypted_cache
-            .set_envelope(&envelope, Some(expiration))
-            .await
+        self.encrypted_cache.set_envelope(&envelope, expiration).await
     }
 
     async fn delete_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
@@ -147,7 +145,7 @@ mod tests {
     struct FakeEncryptedCache {
         envelope: Mutex<Option<HighEncryptedMemoEnvelope>>,
         deletes: Mutex<Vec<(Uuid, Uuid)>>,
-        expirations: Mutex<Vec<Option<Duration>>>,
+        expirations: Mutex<Vec<Duration>>,
     }
 
     #[async_trait]
@@ -163,7 +161,7 @@ mod tests {
         async fn set_envelope(
             &self,
             envelope: &HighEncryptedMemoEnvelope,
-            expiration: Option<Duration>,
+            expiration: Duration,
         ) -> AppResult<()> {
             *self.envelope.lock().unwrap() = Some(envelope.clone());
             self.expirations.lock().unwrap().push(expiration);
@@ -270,7 +268,7 @@ mod tests {
         assert_eq!(stored.owner_partition, memo.user_id);
         assert_eq!(
             cache.expirations.lock().unwrap().as_slice(),
-            &[Some(Duration::from_secs(3600))]
+            &[Duration::from_secs(3600)]
         );
 
         assert!(adapter.set_memo(&memo, None).await.is_err());
