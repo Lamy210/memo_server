@@ -1,5 +1,6 @@
-// This module is a staged infrastructure boundary. It becomes runtime-reachable
-// only after a production key-wrapping provider is configured.
+// This module is a staged infrastructure boundary. An AWS KMS provider adapter
+// exists behind `aws-kms-memo`, but the memo request path remains deliberately
+// disconnected until deployment configuration and encrypted-store cutover are ready.
 #![allow(dead_code)]
 
 use std::{collections::BTreeMap, fmt};
