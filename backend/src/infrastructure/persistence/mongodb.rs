@@ -1193,9 +1193,7 @@ mod tests {
             Err(AppError::Conflict(_))
         ));
 
-        HighEncryptedMemoStagingAdmin::reset_staging(&store)
-            .await
-            .unwrap();
+        store.reset_staging().await.unwrap();
         assert_eq!(
             store
                 .count_staged_encrypted_memos_for_migration()
