@@ -33,7 +33,8 @@ struct WorkloadQuery {
     tag: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistributionSummary {
     pub samples: usize,
     pub min: usize,
@@ -42,7 +43,8 @@ pub struct DistributionSummary {
     pub max: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HighSearchWorkloadReport {
     pub analysis_version: String,
     pub documents: usize,
