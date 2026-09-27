@@ -34,6 +34,8 @@ pub struct HighSearchCutoverApproval {
     pub rotation_reindex_rehearsed: bool,
     pub rollback_rehearsed: bool,
     pub security_migration_gates_reviewed: bool,
+    pub all_replicas_route_aware_and_barrier_participating: bool,
+    pub all_replicas_runtime_config_reviewed: bool,
 }
 
 impl HighSearchCutoverApproval {
@@ -59,6 +61,14 @@ impl HighSearchCutoverApproval {
             (
                 "security_migration_gates_reviewed",
                 self.security_migration_gates_reviewed,
+            ),
+            (
+                "all_replicas_route_aware_and_barrier_participating",
+                self.all_replicas_route_aware_and_barrier_participating,
+            ),
+            (
+                "all_replicas_runtime_config_reviewed",
+                self.all_replicas_runtime_config_reviewed,
             ),
         ];
         if let Some((name, _)) = required_attestations
@@ -252,6 +262,8 @@ mod tests {
             rotation_reindex_rehearsed: true,
             rollback_rehearsed: true,
             security_migration_gates_reviewed: true,
+            all_replicas_route_aware_and_barrier_participating: true,
+            all_replicas_runtime_config_reviewed: true,
         }
     }
 
@@ -280,6 +292,13 @@ mod tests {
 
         let mut value = approval();
         value.security_migration_gates_reviewed = false;
+        assert!(matches!(
+            value.validate(),
+            Err(AppError::ValidationError(_))
+        ));
+
+        let mut value = approval();
+        value.all_replicas_route_aware_and_barrier_participating = false;
         assert!(matches!(
             value.validate(),
             Err(AppError::ValidationError(_))
