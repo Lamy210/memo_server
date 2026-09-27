@@ -33,8 +33,9 @@ Before `--apply`:
 4. Set `HIGH_SEARCH_MODE=aws-kms` and all required HIGH search cache/analysis settings.
 5. Build the command with the `aws-kms-search` feature.
 6. Ensure the AWS identity has the documented `kms:DescribeKey` and `kms:GenerateMac` permissions for the pinned HMAC_384 key.
-7. Confirm protected HIGH search request routing is still inactive.
-8. Have the maintenance recovery runbook available in case the operator process is cancelled after closing the barrier.
+7. Have the maintenance recovery runbook available in case the operator process is cancelled after closing the barrier.
+
+The command no longer accepts a self-asserted "request path inactive" flag. After the maintenance barrier has drained all writer/query leases, it reads the shared query-route snapshot from the live permit and requires `route=legacy` before the protected projection reset can begin.
 
 The command intentionally does not accept a claim that mixed old/new application replicas are safe. If any running writer can bypass the shared barrier, do not run the reindex.
 
@@ -58,8 +59,7 @@ cargo run --locked --features aws-kms-search \
   --bin reindex_high_search_staged -- \
   --apply \
   --page-size 250 \
-  --confirm-all-writers-guarded \
-  --confirm-request-path-inactive
+  --confirm-all-writers-guarded
 ```
 
 The page size must be within the repository migration bound (1..=1000).
@@ -79,8 +79,9 @@ The maintenance barrier is released only after reindex convergence and permit re
 
 - Invalid page size or disabled/incompatible configuration fails before provider/database work.
 - Failure to acquire the maintenance barrier prevents projection reset or reindex from starting.
-- Projection reset occurs only after the barrier is held and only while protected request routing is operator-confirmed inactive.
-- If reset succeeds but rebuild later fails, the protected projection may be incomplete; request routing remains inactive and the command must be rerun after resolving the failure.
+- Projection reset occurs only after the barrier is held, all writer/query leases have drained, and the shared query route is mechanically verified as `legacy`.
+- If the shared route is `protected`, the operation fails before cache clear, projection reset, or reindex. Roll back the route through the guarded cutover procedure before attempting a destructive staged rebuild.
+- If reset succeeds but rebuild later fails, the protected projection may be incomplete; the route remains `legacy` and the command must be rerun after resolving the failure.
 - New memo mutations are rejected while the barrier is closed.
 - Existing mutation/reconciliation writer leases and protected-query leases must drain before reindex begins.
 - New protected HIGH shadow queries are rejected while the barrier is closed, so reset/rebuild cannot race an in-flight protected read.
