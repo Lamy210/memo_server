@@ -17,7 +17,7 @@ The repository now also contains a staged encrypted-authoritative persistence po
 `memos_encrypted_v1` while preserving owner scoping, optimistic version checks, ordered bulk
 hydration, and atomic projection intents. Because `updated_at` remains inside the encrypted
 payload, list ordering is performed after decryption rather than by adding plaintext sort metadata.
-This adapter is not startup-wired and does not make the staging collection authoritative.
+This adapter is not startup-wired and does not make the staging collection authoritative. A shared MongoDB authoritative-route state now defaults to `plaintext`; mutating writer permits capture that route+generation atomically with lease admission, and a future request-path router must use that permit snapshot for writes.
 
 ## Required preconditions for a final production pass
 
@@ -75,15 +75,14 @@ Apply mode performs these steps in order:
 3. acquire the shared MongoDB maintenance/offline-window permit,
 4. drain foreground memo writers, background reconciliation, and admitted HIGH-search queries,
 5. revalidate the maintenance permit,
-6. delete all documents from the isolated, non-authoritative `memos_encrypted_v1` staging collection,
-7. revalidate the permit,
-8. perform the full bounded migration and decrypt/compare verification passes,
-9. revalidate the permit again,
-10. explicitly release maintenance.
+6. read the shared memo authoritative route and require `plaintext`,
+7. delete all documents from the isolated, non-authoritative `memos_encrypted_v1` staging collection,
+8. revalidate the permit,
+9. perform the full bounded migration and decrypt/compare verification passes,
+10. revalidate the permit again,
+11. explicitly release maintenance.
 
-Resetting the staging collection is intentional. It removes stale envelopes for source memos
-deleted since a prior rehearsal and makes each frozen final pass a complete rebuild from the
-authoritative plaintext source. The plaintext `memos` collection is never deleted or rewritten
+Resetting the staging collection is intentional only while the shared memo route remains `plaintext`. It removes stale envelopes for source memos deleted since a prior rehearsal and makes each frozen final pass a complete rebuild from the authoritative plaintext source. Once the route is switched to `encrypted`, the same operator fails before reset so it cannot erase authoritative data. The plaintext `memos` collection is never deleted or rewritten
 by this operator.
 
 If migration fails after staging reset, the operator releases maintenance when possible and
@@ -186,7 +185,8 @@ This runbook does not authorize production execution yet. The following remain b
 - an operator-reviewed execution/rehearsal of the guarded `migrate_high_memo_staged` command,
 - HIGH Valkey request-path wiring and retirement of the legacy plaintext cache contract,
 - production approval/cutover of the already-staged protected search path,
-- encrypted authoritative-store request-path integration,
+- route-aware encrypted authoritative-store request-path integration,
+- an operator cutover/rollback flow that switches the shared memo route generation while maintenance is held,
 - final encrypted-store cutover/rollback rehearsal.
 
 The ciphertext-only Valkey adapter is implemented but deliberately not wired into normal CRUD yet. `MEMO-HIGH-1` remains runtime-ineligible until the remaining dependencies are implemented and its inventory status is deliberately changed to DEPLOYED.
