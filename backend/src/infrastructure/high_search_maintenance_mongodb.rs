@@ -480,11 +480,9 @@ impl MongoHighSearchMaintenanceGuard {
                     "{activity} are temporarily frozen by HIGH search maintenance"
                 )))
             }
-            Err(error) if error.get_custom::<InvalidQueryRouteState>().is_some() => {
-                Err(AppError::ServiceUnavailable(
-                    "HIGH search query route state is invalid".into(),
-                ))
-            }
+            Err(error) if error.get_custom::<InvalidQueryRouteState>().is_some() => Err(
+                AppError::ServiceUnavailable("HIGH search query route state is invalid".into()),
+            ),
             Err(error) => Err(maintenance_db_error(
                 "acquire HIGH search maintenance activity lease",
                 error,
