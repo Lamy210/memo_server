@@ -121,9 +121,13 @@ impl MemoCache for HighMemoCiphertextCacheAdapter {
     }
 
     async fn memo_exists(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<bool> {
-        self.encrypted_cache
-            .envelope_exists(owner_partition, memo_id)
-            .await
+        // HIGH cache existence is an integrity-sensitive read. A raw Redis key
+        // is not sufficient evidence because the envelope may be corrupt,
+        // cross-identity, or undecryptable under the active key ring.
+        Ok(self
+            .get_memo(owner_partition, memo_id)
+            .await?
+            .is_some())
     }
 }
 
@@ -314,6 +318,22 @@ mod tests {
             cache.deletes.lock().unwrap().as_slice(),
             &[(memo.user_id, memo.id)]
         );
+        assert!(cache.envelope.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn existence_requires_a_valid_decryptable_envelope() {
+        let cache = Arc::new(FakeEncryptedCache::default());
+        let memo = memo();
+        let good = adapter(cache.clone(), false, false);
+        good.set_memo(&memo, Some(Duration::from_secs(60)))
+            .await
+            .unwrap();
+
+        assert!(good.memo_exists(memo.user_id, memo.id).await.unwrap());
+
+        let broken = adapter(cache.clone(), true, false);
+        assert!(broken.memo_exists(memo.user_id, memo.id).await.is_err());
         assert!(cache.envelope.lock().unwrap().is_none());
     }
 
