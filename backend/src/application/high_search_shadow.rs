@@ -298,11 +298,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shadow_records_total_match_without_exposing_request_data() {
+    async fn shadow_records_complete_set_match_without_exposing_request_data() {
+        let memo_id = Uuid::new_v4();
         let reader = Arc::new(FakeReader {
             result: Mutex::new(Some(Ok(HighSearchProjectionPage {
-                memo_ids: vec![Uuid::new_v4()],
-                total: 7,
+                memo_ids: vec![memo_id],
+                total: 1,
             }))),
             block: None,
         });
@@ -314,7 +315,8 @@ mod tests {
             Uuid::new_v4(),
             1,
             20,
-            7,
+            vec![memo_id],
+            1,
         );
         wait_for_completion(&observer).await;
 
@@ -324,11 +326,50 @@ mod tests {
                 completed: 1,
                 total_matches: 1,
                 total_mismatches: 0,
+                complete_set_observations: 1,
+                complete_set_matches: 1,
+                complete_set_mismatches: 0,
+                page_overlap_intersection: 1,
+                page_overlap_legacy_only: 0,
+                page_overlap_protected_only: 0,
                 failures: 0,
                 timeouts: 0,
                 dropped_capacity: 0,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn shadow_records_page_overlap_without_logging_or_persisting_ids() {
+        let shared = Uuid::new_v4();
+        let legacy_only = Uuid::new_v4();
+        let protected_only = Uuid::new_v4();
+        let reader = Arc::new(FakeReader {
+            result: Mutex::new(Some(Ok(HighSearchProjectionPage {
+                memo_ids: vec![shared, protected_only],
+                total: 9,
+            }))),
+            block: None,
+        });
+        let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
+
+        observer.observe(
+            "private query",
+            None,
+            Uuid::new_v4(),
+            2,
+            2,
+            vec![shared, legacy_only],
+            8,
+        );
+        wait_for_completion(&observer).await;
+
+        let stats = observer.stats();
+        assert_eq!(stats.total_mismatches, 1);
+        assert_eq!(stats.complete_set_observations, 0);
+        assert_eq!(stats.page_overlap_intersection, 1);
+        assert_eq!(stats.page_overlap_legacy_only, 1);
+        assert_eq!(stats.page_overlap_protected_only, 1);
     }
 
     #[tokio::test]
@@ -341,7 +382,15 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(50)).unwrap();
 
-        observer.observe("private query", None, Uuid::new_v4(), 1, 20, 3);
+        observer.observe(
+            "private query",
+            None,
+            Uuid::new_v4(),
+            1,
+            20,
+            Vec::<Uuid>::new(),
+            3,
+        );
         wait_for_completion(&observer).await;
 
         assert_eq!(
@@ -350,6 +399,12 @@ mod tests {
                 completed: 1,
                 total_matches: 0,
                 total_mismatches: 0,
+                complete_set_observations: 0,
+                complete_set_matches: 0,
+                complete_set_mismatches: 0,
+                page_overlap_intersection: 0,
+                page_overlap_legacy_only: 0,
+                page_overlap_protected_only: 0,
                 failures: 1,
                 timeouts: 0,
                 dropped_capacity: 0,
@@ -366,7 +421,15 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_millis(1)).unwrap();
 
-        observer.observe("private query", None, Uuid::new_v4(), 1, 20, 0);
+        observer.observe(
+            "private query",
+            None,
+            Uuid::new_v4(),
+            1,
+            20,
+            Vec::<Uuid>::new(),
+            0,
+        );
         wait_for_completion(&observer).await;
 
         assert_eq!(observer.stats().timeouts, 1);
@@ -374,7 +437,15 @@ mod tests {
 
         // The timed-out task has dropped its owned semaphore permit, so the
         // next observation can be admitted rather than being permanently stuck.
-        observer.observe("next query", None, Uuid::new_v4(), 1, 20, 0);
+        observer.observe(
+            "next query",
+            None,
+            Uuid::new_v4(),
+            1,
+            20,
+            Vec::<Uuid>::new(),
+            0,
+        );
         assert_eq!(observer.stats().dropped_capacity, 0);
     }
 
@@ -387,8 +458,24 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_secs(1)).unwrap();
 
-        observer.observe("first", None, Uuid::new_v4(), 1, 20, 0);
-        observer.observe("second", None, Uuid::new_v4(), 1, 20, 0);
+        observer.observe(
+            "first",
+            None,
+            Uuid::new_v4(),
+            1,
+            20,
+            Vec::<Uuid>::new(),
+            0,
+        );
+        observer.observe(
+            "second",
+            None,
+            Uuid::new_v4(),
+            1,
+            20,
+            Vec::<Uuid>::new(),
+            0,
+        );
 
         assert_eq!(observer.stats().dropped_capacity, 1);
         block.notify_one();
