@@ -325,7 +325,7 @@ fn ambiguous_switch_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AuthConfig, HighSearchShadowConfig};
+    use crate::config::{AuthConfig, HighMemoCryptoConfig, HighSearchShadowConfig};
 
     fn disabled_config() -> AppConfig {
         AppConfig {
@@ -335,6 +335,7 @@ mod tests {
             redis_uri: "redis://unused".into(),
             search_backend: SearchBackend::Manticore,
             search_uri: "not-a-manticore-uri".into(),
+            high_memo_crypto: HighMemoCryptoConfig::Disabled,
             high_search: HighSearchConfig::Disabled,
             high_search_shadow: HighSearchShadowConfig::Disabled,
             port: 8080,
