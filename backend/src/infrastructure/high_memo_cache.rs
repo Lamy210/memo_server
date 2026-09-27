@@ -1,3 +1,7 @@
+// Staged cache composition boundary. This adapter is intentionally not
+// request-path reachable until the guarded cache-mode cutover is implemented.
+#![allow(dead_code)]
+
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
