@@ -12,8 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     application::{
-        crypto_search_orchestration::HighSearchQueryReader,
-        maintenance::HighSearchQueryGuard,
+        crypto_search_orchestration::HighSearchQueryReader, maintenance::HighSearchQueryGuard,
     },
     error::{AppError, AppResult},
 };
@@ -385,9 +384,7 @@ mod tests {
             block: None,
         });
 
-        assert!(
-            observer(reader.clone(), 0, Duration::from_millis(10)).is_err()
-        );
+        assert!(observer(reader.clone(), 0, Duration::from_millis(10)).is_err());
         assert!(observer(reader, 1, Duration::ZERO).is_err());
     }
 
@@ -424,7 +421,10 @@ mod tests {
         });
         wait_for_completion(&observer).await;
 
-        assert_eq!(*events.lock().unwrap(), vec!["query-acquire", "query-release"]);
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["query-acquire", "query-release"]
+        );
         assert_eq!(observer.stats().total_matches, 1);
         assert_eq!(observer.stats().failures, 0);
     }
@@ -502,7 +502,10 @@ mod tests {
         });
         wait_for_completion(&observer).await;
 
-        assert_eq!(*events.lock().unwrap(), vec!["query-acquire", "query-release"]);
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["query-acquire", "query-release"]
+        );
         assert_eq!(observer.stats().failures, 1);
         assert_eq!(observer.stats().total_matches, 0);
     }
