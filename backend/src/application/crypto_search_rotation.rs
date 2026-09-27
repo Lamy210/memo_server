@@ -6,6 +6,7 @@ use crate::{
     application::{
         crypto_migration_batch::validate_page_size,
         crypto_search_reindex::{HighSearchReindexRunner, HighSearchReindexStats},
+        high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
     },
     error::{AppError, AppResult},
 };
@@ -18,6 +19,12 @@ use crate::{
 #[async_trait]
 pub trait HighSearchOfflineWindowPermit: Send + Sync {
     async fn assert_still_enforced(&self) -> AppResult<()>;
+    async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot>;
+    async fn switch_query_route(
+        &self,
+        expected: HighSearchQueryRouteSnapshot,
+        target: HighSearchQueryRoute,
+    ) -> AppResult<HighSearchQueryRouteSnapshot>;
     async fn release(self: Box<Self>) -> AppResult<()>;
 }
 
@@ -219,6 +226,24 @@ mod tests {
                 ));
             }
             Ok(())
+        }
+
+        async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Ok(HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            })
+        }
+
+        async fn switch_query_route(
+            &self,
+            expected: HighSearchQueryRouteSnapshot,
+            target: HighSearchQueryRoute,
+        ) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Ok(HighSearchQueryRouteSnapshot {
+                route: target,
+                generation: expected.generation + 1,
+            })
         }
 
         async fn release(self: Box<Self>) -> AppResult<()> {
