@@ -13,10 +13,7 @@ use crate::{
 };
 
 #[cfg(feature = "aws-kms-memo")]
-use super::{
-    crypto::RingHighMemoCryptography,
-    crypto_keys_aws_kms::AwsKmsDataKeyProvider,
-};
+use super::{crypto::RingHighMemoCryptography, crypto_keys_aws_kms::AwsKmsDataKeyProvider};
 
 pub(crate) struct HighMemoStagingRuntimeHandle {
     cryptography: Option<Arc<dyn HighMemoStagingCryptography>>,
