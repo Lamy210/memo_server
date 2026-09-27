@@ -10,6 +10,7 @@ use crate::{
             PlaintextMemoMigrationSource,
         },
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
+        high_memo_routing::{HighMemoAuthoritativeRoute, HighMemoAuthoritativeRouteSnapshot},
     },
     config::{AppConfig, AuthoritativeBackend, HighMemoCryptoConfig},
     error::{AppError, AppResult},
@@ -98,10 +99,18 @@ async fn run_under_permit(
     permit: &dyn HighSearchOfflineWindowPermit,
 ) -> AppResult<HighMemoBatchMigrationStats> {
     permit.assert_still_enforced().await?;
+    let memo_route = permit.current_memo_route().await?;
+    if memo_route.route != HighMemoAuthoritativeRoute::Plaintext {
+        return Err(AppError::Conflict(format!(
+            "MEMO-HIGH-1 staging reset requires plaintext authoritative routing; observed {} generation {}",
+            memo_route.route, memo_route.generation
+        )));
+    }
 
-    // The target collection is isolated and non-authoritative. Resetting it
-    // before a full frozen-source rebuild guarantees that memos deleted since a
-    // prior staging run cannot survive as stale encrypted envelopes.
+    // The target collection is reset only while plaintext storage remains
+    // authoritative. Once the shared route is encrypted this destructive
+    // staging operation is permanently blocked by the same maintenance state
+    // used for future cutover.
     staging_admin.reset_staging().await?;
 
     permit.assert_still_enforced().await?;
@@ -183,6 +192,21 @@ mod tests {
             _expected: HighSearchQueryRouteSnapshot,
             _target: HighSearchQueryRoute,
         ) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Err(AppError::Conflict("not used by memo migration".into()))
+        }
+
+        async fn current_memo_route(&self) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+            Ok(HighMemoAuthoritativeRouteSnapshot {
+                route: HighMemoAuthoritativeRoute::Plaintext,
+                generation: 0,
+            })
+        }
+
+        async fn switch_memo_route(
+            &self,
+            _expected: HighMemoAuthoritativeRouteSnapshot,
+            _target: HighMemoAuthoritativeRoute,
+        ) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
             Err(AppError::Conflict("not used by memo migration".into()))
         }
 
@@ -351,6 +375,79 @@ mod tests {
             .iter()
             .all(|envelope| envelope.memo_id != Uuid::from_u128(99)));
         assert_eq!(permit.checks.load(Ordering::Relaxed), 3);
+    }
+
+    struct EncryptedRoutePermit {
+        checks: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl HighSearchOfflineWindowPermit for EncryptedRoutePermit {
+        async fn assert_still_enforced(&self) -> AppResult<()> {
+            self.checks.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Ok(HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            })
+        }
+
+        async fn switch_query_route(
+            &self,
+            _expected: HighSearchQueryRouteSnapshot,
+            _target: HighSearchQueryRoute,
+        ) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Err(AppError::Conflict("not used".into()))
+        }
+
+        async fn current_memo_route(&self) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+            Ok(HighMemoAuthoritativeRouteSnapshot {
+                route: HighMemoAuthoritativeRoute::Encrypted,
+                generation: 3,
+            })
+        }
+
+        async fn switch_memo_route(
+            &self,
+            _expected: HighMemoAuthoritativeRouteSnapshot,
+            _target: HighMemoAuthoritativeRoute,
+        ) -> AppResult<HighMemoAuthoritativeRouteSnapshot> {
+            Err(AppError::Conflict("not used".into()))
+        }
+
+        async fn release(self: Box<Self>) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn encrypted_authoritative_route_blocks_destructive_staging_reset() {
+        let store = Arc::new(FakeStore {
+            source: Mutex::new(vec![memo(1)]),
+            staged: Mutex::new(Vec::new()),
+            resets: AtomicUsize::new(0),
+        });
+        let permit = EncryptedRoutePermit {
+            checks: AtomicUsize::new(0),
+        };
+
+        assert!(matches!(
+            run_under_permit(
+                store.clone(),
+                store.clone(),
+                store.clone(),
+                Arc::new(FakeCrypto),
+                100,
+                &permit,
+            )
+            .await,
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(store.resets.load(Ordering::Relaxed), 0);
+        assert_eq!(permit.checks.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
