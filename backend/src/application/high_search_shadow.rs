@@ -91,8 +91,7 @@ impl HighSearchShadowObserver {
         limit: usize,
         legacy_memo_ids: I,
         legacy_total: usize,
-    )
-    where
+    ) where
         I: IntoIterator<Item = Uuid>,
     {
         let Ok(permit) = self.permits.clone().try_acquire_owned() else {
@@ -197,12 +196,9 @@ fn record_comparison(
         .page_overlap_protected_only
         .fetch_add(protected_only as u64, Ordering::Relaxed);
 
-    let complete_legacy = page == 1
-        && legacy_total <= limit
-        && legacy_set.len() == legacy_total;
-    let complete_protected = page == 1
-        && protected_total <= limit
-        && protected_set.len() == protected_total;
+    let complete_legacy = page == 1 && legacy_total <= limit && legacy_set.len() == legacy_total;
+    let complete_protected =
+        page == 1 && protected_total <= limit && protected_set.len() == protected_total;
     if complete_legacy && complete_protected {
         counters
             .complete_set_observations
@@ -458,24 +454,8 @@ mod tests {
         });
         let observer = HighSearchShadowObserver::new(reader, 1, Duration::from_secs(1)).unwrap();
 
-        observer.observe(
-            "first",
-            None,
-            Uuid::new_v4(),
-            1,
-            20,
-            Vec::<Uuid>::new(),
-            0,
-        );
-        observer.observe(
-            "second",
-            None,
-            Uuid::new_v4(),
-            1,
-            20,
-            Vec::<Uuid>::new(),
-            0,
-        );
+        observer.observe("first", None, Uuid::new_v4(), 1, 20, Vec::<Uuid>::new(), 0);
+        observer.observe("second", None, Uuid::new_v4(), 1, 20, Vec::<Uuid>::new(), 0);
 
         assert_eq!(observer.stats().dropped_capacity, 1);
         block.notify_one();
