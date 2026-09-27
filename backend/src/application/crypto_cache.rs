@@ -20,7 +20,7 @@ pub trait HighEncryptedMemoCache: Send + Sync {
     async fn set_envelope(
         &self,
         envelope: &HighEncryptedMemoEnvelope,
-        expiration: Option<Duration>,
+        expiration: Duration,
     ) -> AppResult<()>;
 
     async fn delete_envelope(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()>;
