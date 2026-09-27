@@ -139,7 +139,7 @@ impl RedisCache {
     }
 
     fn parse_legacy_cache_key(key: &str) -> Option<(uuid::Uuid, uuid::Uuid)> {
-        let suffix = key.strip_prefix("memo:")?;
+        let suffix = key.strip_prefix(LEGACY_CACHE_NAMESPACE)?.strip_prefix(':')?;
         let mut parts = suffix.split(':');
         let owner_partition = uuid::Uuid::parse_str(parts.next()?).ok()?;
         let memo_id = uuid::Uuid::parse_str(parts.next()?).ok()?;
@@ -184,7 +184,7 @@ impl RedisCache {
             let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
-                .arg("memo:*")
+                .arg(format!("{LEGACY_CACHE_NAMESPACE}:*"))
                 .arg("COUNT")
                 .arg(scan_count)
                 .query_async(&mut connection)
