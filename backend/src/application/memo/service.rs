@@ -206,35 +206,42 @@ impl MemoService {
                     .await
             }
             HighSearchQueryRoute::Protected => {
-                let reader = self.high_search_query_reader.as_ref().ok_or_else(|| {
-                    AppError::ServiceUnavailable(
-                        "protected HIGH search route is active but no protected query reader is available"
-                            .into(),
-                    )
-                });
-
-                match reader {
-                    Ok(reader) => {
-                        let hits = reader
-                            .search_memo_ids(user_id, query, tag, page, limit)
-                            .await?;
-                        let items = self
-                            .memo_repository
-                            .find_many_by_ids(user_id, &hits.memo_ids)
-                            .await?;
-                        Ok(MemoSearchPage {
-                            items,
-                            total: hits.total,
-                        })
-                    }
-                    Err(error) => Err(error),
-                }
+                self.search_memos_protected(query, tag, user_id, page, limit)
+                    .await
             }
         };
 
         Self::finish_query(result, permit)
             .await
             .map(|page| (page, route))
+    }
+
+    async fn search_memos_protected(
+        &self,
+        query: &str,
+        tag: Option<&str>,
+        user_id: Uuid,
+        page: usize,
+        limit: usize,
+    ) -> AppResult<MemoSearchPage> {
+        let reader = self.high_search_query_reader.as_ref().ok_or_else(|| {
+            AppError::ServiceUnavailable(
+                "protected HIGH search route is active but no protected query reader is available"
+                    .into(),
+            )
+        })?;
+        let hits = reader
+            .search_memo_ids(user_id, query, tag, page, limit)
+            .await?;
+        let items = self
+            .memo_repository
+            .find_many_by_ids(user_id, &hits.memo_ids)
+            .await?;
+
+        Ok(MemoSearchPage {
+            items,
+            total: hits.total,
+        })
     }
 
     async fn finish_query<T>(
