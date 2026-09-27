@@ -157,6 +157,7 @@ impl MemoService {
                 user_id,
                 page,
                 limit,
+                search_page.items.iter().map(|memo| memo.id),
                 search_page.total,
             );
         }
