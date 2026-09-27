@@ -50,6 +50,19 @@ assets:
         payload_codec: implemented
         aead_adapter: staged
         key_wrapping_provider: aws_kms_adapter_with_operator_runtime_config_staged
+        encrypted_authoritative_foundation:
+          persistence_port: HighEncryptedMemoAuthoritativeStore
+          domain_adapter: HighMemoAuthoritativeAdapter
+          collection: memos_encrypted_v1
+          owner_scope: owner_partition_and_memo_id
+          create_update_outbox_atomicity: majority_write_transaction
+          delete_outbox_atomicity: majority_write_transaction
+          optimistic_update_guard: previous_version_compare_and_swap
+          ordered_bulk_hydration: preserved
+          semantic_sort_metadata_persisted: false
+          list_ordering: decrypt_then_updated_at_desc
+          corrupt_or_undecryptable_envelope_behavior: fail_closed
+          request_path_wired: false
         cache_foundation:
           domain_cache_contract: owner_partition_and_memo_id_typed
           legacy_plaintext_key_derivation: redis_adapter_internal_only

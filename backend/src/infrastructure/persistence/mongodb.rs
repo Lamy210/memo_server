@@ -25,7 +25,9 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::{MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget};
+use super::ports::{
+    HighEncryptedMemoAuthoritativeStore, MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget,
+};
 
 #[cfg(test)]
 const TEST_DATABASE_NAME: &str = "memo_app_test";
@@ -277,6 +279,21 @@ struct DeleteTransactionContext {
     intent: ProjectionIntentDocument,
 }
 
+struct EncryptedSaveTransactionContext {
+    memos: Collection<EncryptedMemoDocument>,
+    intents: Collection<ProjectionIntentDocument>,
+    memo: EncryptedMemoDocument,
+    intent: ProjectionIntentDocument,
+}
+
+struct EncryptedDeleteTransactionContext {
+    memos: Collection<EncryptedMemoDocument>,
+    intents: Collection<ProjectionIntentDocument>,
+    owner_partition: String,
+    memo_id: String,
+    intent: ProjectionIntentDocument,
+}
+
 pub struct MongoDbAuthoritativeStore {
     client: Client,
     database: Database,
@@ -342,6 +359,18 @@ impl MongoDbAuthoritativeStore {
             .await
             .map_err(|error| mongo_error("create MongoDB projection intent indexes", error))?;
 
+        Ok(())
+    }
+
+    async fn ensure_encrypted_memo_indexes(&self) -> AppResult<()> {
+        self.encrypted_memos
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "owner_partition": 1 })
+                    .build(),
+            )
+            .await
+            .map_err(|error| mongo_error("create MongoDB encrypted memo indexes", error))?;
         Ok(())
     }
 
@@ -558,6 +587,149 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("count MongoDB encrypted migration memos", error))
     }
 
+    async fn save_encrypted_transaction(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+        event: &ProjectionIntent,
+    ) -> AppResult<()> {
+        let document = EncryptedMemoDocument::try_from(envelope)?;
+        let mut session = self
+            .client
+            .start_session()
+            .await
+            .map_err(|error| mongo_error("start encrypted MongoDB memo session", error))?;
+        let context = EncryptedSaveTransactionContext {
+            memos: self.encrypted_memos.clone(),
+            intents: self.projection_intents.clone(),
+            memo: document,
+            intent: ProjectionIntentDocument::from_intent(event)?,
+        };
+
+        let result = session
+            .start_transaction()
+            .write_concern(WriteConcern::majority())
+            .and_run(context, |session, context| {
+                async move {
+                    if context.memo.version == 1 {
+                        context
+                            .memos
+                            .insert_one(context.memo.clone())
+                            .session(&mut *session)
+                            .await?;
+                    } else {
+                        let expected_version = context.memo.version - 1;
+                        let update = doc! {
+                            "$set": {
+                                "ciphertext": context.memo.ciphertext.clone(),
+                                "nonce": context.memo.nonce.clone(),
+                                "wrapped_dek": context.memo.wrapped_dek.clone(),
+                                "version": context.memo.version,
+                                "crypto_suite_id": context.memo.crypto_suite_id.clone(),
+                                "key_version": context.memo.key_version.clone(),
+                                "schema_version": context.memo.schema_version,
+                            }
+                        };
+                        let result = context
+                            .memos
+                            .update_one(
+                                doc! {
+                                    "_id": context.memo.id.clone(),
+                                    "owner_partition": context.memo.owner_partition.clone(),
+                                    "version": expected_version,
+                                },
+                                update,
+                            )
+                            .session(&mut *session)
+                            .await?;
+
+                        if result.matched_count != 1 {
+                            return Err(MongoError::custom(OptimisticConflict));
+                        }
+                    }
+
+                    context
+                        .intents
+                        .insert_one(context.intent.clone())
+                        .session(&mut *session)
+                        .await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if error.get_custom::<OptimisticConflict>().is_some() => Err(
+                AppError::Conflict("Memo has been updated by another client".into()),
+            ),
+            Err(error) => Err(mongo_error(
+                "commit encrypted MongoDB memo transaction",
+                error,
+            )),
+        }
+    }
+
+    async fn delete_encrypted_transaction(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+        event: &ProjectionIntent,
+    ) -> AppResult<()> {
+        let mut session = self
+            .client
+            .start_session()
+            .await
+            .map_err(|error| mongo_error("start encrypted MongoDB delete session", error))?;
+        let context = EncryptedDeleteTransactionContext {
+            memos: self.encrypted_memos.clone(),
+            intents: self.projection_intents.clone(),
+            owner_partition: owner_partition.to_string(),
+            memo_id: memo_id.to_string(),
+            intent: ProjectionIntentDocument::from_intent(event)?,
+        };
+
+        let result = session
+            .start_transaction()
+            .write_concern(WriteConcern::majority())
+            .and_run(context, |session, context| {
+                async move {
+                    let result = context
+                        .memos
+                        .delete_one(doc! {
+                            "_id": context.memo_id.clone(),
+                            "owner_partition": context.owner_partition.clone(),
+                        })
+                        .session(&mut *session)
+                        .await?;
+
+                    if result.deleted_count != 1 {
+                        return Err(MongoError::custom(MissingMemo));
+                    }
+
+                    context
+                        .intents
+                        .insert_one(context.intent.clone())
+                        .session(&mut *session)
+                        .await?;
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await;
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if error.get_custom::<MissingMemo>().is_some() => {
+                Err(AppError::NotFound("Memo not found".into()))
+            }
+            Err(error) => Err(mongo_error(
+                "commit encrypted MongoDB delete transaction",
+                error,
+            )),
+        }
+    }
+
     async fn save_transaction(&self, memo: &Memo, event: &ProjectionIntent) -> AppResult<()> {
         let mut session = self
             .client
@@ -757,7 +929,10 @@ impl HighEncryptedMemoStagingAdmin for MongoDbAuthoritativeStore {
             .delete_many(doc! {})
             .await
             .map_err(|error| mongo_error("reset encrypted MongoDB migration staging", error))?;
-        Ok(())
+        // Keep the encrypted collection completely absent during normal
+        // plaintext-only startup. The guarded migration is the first boundary
+        // allowed to materialize the staging collection and its owner index.
+        self.ensure_encrypted_memo_indexes().await
     }
 }
 
@@ -790,6 +965,127 @@ impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
 
     async fn count_staged(&self) -> AppResult<u64> {
         self.count_staged_encrypted_memos_for_migration().await
+    }
+}
+
+#[async_trait]
+impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
+    async fn find_envelope_by_id(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<Option<HighEncryptedMemoEnvelope>> {
+        let document = self
+            .encrypted_memos
+            .find_one(doc! {
+                "_id": memo_id.to_string(),
+                "owner_partition": owner_partition.to_string(),
+            })
+            .await
+            .map_err(|error| mongo_error("find encrypted MongoDB memo", error))?;
+
+        document
+            .map(EncryptedMemoDocument::try_into_envelope)
+            .transpose()
+    }
+
+    async fn find_all_envelopes_by_owner(
+        &self,
+        owner_partition: Uuid,
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+        let documents: Vec<EncryptedMemoDocument> = self
+            .encrypted_memos
+            .find(doc! { "owner_partition": owner_partition.to_string() })
+            .await
+            .map_err(|error| mongo_error("find encrypted MongoDB memos", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read encrypted MongoDB memo cursor", error))?;
+
+        documents
+            .into_iter()
+            .map(EncryptedMemoDocument::try_into_envelope)
+            .collect()
+    }
+
+    async fn find_many_envelopes_by_ids(
+        &self,
+        owner_partition: Uuid,
+        memo_ids: &[Uuid],
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+        if memo_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let requested_ids = memo_ids.iter().map(Uuid::to_string).collect::<Vec<_>>();
+        let documents: Vec<EncryptedMemoDocument> = self
+            .encrypted_memos
+            .find(doc! {
+                "owner_partition": owner_partition.to_string(),
+                "_id": { "$in": requested_ids },
+            })
+            .await
+            .map_err(|error| mongo_error("find encrypted MongoDB memos by ids", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read encrypted MongoDB memo hydration cursor", error))?;
+
+        let mut by_id = HashMap::with_capacity(documents.len());
+        for document in documents {
+            let envelope = document.try_into_envelope()?;
+            by_id.insert(envelope.memo_id, envelope);
+        }
+
+        Ok(memo_ids
+            .iter()
+            .filter_map(|memo_id| by_id.get(memo_id).cloned())
+            .collect())
+    }
+
+    async fn save_envelope_with_projection_intent(
+        &self,
+        envelope: &HighEncryptedMemoEnvelope,
+    ) -> AppResult<ProjectionIntent> {
+        envelope.validate_structure()?;
+        let event = ProjectionIntent::new(
+            envelope.owner_partition,
+            envelope.memo_id,
+            ProjectionTarget::Version(envelope.version),
+        );
+        self.save_encrypted_transaction(envelope, &event).await?;
+        Ok(event)
+    }
+
+    async fn delete_envelope_with_projection_intent(
+        &self,
+        owner_partition: Uuid,
+        memo_id: Uuid,
+    ) -> AppResult<ProjectionIntent> {
+        let event = ProjectionIntent::new(owner_partition, memo_id, ProjectionTarget::Deleted);
+        self.delete_encrypted_transaction(owner_partition, memo_id, &event)
+            .await?;
+        Ok(event)
+    }
+
+    async fn enqueue_encrypted_projection_intent(
+        &self,
+        user_id: Uuid,
+        memo_id: Uuid,
+        target: ProjectionTarget,
+    ) -> AppResult<ProjectionIntent> {
+        <Self as MemoAuthoritativeStore>::enqueue_projection_intent(self, user_id, memo_id, target)
+            .await
+    }
+
+    async fn list_encrypted_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
+        <Self as MemoAuthoritativeStore>::list_projection_intents(self).await
+    }
+
+    async fn acknowledge_encrypted_projection_intent(
+        &self,
+        event: &ProjectionIntent,
+    ) -> AppResult<()> {
+        <Self as MemoAuthoritativeStore>::acknowledge_projection_intent(self, event).await
     }
 }
 
@@ -1080,6 +1376,139 @@ mod tests {
                 .unwrap()
                 .target,
             ProjectionTarget::Deleted
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local MongoDB replica set"]
+    async fn mongodb_encrypted_authoritative_store_preserves_atomic_outbox_and_versioning() {
+        let uri = std::env::var("MONGODB_TEST_URI")
+            .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
+
+        let cleanup_client = Client::with_uri_str(&uri).await.unwrap();
+        cleanup_client
+            .database(TEST_DATABASE_NAME)
+            .drop()
+            .await
+            .unwrap();
+
+        let store = MongoDbAuthoritativeStore::new(&uri, TEST_DATABASE_NAME)
+            .await
+            .unwrap();
+        let owner = Uuid::new_v4();
+        let other_owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+
+        let v1 = HighEncryptedMemoEnvelope {
+            memo_id,
+            owner_partition: owner,
+            ciphertext: vec![0x11; 48],
+            nonce: vec![0x22; 12],
+            wrapped_dek: vec![0x33; 64],
+            version: 1,
+            crypto_suite_id: crate::application::crypto::MEMO_HIGH_SUITE_ID.into(),
+            key_version: "memo-key-v1".into(),
+            schema_version: crate::application::crypto::MEMO_HIGH_SCHEMA_VERSION,
+        };
+
+        let create_intent =
+            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(&store, &v1)
+                .await
+                .unwrap();
+        assert_eq!(create_intent.target, ProjectionTarget::Version(1));
+        assert_eq!(
+            HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(&store, owner, memo_id)
+                .await
+                .unwrap(),
+            Some(v1.clone())
+        );
+        assert!(HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(
+            &store,
+            other_owner,
+            memo_id,
+        )
+        .await
+        .unwrap()
+        .is_none());
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(
+            &store,
+            &create_intent,
+        )
+        .await
+        .unwrap();
+
+        let mut v2 = v1.clone();
+        v2.version = 2;
+        v2.ciphertext[0] ^= 0x55;
+        let update_intent =
+            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(&store, &v2)
+                .await
+                .unwrap();
+        assert_eq!(update_intent.target, ProjectionTarget::Version(2));
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(
+            &store,
+            &update_intent,
+        )
+        .await
+        .unwrap();
+
+        let mut stale_v2 = v1.clone();
+        stale_v2.version = 2;
+        stale_v2.ciphertext[0] ^= 0x77;
+        assert!(matches!(
+            HighEncryptedMemoAuthoritativeStore::save_envelope_with_projection_intent(
+                &store, &stale_v2,
+            )
+            .await,
+            Err(AppError::Conflict(_))
+        ));
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents(&store)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        assert!(matches!(
+            HighEncryptedMemoAuthoritativeStore::delete_envelope_with_projection_intent(
+                &store,
+                other_owner,
+                memo_id,
+            )
+            .await,
+            Err(AppError::NotFound(_))
+        ));
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents(&store)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let delete_intent =
+            HighEncryptedMemoAuthoritativeStore::delete_envelope_with_projection_intent(
+                &store, owner, memo_id,
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_intent.target, ProjectionTarget::Deleted);
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::find_envelope_by_id(&store, owner, memo_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        HighEncryptedMemoAuthoritativeStore::acknowledge_encrypted_projection_intent(
+            &store,
+            &delete_intent,
+        )
+        .await
+        .unwrap();
+        assert!(
+            HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents(&store)
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 

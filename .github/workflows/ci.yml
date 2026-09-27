@@ -107,6 +107,8 @@ jobs:
         run: |
           cargo test --locked mongodb_replica_set_preserves_atomic_outbox_and_tenant_scope \
             -- --ignored --nocapture
+          cargo test --locked mongodb_encrypted_authoritative_store_preserves_atomic_outbox_and_versioning \
+            -- --ignored --nocapture
           cargo test --locked mongodb_maintenance_barrier_drains_and_blocks_writers_and_protected_queries \
             -- --ignored --nocapture
           cargo test --locked mongodb_maintenance_recovery_requires_exact_snapshot_and_reopens_state \
