@@ -57,8 +57,12 @@ assets:
           ciphertext_port: HighEncryptedMemoCache
           ciphertext_namespace: memo:high:v1
           cache_payload: encrypted_envelope_only
-          ttl_required: explicit_positive
+          ttl_required: non_optional_duration_at_port
+          ttl_minimum: one_redis_second
           invalid_envelope_behavior: purge_then_authoritative_fallback
+          malformed_json_behavior: purge_then_authoritative_fallback
+          mutation_cache_replace: invalidate_then_set
+          cache_replace_failure: outbox_retry_without_old_fast_path_value
           decrypted_identity_revalidation: required
           request_path_wired: false
           legacy_plaintext_cache_purge: pending
