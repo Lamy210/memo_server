@@ -3,6 +3,7 @@ pub mod crypto;
 pub(crate) mod crypto_keys;
 #[cfg(feature = "aws-kms-memo")]
 pub(crate) mod crypto_keys_aws_kms;
+pub(crate) mod high_memo_aws_runtime;
 pub mod crypto_search;
 pub(crate) mod crypto_search_analyzer;
 pub(crate) mod crypto_search_keys;
