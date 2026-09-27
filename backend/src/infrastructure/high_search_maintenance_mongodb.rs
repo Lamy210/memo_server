@@ -3,7 +3,7 @@ use std::time::Duration;
 use ::mongodb::{
     bson::{doc, Bson, Document},
     error::Error as MongoError,
-    options::WriteConcern,
+    options::{ReturnDocument, WriteConcern},
     Client, Collection, Database,
 };
 use async_trait::async_trait;
@@ -14,6 +14,9 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
+        high_search_routing::{
+            HighSearchQueryRoute, HighSearchQueryRouteReader, HighSearchQueryRouteSnapshot,
+        },
         maintenance::{
             HighSearchQueryGuard, HighSearchQueryPermit, MemoMutationGuard, MemoMutationPermit,
         },
@@ -27,6 +30,8 @@ const QUERY_LEASES_COLLECTION: &str = "high_search_query_leases";
 const STATE_ID: &str = "global";
 const MODE_OPEN: &str = "open";
 const MODE_MAINTENANCE: &str = "maintenance";
+const QUERY_ROUTE_FIELD: &str = "query_route";
+const QUERY_ROUTE_GENERATION_FIELD: &str = "query_route_generation";
 const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
@@ -34,6 +39,9 @@ struct MaintenanceActive;
 
 #[derive(Debug)]
 struct RecoverySnapshotMismatch;
+
+#[derive(Debug)]
+struct InvalidQueryRouteState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighSearchMaintenanceMode {
@@ -55,6 +63,8 @@ pub struct HighSearchMaintenanceStatus {
     mode: HighSearchMaintenanceMode,
     holder_token: Option<String>,
     writer_epoch: i64,
+    query_route: HighSearchQueryRoute,
+    query_route_generation: i64,
     active_writer_leases: u64,
     active_query_leases: u64,
 }
@@ -70,6 +80,14 @@ impl HighSearchMaintenanceStatus {
 
     pub fn writer_epoch(&self) -> i64 {
         self.writer_epoch
+    }
+
+    pub fn query_route(&self) -> HighSearchQueryRoute {
+        self.query_route
+    }
+
+    pub fn query_route_generation(&self) -> i64 {
+        self.query_route_generation
     }
 
     pub fn active_writer_leases(&self) -> u64 {
@@ -173,6 +191,8 @@ impl MongoHighSearchMaintenanceRecovery {
             )
         })?;
 
+        let route_snapshot = app_query_route_snapshot(&state)?;
+
         let holder_token = match state.get("holder_token") {
             None | Some(Bson::Null) => None,
             Some(Bson::String(value)) => Some(value.clone()),
@@ -213,6 +233,8 @@ impl MongoHighSearchMaintenanceRecovery {
             mode,
             holder_token,
             writer_epoch,
+            query_route: route_snapshot.route,
+            query_route_generation: route_snapshot.generation,
             active_writer_leases,
             active_query_leases,
         })
@@ -259,6 +281,8 @@ impl MongoHighSearchMaintenanceRecovery {
                         "_id": STATE_ID,
                         "mode": context.expected.mode.to_string(),
                         "writer_epoch": context.expected.writer_epoch,
+                        "query_route": context.expected.query_route.as_persisted_str(),
+                        "query_route_generation": context.expected.query_route_generation,
                     };
                     match context.expected.holder_token.as_deref() {
                         Some(holder_token) => {
@@ -338,33 +362,63 @@ impl MongoHighSearchMaintenanceGuard {
                         "mode": MODE_OPEN,
                         "holder_token": Bson::Null,
                         "writer_epoch": 0_i64,
+                        "query_route": HighSearchQueryRoute::Legacy.as_persisted_str(),
+                        "query_route_generation": 0_i64,
                     }
                 },
             )
             .upsert(true)
             .await;
 
-        match result {
-            Ok(_) => Ok(()),
-            Err(error) => {
-                // Concurrent application startups may race the singleton
-                // upsert. Accept that race only if the singleton now exists.
-                if self
-                    .state
-                    .find_one(doc! { "_id": STATE_ID })
-                    .await
-                    .map_err(|lookup| maintenance_db_error("verify maintenance state", lookup))?
-                    .is_some()
-                {
-                    Ok(())
-                } else {
-                    Err(maintenance_db_error(
-                        "initialize HIGH search maintenance state",
-                        error,
-                    ))
-                }
+        if let Err(error) = result {
+            // Concurrent application startups may race the singleton upsert.
+            // Accept that race only if the singleton now exists.
+            if self
+                .state
+                .find_one(doc! { "_id": STATE_ID })
+                .await
+                .map_err(|lookup| maintenance_db_error("verify maintenance state", lookup))?
+                .is_none()
+            {
+                return Err(maintenance_db_error(
+                    "initialize HIGH search maintenance state",
+                    error,
+                ));
             }
         }
+
+        // Upgrade the pre-routing singleton schema conservatively. A state
+        // created before route support can only have served legacy user-visible
+        // search, so the only safe automatic backfill is legacy generation 0.
+        self.state
+            .update_one(
+                doc! { "_id": STATE_ID, "query_route": { "$exists": false } },
+                doc! { "$set": { "query_route": HighSearchQueryRoute::Legacy.as_persisted_str() } },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("backfill HIGH search query route", error))?;
+        self.state
+            .update_one(
+                doc! { "_id": STATE_ID, "query_route_generation": { "$exists": false } },
+                doc! { "$set": { "query_route_generation": 0_i64 } },
+            )
+            .await
+            .map_err(|error| {
+                maintenance_db_error("backfill HIGH search query route generation", error)
+            })?;
+
+        let state = self
+            .state
+            .find_one(doc! { "_id": STATE_ID })
+            .await
+            .map_err(|error| maintenance_db_error("verify HIGH search query route state", error))?
+            .ok_or_else(|| {
+                AppError::ServiceUnavailable(
+                    "HIGH search maintenance state disappeared during initialization".into(),
+                )
+            })?;
+        app_query_route_snapshot(&state)?;
+        Ok(())
     }
 
     async fn acquire_activity_lease(
@@ -387,47 +441,49 @@ impl MongoHighSearchMaintenanceGuard {
             .write_concern(WriteConcern::majority())
             .and_run(context, |session, context| {
                 async move {
-                    // Every admitted protected activity and maintenance
-                    // acquisition writes the singleton gate. MongoDB therefore
-                    // serializes their race before an activity lease commits.
-                    //
-                    // The persisted field keeps its historical `writer_epoch`
-                    // name for compatibility, but now acts as the maintenance
-                    // activity generation fence for writers and protected reads.
+                    // Every admitted activity and maintenance acquisition writes
+                    // the singleton gate. Returning the updated document here
+                    // also makes the route decision and query-lease admission
+                    // one MongoDB transaction rather than a racy two-step read.
                     let gate = context
                         .state
-                        .update_one(
+                        .find_one_and_update(
                             doc! { "_id": STATE_ID, "mode": MODE_OPEN },
                             doc! { "$inc": { "writer_epoch": 1_i64 } },
                         )
+                        .return_document(ReturnDocument::After)
                         .session(&mut *session)
-                        .await?;
-
-                    if gate.matched_count != 1 {
-                        return Err(MongoError::custom(MaintenanceActive));
-                    }
+                        .await?
+                        .ok_or_else(|| MongoError::custom(MaintenanceActive))?;
+                    let route_snapshot = mongo_query_route_snapshot(&gate)?;
 
                     context
                         .leases
                         .insert_one(doc! { "_id": context.lease_id.clone() })
                         .session(&mut *session)
                         .await?;
-                    Ok(())
+                    Ok(route_snapshot)
                 }
                 .boxed()
             })
             .await;
 
         match result {
-            Ok(()) => Ok(MongoMaintenanceActivityPermit {
+            Ok(route_snapshot) => Ok(MongoMaintenanceActivityPermit {
                 leases,
                 lease_id,
                 activity,
+                route_snapshot,
             }),
             Err(error) if error.get_custom::<MaintenanceActive>().is_some() => {
                 Err(AppError::ServiceUnavailable(format!(
                     "{activity} are temporarily frozen by HIGH search maintenance"
                 )))
+            }
+            Err(error) if error.get_custom::<InvalidQueryRouteState>().is_some() => {
+                Err(AppError::ServiceUnavailable(
+                    "HIGH search query route state is invalid".into(),
+                ))
             }
             Err(error) => Err(maintenance_db_error(
                 "acquire HIGH search maintenance activity lease",
@@ -520,6 +576,7 @@ struct MongoMaintenanceActivityPermit {
     leases: Collection<Document>,
     lease_id: String,
     activity: &'static str,
+    route_snapshot: HighSearchQueryRouteSnapshot,
 }
 
 impl MongoMaintenanceActivityPermit {
@@ -550,6 +607,10 @@ impl MemoMutationPermit for MongoMaintenanceActivityPermit {
 
 #[async_trait]
 impl HighSearchQueryPermit for MongoMaintenanceActivityPermit {
+    fn route_snapshot(&self) -> HighSearchQueryRouteSnapshot {
+        self.route_snapshot
+    }
+
     async fn release(self: Box<Self>) -> AppResult<()> {
         (*self).release_lease().await
     }
@@ -581,6 +642,70 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
                 "HIGH search maintenance barrier ownership was lost".into(),
             ))
         }
+    }
+
+    async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
+        let state = self
+            .state
+            .find_one(doc! {
+                "_id": STATE_ID,
+                "mode": MODE_MAINTENANCE,
+                "holder_token": self.holder_token.clone(),
+            })
+            .await
+            .map_err(|error| maintenance_db_error("read HIGH search query route", error))?
+            .ok_or_else(|| {
+                AppError::Conflict("HIGH search maintenance barrier ownership was lost".into())
+            })?;
+        app_query_route_snapshot(&state)
+    }
+
+    async fn switch_query_route(
+        &self,
+        expected: HighSearchQueryRouteSnapshot,
+        target: HighSearchQueryRoute,
+    ) -> AppResult<HighSearchQueryRouteSnapshot> {
+        if expected.generation < 0 || expected.generation == i64::MAX {
+            return Err(AppError::Conflict(
+                "HIGH search query route generation cannot advance safely".into(),
+            ));
+        }
+
+        if target == expected.route {
+            let current = self.current_query_route().await?;
+            if current == expected {
+                return Ok(current);
+            }
+            return Err(AppError::Conflict(
+                "HIGH search query route changed before idempotent cutover validation".into(),
+            ));
+        }
+
+        let update = self
+            .state
+            .update_one(
+                doc! {
+                    "_id": STATE_ID,
+                    "mode": MODE_MAINTENANCE,
+                    "holder_token": self.holder_token.clone(),
+                    "query_route": expected.route.as_persisted_str(),
+                    "query_route_generation": expected.generation,
+                },
+                doc! {
+                    "$set": { "query_route": target.as_persisted_str() },
+                    "$inc": { "query_route_generation": 1_i64 },
+                },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("switch HIGH search query route", error))?;
+
+        if update.matched_count != 1 {
+            return Err(AppError::Conflict(
+                "HIGH search query route changed before cutover".into(),
+            ));
+        }
+
+        self.current_query_route().await
     }
 
     async fn release(self: Box<Self>) -> AppResult<()> {
@@ -625,6 +750,23 @@ impl HighSearchQueryGuard for MongoHighSearchMaintenanceGuard {
 }
 
 #[async_trait]
+impl HighSearchQueryRouteReader for MongoHighSearchMaintenanceGuard {
+    async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
+        let state = self
+            .state
+            .find_one(doc! { "_id": STATE_ID })
+            .await
+            .map_err(|error| maintenance_db_error("read HIGH search query route state", error))?
+            .ok_or_else(|| {
+                AppError::ServiceUnavailable(
+                    "HIGH search maintenance state is not initialized".into(),
+                )
+            })?;
+        app_query_route_snapshot(&state)
+    }
+}
+
+#[async_trait]
 impl HighSearchOfflineWindowGuard for MongoHighSearchMaintenanceGuard {
     async fn acquire_offline_window(&self) -> AppResult<Box<dyn HighSearchOfflineWindowPermit>> {
         let permit = self.acquire_maintenance_barrier().await?;
@@ -637,6 +779,42 @@ impl HighSearchOfflineWindowGuard for MongoHighSearchMaintenanceGuard {
             sleep(DRAIN_POLL_INTERVAL).await;
         }
     }
+}
+
+fn mongo_query_route_snapshot(
+    state: &Document,
+) -> Result<HighSearchQueryRouteSnapshot, MongoError> {
+    let route = state
+        .get_str(QUERY_ROUTE_FIELD)
+        .ok()
+        .and_then(HighSearchQueryRoute::from_persisted_str)
+        .ok_or_else(|| MongoError::custom(InvalidQueryRouteState))?;
+    let generation = state
+        .get_i64(QUERY_ROUTE_GENERATION_FIELD)
+        .map_err(|_| MongoError::custom(InvalidQueryRouteState))?;
+    if generation < 0 {
+        return Err(MongoError::custom(InvalidQueryRouteState));
+    }
+    Ok(HighSearchQueryRouteSnapshot { route, generation })
+}
+
+fn app_query_route_snapshot(state: &Document) -> AppResult<HighSearchQueryRouteSnapshot> {
+    let route = state
+        .get_str(QUERY_ROUTE_FIELD)
+        .ok()
+        .and_then(HighSearchQueryRoute::from_persisted_str)
+        .ok_or_else(|| {
+            AppError::ServiceUnavailable("HIGH search query route state is invalid".into())
+        })?;
+    let generation = state.get_i64(QUERY_ROUTE_GENERATION_FIELD).map_err(|_| {
+        AppError::ServiceUnavailable("HIGH search query route generation is invalid".into())
+    })?;
+    if generation < 0 {
+        return Err(AppError::ServiceUnavailable(
+            "HIGH search query route generation is invalid".into(),
+        ));
+    }
+    Ok(HighSearchQueryRouteSnapshot { route, generation })
 }
 
 fn maintenance_db_error(operation: &str, error: MongoError) -> AppError {
@@ -663,6 +841,13 @@ mod tests {
             .unwrap();
         let first_writer = guard.acquire_mutation().await.unwrap();
         let first_query = guard.acquire_query().await.unwrap();
+        assert_eq!(
+            first_query.route_snapshot(),
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            }
+        );
 
         let maintenance_guard = guard.clone();
         let maintenance_task =
@@ -700,6 +885,39 @@ mod tests {
         let maintenance = maintenance_task.await.unwrap().unwrap();
         maintenance.assert_still_enforced().await.unwrap();
 
+        let legacy_route = maintenance.current_query_route().await.unwrap();
+        assert_eq!(
+            legacy_route,
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            }
+        );
+        let protected_route = maintenance
+            .switch_query_route(legacy_route, HighSearchQueryRoute::Protected)
+            .await
+            .unwrap();
+        assert_eq!(
+            protected_route,
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Protected,
+                generation: 1,
+            }
+        );
+        assert_eq!(
+            maintenance
+                .switch_query_route(protected_route, HighSearchQueryRoute::Protected)
+                .await
+                .unwrap(),
+            protected_route
+        );
+        assert!(matches!(
+            maintenance
+                .switch_query_route(legacy_route, HighSearchQueryRoute::Legacy)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+
         assert!(matches!(
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
@@ -713,6 +931,13 @@ mod tests {
         let writer_after_release = guard.acquire_mutation().await.unwrap();
         writer_after_release.release().await.unwrap();
         let query_after_release = guard.acquire_query().await.unwrap();
+        assert_eq!(
+            query_after_release.route_snapshot(),
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Protected,
+                generation: 1,
+            }
+        );
         query_after_release.release().await.unwrap();
 
         database.drop().await.unwrap();
@@ -741,6 +966,8 @@ mod tests {
 
         let open_snapshot = recovery.inspect().await.unwrap();
         assert_eq!(open_snapshot.mode(), HighSearchMaintenanceMode::Open);
+        assert_eq!(open_snapshot.query_route(), HighSearchQueryRoute::Legacy);
+        assert_eq!(open_snapshot.query_route_generation(), 0);
         assert_eq!(open_snapshot.active_writer_leases(), 1);
         assert_eq!(open_snapshot.active_query_leases(), 1);
 
@@ -756,6 +983,8 @@ mod tests {
 
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
+        assert_eq!(recovered.query_route(), HighSearchQueryRoute::Legacy);
+        assert_eq!(recovered.query_route_generation(), 0);
         assert_eq!(recovered.active_writer_leases(), 0);
         assert_eq!(recovered.active_query_leases(), 0);
         assert_eq!(recovered.writer_epoch(), open_snapshot.writer_epoch() + 1);
