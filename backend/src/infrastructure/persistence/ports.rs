@@ -4,9 +4,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    application::crypto::HighEncryptedMemoEnvelope,
-    domain::memo::entity::Memo,
-    error::AppResult,
+    application::crypto::HighEncryptedMemoEnvelope, domain::memo::entity::Memo, error::AppResult,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
