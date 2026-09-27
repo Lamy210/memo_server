@@ -354,6 +354,15 @@ impl MongoDbAuthoritativeStore {
             .await
             .map_err(|error| mongo_error("create MongoDB memo indexes", error))?;
 
+        self.projection_intents
+            .create_index(IndexModel::builder().keys(doc! { "memo_id": 1 }).build())
+            .await
+            .map_err(|error| mongo_error("create MongoDB projection intent indexes", error))?;
+
+        Ok(())
+    }
+
+    async fn ensure_encrypted_memo_indexes(&self) -> AppResult<()> {
         self.encrypted_memos
             .create_index(
                 IndexModel::builder()
@@ -362,12 +371,6 @@ impl MongoDbAuthoritativeStore {
             )
             .await
             .map_err(|error| mongo_error("create MongoDB encrypted memo indexes", error))?;
-
-        self.projection_intents
-            .create_index(IndexModel::builder().keys(doc! { "memo_id": 1 }).build())
-            .await
-            .map_err(|error| mongo_error("create MongoDB projection intent indexes", error))?;
-
         Ok(())
     }
 
@@ -926,7 +929,10 @@ impl HighEncryptedMemoStagingAdmin for MongoDbAuthoritativeStore {
             .delete_many(doc! {})
             .await
             .map_err(|error| mongo_error("reset encrypted MongoDB migration staging", error))?;
-        Ok(())
+        // Keep the encrypted collection completely absent during normal
+        // plaintext-only startup. The guarded migration is the first boundary
+        // allowed to materialize the staging collection and its owner index.
+        self.ensure_encrypted_memo_indexes().await
     }
 }
 
