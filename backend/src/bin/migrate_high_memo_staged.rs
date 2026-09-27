@@ -9,7 +9,7 @@ use memo_app_backend::{
 
 const USAGE: &str = "usage:
   migrate_high_memo_staged [--plan]
-  migrate_high_memo_staged --apply --confirm-staging-reset --page-size <1..=1000>";
+  migrate_high_memo_staged --apply --confirm-staging-reset --confirm-all-writers-guarded --page-size <1..=1000>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command {
@@ -65,6 +65,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
 
     let mut apply = false;
     let mut confirmed_reset = false;
+    let mut confirmed_all_writers_guarded = false;
     let mut page_size = None;
     let mut index = 0;
 
@@ -84,6 +85,13 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
                 confirmed_reset = true;
                 index += 1;
             }
+            "--confirm-all-writers-guarded" => {
+                if confirmed_all_writers_guarded {
+                    return Err(USAGE.into());
+                }
+                confirmed_all_writers_guarded = true;
+                index += 1;
+            }
             "--page-size" => {
                 let raw = args.get(index + 1).ok_or(USAGE)?;
                 if page_size.is_some() {
@@ -96,7 +104,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
         }
     }
 
-    if !apply || !confirmed_reset {
+    if !apply || !confirmed_reset || !confirmed_all_writers_guarded {
         return Err(USAGE.into());
     }
 
@@ -119,11 +127,19 @@ mod tests {
     fn apply_requires_explicit_reset_confirmation_and_page_size() {
         assert!(parse_args(vec!["--apply".into()]).is_err());
         assert!(parse_args(vec!["--apply".into(), "--confirm-staging-reset".into(),]).is_err());
+        assert!(parse_args(vec![
+            "--apply".into(),
+            "--confirm-staging-reset".into(),
+            "--page-size".into(),
+            "500".into(),
+        ])
+        .is_err());
 
         assert_eq!(
             parse_args(vec![
                 "--apply".into(),
                 "--confirm-staging-reset".into(),
+                "--confirm-all-writers-guarded".into(),
                 "--page-size".into(),
                 "500".into(),
             ])
