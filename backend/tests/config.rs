@@ -204,9 +204,7 @@ fn accepts_complete_high_memo_aws_kms_configuration() {
     assert_eq!(key_versions.len(), 2);
     assert_eq!(
         key_versions.get("memo-key-v1").map(String::as_str),
-        Some(
-            "arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
-        )
+        Some("arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab")
     );
 }
 
@@ -271,7 +269,10 @@ fn high_memo_aws_kms_rejects_invalid_region_aliases_and_arns() {
         .1 = "AP Northeast 1".to_string();
     assert!(matches!(
         AppConfig::from_vars(invalid_region),
-        Err(ConfigError::InvalidHighMemoCryptoSetting("HIGH_MEMO_AWS_REGION", _))
+        Err(ConfigError::InvalidHighMemoCryptoSetting(
+            "HIGH_MEMO_AWS_REGION",
+            _
+        ))
     ));
 
     let mut invalid_active = high_memo_aws_vars();
