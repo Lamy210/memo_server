@@ -4,10 +4,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    application::{
-        crypto::HighMemoCryptography,
-        crypto_cache::HighEncryptedMemoCache,
-    },
+    application::{crypto::HighMemoCryptography, crypto_cache::HighEncryptedMemoCache},
     domain::memo::entity::Memo,
     error::{AppError, AppResult},
     infrastructure::persistence::ports::MemoCache,
@@ -84,10 +81,9 @@ impl MemoCache for HighMemoCiphertextCacheAdapter {
         let memo = match self.cryptography.decrypt_memo(&envelope).await {
             Ok(memo) => memo,
             Err(error) => {
-                return Err(
-                    self.purge_invalid_entry(owner_partition, memo_id, error)
-                        .await,
-                );
+                return Err(self
+                    .purge_invalid_entry(owner_partition, memo_id, error)
+                    .await);
             }
         };
 
@@ -95,10 +91,9 @@ impl MemoCache for HighMemoCiphertextCacheAdapter {
             let error = AppError::DatabaseError(
                 "HIGH memo cache decrypted identity does not match requested owner/memo".into(),
             );
-            return Err(
-                self.purge_invalid_entry(owner_partition, memo_id, error)
-                    .await,
-            );
+            return Err(self
+                .purge_invalid_entry(owner_partition, memo_id, error)
+                .await);
         }
 
         Ok(Some(memo))
@@ -170,11 +165,7 @@ mod tests {
             Ok(())
         }
 
-        async fn delete_envelope(
-            &self,
-            owner_partition: Uuid,
-            memo_id: Uuid,
-        ) -> AppResult<()> {
+        async fn delete_envelope(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<()> {
             self.deletes
                 .lock()
                 .unwrap()
@@ -183,11 +174,7 @@ mod tests {
             Ok(())
         }
 
-        async fn envelope_exists(
-            &self,
-            _owner_partition: Uuid,
-            _memo_id: Uuid,
-        ) -> AppResult<bool> {
+        async fn envelope_exists(&self, _owner_partition: Uuid, _memo_id: Uuid) -> AppResult<bool> {
             Ok(self.envelope.lock().unwrap().is_some())
         }
     }
@@ -282,10 +269,7 @@ mod tests {
         );
 
         assert!(adapter.set_memo(&memo, None).await.is_err());
-        assert!(adapter
-            .set_memo(&memo, Some(Duration::ZERO))
-            .await
-            .is_err());
+        assert!(adapter.set_memo(&memo, Some(Duration::ZERO)).await.is_err());
     }
 
     #[tokio::test]
