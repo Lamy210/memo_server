@@ -170,7 +170,26 @@ pub async fn run_legacy_high_search_rollback(
         Err(error) => return release_pre_switch(permit, error).await,
     };
     if let Err(error) = validate_legacy_rollback_memo_route(memo_route) {
+        if previous.route == HighSearchQueryRoute::Legacy {
+            // An already-legacy search route combined with encrypted memo data
+            // is an unsafe state for this rollback path. Keep maintenance closed
+            // instead of resuming traffic against a plaintext search projection
+            // that cannot be rebuilt from the encrypted authoritative source.
+            return Err(AppError::ServiceUnavailable(format!(
+                "HIGH search legacy rollback found an unsafe route combination; maintenance barrier remains closed; {error}"
+            )));
+        }
         return release_pre_switch(permit, error).await;
+    }
+
+    if previous.route == HighSearchQueryRoute::Legacy {
+        permit.release().await?;
+        return Ok(HighSearchRouteChangeReport {
+            previous,
+            current: previous,
+            reindex: None,
+            legacy_rebuild: None,
+        });
     }
 
     let source_for_rebuild: Arc<dyn PlaintextMemoMigrationSource> = source;
@@ -214,12 +233,8 @@ pub async fn run_legacy_high_search_rollback(
         .await;
     }
 
-    let current = if previous.route == HighSearchQueryRoute::Legacy {
-        permit.release().await?;
-        previous
-    } else {
-        switch_permit_route_fail_closed(permit, previous, HighSearchQueryRoute::Legacy).await?
-    };
+    let current =
+        switch_permit_route_fail_closed(permit, previous, HighSearchQueryRoute::Legacy).await?;
 
     Ok(HighSearchRouteChangeReport {
         previous,
