@@ -171,15 +171,8 @@ pub async fn run_legacy_high_search_rollback(
         Ok(route) => route,
         Err(error) => return release_pre_switch(permit, error).await,
     };
-    if memo_route.route != HighMemoDataRoute::LegacyPlaintext {
-        return release_pre_switch(
-            permit,
-            AppError::Conflict(format!(
-                "HIGH search legacy rollback requires MEMO route legacy_plaintext; observed {} generation {}",
-                memo_route.route, memo_route.generation
-            )),
-        )
-        .await;
+    if let Err(error) = validate_legacy_rollback_memo_route(memo_route) {
+        return release_pre_switch(permit, error).await;
     }
 
     let source_for_rebuild: Arc<dyn PlaintextMemoMigrationSource> = source;
@@ -313,6 +306,18 @@ fn validate_route_topology(config: &AppConfig) -> AppResult<()> {
         return Err(AppError::ServiceUnavailable(
             "HIGH search route operator requires Manticore Search".into(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_legacy_rollback_memo_route(
+    memo_route: crate::application::high_memo_routing::HighMemoDataRouteSnapshot,
+) -> AppResult<()> {
+    if memo_route.route != HighMemoDataRoute::LegacyPlaintext {
+        return Err(AppError::Conflict(format!(
+            "HIGH search legacy rollback requires MEMO route legacy_plaintext; observed {} generation {}",
+            memo_route.route, memo_route.generation
+        )));
     }
     Ok(())
 }
@@ -481,6 +486,50 @@ mod tests {
         assert!(matches!(
             validate_legacy_high_search_rollback(&disabled_config(), 100, 0),
             Err(AppError::ServiceUnavailable(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_rollback_requires_plaintext_authoritative_memo_route() {
+        assert!(validate_legacy_rollback_memo_route(
+            crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::LegacyPlaintext,
+                generation: 4,
+            }
+        )
+        .is_ok());
+
+        assert!(matches!(
+            validate_legacy_rollback_memo_route(
+                crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
+                    route: HighMemoDataRoute::Encrypted,
+                    generation: 5,
+                }
+            ),
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_rollback_rejects_invalid_rebuild_page_size_before_network_access() {
+        let mut config = disabled_config();
+        config.high_search = HighSearchConfig::AwsKms {
+            key_arn:
+                "arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                    .into(),
+            region: "ap-northeast-1".into(),
+            provider_seed_version: "seed-v1".into(),
+            cache_ttl_seconds: 60,
+            cache_max_entries: 64,
+            cache_sweep_seconds: 30,
+            max_document_content_terms: 128,
+            max_query_content_terms: 32,
+            max_normalized_term_bytes: 128,
+        };
+
+        assert!(matches!(
+            validate_legacy_high_search_rollback(&config, 0, 0),
+            Err(AppError::ValidationError(_))
         ));
     }
 
