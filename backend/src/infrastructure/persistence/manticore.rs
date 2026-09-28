@@ -257,9 +257,7 @@ impl ManticoreClient {
         });
         let result = self.post_json("search", &body).await?;
         result["hits"]["total"].as_u64().ok_or_else(|| {
-            AppError::DatabaseError(
-                "Invalid Manticore legacy projection count response".into(),
-            )
+            AppError::DatabaseError("Invalid Manticore legacy projection count response".into())
         })
     }
 
