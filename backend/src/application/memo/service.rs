@@ -6,10 +6,12 @@ use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
 use crate::{
     application::{
         crypto_search_orchestration::HighSearchQueryReader,
+        high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
         high_search_shadow::{HighSearchShadowObservation, HighSearchShadowObserver},
         maintenance::{
-            HighSearchQueryGuard, HighSearchQueryPermit, MemoMutationGuard, MemoMutationPermit,
+            HighMemoAccessGuard, HighMemoAccessPermit, HighSearchQueryGuard, HighSearchQueryPermit,
+            MemoMutationGuard, MemoMutationPermit,
         },
     },
     domain::memo::{
@@ -22,8 +24,10 @@ use crate::{
 const MAX_SEARCH_QUERY_CHARS: usize = 512;
 
 pub struct MemoService {
-    memo_repository: Arc<dyn MemoRepository>,
+    legacy_memo_repository: Arc<dyn MemoRepository>,
+    encrypted_memo_repository: Option<Arc<dyn MemoRepository>>,
     mutation_guard: Arc<dyn MemoMutationGuard>,
+    high_memo_access_guard: Arc<dyn HighMemoAccessGuard>,
     high_search_query_guard: Arc<dyn HighSearchQueryGuard>,
     high_search_query_reader: Option<Arc<dyn HighSearchQueryReader>>,
     high_search_shadow: Option<Arc<HighSearchShadowObserver>>,
@@ -31,18 +35,37 @@ pub struct MemoService {
 
 impl MemoService {
     pub fn new(
-        memo_repository: Arc<dyn MemoRepository>,
+        legacy_memo_repository: Arc<dyn MemoRepository>,
+        encrypted_memo_repository: Option<Arc<dyn MemoRepository>>,
         mutation_guard: Arc<dyn MemoMutationGuard>,
+        high_memo_access_guard: Arc<dyn HighMemoAccessGuard>,
         high_search_query_guard: Arc<dyn HighSearchQueryGuard>,
         high_search_query_reader: Option<Arc<dyn HighSearchQueryReader>>,
         high_search_shadow: Option<Arc<HighSearchShadowObserver>>,
     ) -> Self {
         Self {
-            memo_repository,
+            legacy_memo_repository,
+            encrypted_memo_repository,
             mutation_guard,
+            high_memo_access_guard,
             high_search_query_guard,
             high_search_query_reader,
             high_search_shadow,
+        }
+    }
+
+    fn repository_for_route(
+        &self,
+        route: HighMemoDataRoute,
+    ) -> AppResult<&Arc<dyn MemoRepository>> {
+        match route {
+            HighMemoDataRoute::LegacyPlaintext => Ok(&self.legacy_memo_repository),
+            HighMemoDataRoute::Encrypted => self.encrypted_memo_repository.as_ref().ok_or_else(|| {
+                AppError::ServiceUnavailable(
+                    "encrypted MEMO-HIGH-1 route is active but no encrypted repository is available"
+                        .into(),
+                )
+            }),
         }
     }
 
