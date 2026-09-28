@@ -13,7 +13,9 @@ use crate::{
         high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
     },
-    config::{AppConfig, AuthoritativeBackend, HighMemoCryptoConfig, HighSearchConfig, SearchBackend},
+    config::{
+        AppConfig, AuthoritativeBackend, HighMemoCryptoConfig, HighSearchConfig, SearchBackend,
+    },
     error::{AppError, AppResult},
 };
 
@@ -117,8 +119,7 @@ pub async fn inspect_high_memo_cutover_routes(
     let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
 
     use crate::application::{
-        high_memo_routing::HighMemoDataRouteReader,
-        high_search_routing::HighSearchQueryRouteReader,
+        high_memo_routing::HighMemoDataRouteReader, high_search_routing::HighSearchQueryRouteReader,
     };
 
     let memo = guard.current_memo_data_route().await?;
@@ -355,9 +356,7 @@ fn validate_generation(label: &str, generation: i64) -> AppResult<()> {
     Ok(())
 }
 
-async fn ensure_no_pending_projection_intents(
-    source: &MongoDbAuthoritativeStore,
-) -> AppResult<()> {
+async fn ensure_no_pending_projection_intents(source: &MongoDbAuthoritativeStore) -> AppResult<()> {
     let pending = source.count_projection_intents_for_cutover().await?;
     if pending == 0 {
         Ok(())
@@ -553,25 +552,39 @@ mod tests {
 
     #[test]
     fn cutover_rejects_invalid_budgets_before_network_access() {
-        assert!(validate_high_memo_cutover_config(&configured(), 0, 100, 0, 0, approved()).is_err());
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 0, 0, 0, approved()).is_err());
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, -1, 0, approved()).is_err());
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, -1, approved()).is_err());
+        assert!(
+            validate_high_memo_cutover_config(&configured(), 0, 100, 0, 0, approved()).is_err()
+        );
+        assert!(
+            validate_high_memo_cutover_config(&configured(), 100, 0, 0, 0, approved()).is_err()
+        );
+        assert!(
+            validate_high_memo_cutover_config(&configured(), 100, 100, -1, 0, approved()).is_err()
+        );
+        assert!(
+            validate_high_memo_cutover_config(&configured(), 100, 100, 0, -1, approved()).is_err()
+        );
     }
 
     #[test]
     fn cutover_requires_every_operator_attestation() {
         let mut approval = approved();
         approval.all_replicas_encrypted_ready = false;
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err());
+        assert!(
+            validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err()
+        );
 
         let mut approval = approved();
         approval.plaintext_backup_verified = false;
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err());
+        assert!(
+            validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err()
+        );
 
         let mut approval = approved();
         approval.no_automatic_rollback_accepted = false;
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err());
+        assert!(
+            validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err()
+        );
     }
 
     #[test]
