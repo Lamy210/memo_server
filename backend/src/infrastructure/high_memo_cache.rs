@@ -1,5 +1,6 @@
-// Staged cache composition boundary. This adapter is intentionally not
-// request-path reachable until the guarded cache-mode cutover is implemented.
+// Staged cache composition boundary. This adapter is startup-composed only
+// behind an explicitly enabled MEMO-HIGH-1 runtime and is selected solely by
+// the shared encrypted memo route. The route still defaults to legacy plaintext.
 #![allow(dead_code)]
 
 use std::{sync::Arc, time::Duration};
@@ -17,9 +18,9 @@ use crate::{
 /// Domain-facing cache adapter that guarantees Redis/Valkey receives only
 /// encrypted HIGH memo envelopes.
 ///
-/// This adapter is intentionally independent from request-path startup wiring.
-/// A deployment can stage and test it before switching the application cache
-/// mode away from the legacy plaintext namespace.
+/// The adapter is injected into the standby encrypted repository before
+/// cutover, but no request can reach it while the shared memo route remains
+/// `legacy_plaintext`.
 pub(crate) struct HighMemoCiphertextCacheAdapter {
     encrypted_cache: Arc<dyn HighEncryptedMemoCache>,
     cryptography: Arc<dyn HighMemoCryptography>,
