@@ -4,6 +4,7 @@ use crate::{
     application::{
         crypto_cache::HighEncryptedMemoCache,
         health::HealthProbe,
+        high_search_routing::HighSearchQueryRouteReader,
         maintenance::{
             HighMemoAccessGuard, HighSearchQueryGuard, MemoMutationGuard,
             UnrestrictedHighMemoAccessGuard, UnrestrictedHighSearchQueryGuard,
@@ -38,6 +39,7 @@ pub(crate) struct PersistenceStack {
     pub(crate) search_health: Arc<dyn HealthProbe>,
     pub(crate) mutation_guard: Arc<dyn MemoMutationGuard>,
     pub(crate) high_search_query_guard: Arc<dyn HighSearchQueryGuard>,
+    pub(crate) high_search_route_reader: Option<Arc<dyn HighSearchQueryRouteReader>>,
     pub(crate) high_memo_access_guard: Arc<dyn HighMemoAccessGuard>,
     pub(crate) high_encrypted_authoritative_store:
         Option<Arc<dyn HighEncryptedMemoAuthoritativeStore>>,
@@ -121,6 +123,19 @@ impl PersistenceStack {
             Arc::new(UnrestrictedHighSearchQueryGuard)
         };
 
+        let high_search_route_reader: Option<Arc<dyn HighSearchQueryRouteReader>> =
+            if guard_high_search_queries {
+                let guard = shared_maintenance_guard.as_ref().ok_or_else(|| {
+                    AppError::ServiceUnavailable(
+                        "HIGH search route reconciliation requires the shared MongoDB guard".into(),
+                    )
+                })?;
+                let reader: Arc<dyn HighSearchQueryRouteReader> = guard.clone();
+                Some(reader)
+            } else {
+                None
+            };
+
         let high_memo_access_guard: Arc<dyn HighMemoAccessGuard> = if guard_high_memo_access {
             let guard = shared_maintenance_guard.as_ref().ok_or_else(|| {
                 AppError::ServiceUnavailable(
@@ -161,6 +176,7 @@ impl PersistenceStack {
             search_health,
             mutation_guard,
             high_search_query_guard,
+            high_search_route_reader,
             high_memo_access_guard,
             high_encrypted_authoritative_store,
             high_encrypted_cache,

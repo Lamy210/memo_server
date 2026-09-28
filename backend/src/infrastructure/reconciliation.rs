@@ -14,6 +14,7 @@ use crate::{
     application::{
         crypto_search_orchestration::HighSearchProjectionSink,
         high_memo_routing::HighMemoDataRoute,
+        high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteReader},
         maintenance::{
             HighMemoAccessGuard, HighMemoAccessPermit, MemoMutationGuard, MemoMutationPermit,
         },
@@ -78,6 +79,7 @@ pub struct ProjectionReconciler {
     high_search_projection: Option<Arc<dyn HighSearchProjectionSink>>,
     mutation_guard: Arc<dyn MemoMutationGuard>,
     memo_route_scope: Option<(Arc<dyn HighMemoAccessGuard>, HighMemoDataRoute)>,
+    search_route_reader: Option<Arc<dyn HighSearchQueryRouteReader>>,
     retry_states: Mutex<HashMap<Uuid, RetryState>>,
     counters: ReconciliationCounters,
 }
@@ -97,6 +99,7 @@ impl ProjectionReconciler {
             high_search_projection,
             mutation_guard,
             memo_route_scope: None,
+            search_route_reader: None,
             retry_states: Mutex::new(HashMap::new()),
             counters: ReconciliationCounters::default(),
         }
@@ -113,6 +116,17 @@ impl ProjectionReconciler {
         required_route: HighMemoDataRoute,
     ) -> Self {
         self.memo_route_scope = Some((access_guard, required_route));
+        self
+    }
+
+    /// Select which search projection is authoritative for reconciliation.
+    ///
+    /// The reader is consulted only after the reconciler has acquired the
+    /// maintenance writer lease. Search-route cutover also requires that writer
+    /// lease set to drain, so the observed route cannot change until this
+    /// reconciliation releases its permit.
+    pub fn with_search_route(mut self, route_reader: Arc<dyn HighSearchQueryRouteReader>) -> Self {
+        self.search_route_reader = Some(route_reader);
         self
     }
 
@@ -245,7 +259,12 @@ impl ProjectionReconciler {
         // outbox retry from mutating either search projection while a staged
         // HIGH reindex/reset owns the offline window.
         let permit = self.mutation_guard.acquire_mutation().await?;
-        let result = self.reconcile_secondary_state(event, memo.as_ref()).await;
+        let result = async {
+            let search_route = self.current_search_route().await?;
+            self.reconcile_secondary_state(event, memo.as_ref(), search_route)
+                .await
+        }
+        .await;
         Self::finish_guarded_reconciliation(result, permit).await?;
 
         Ok(ReconcileOutcome::Completed)
@@ -279,17 +298,35 @@ impl ProjectionReconciler {
         }
     }
 
+    async fn current_search_route(&self) -> AppResult<HighSearchQueryRoute> {
+        match self.search_route_reader.as_ref() {
+            Some(reader) => Ok(reader.current_query_route().await?.route),
+            None => Ok(HighSearchQueryRoute::Legacy),
+        }
+    }
+
     async fn reconcile_secondary_state(
         &self,
         event: &ProjectionIntent,
         memo: Option<&crate::domain::memo::entity::Memo>,
+        search_route: HighSearchQueryRoute,
     ) -> AppResult<()> {
+        if search_route == HighSearchQueryRoute::Protected && self.high_search_projection.is_none()
+        {
+            return Err(AppError::ServiceUnavailable(
+                "protected HIGH search route is active but no protected projection sink is available"
+                    .into(),
+            ));
+        }
+
         let mut failures = Vec::new();
 
         match memo {
             Some(memo) => {
-                if let Err(error) = self.search_projection.index_memo(memo).await {
-                    failures.push(format!("search_projection={error}"));
+                if search_route == HighSearchQueryRoute::Legacy {
+                    if let Err(error) = self.search_projection.index_memo(memo).await {
+                        failures.push(format!("search_projection={error}"));
+                    }
                 }
                 if let Some(high_search_projection) = self.high_search_projection.as_ref() {
                     if let Err(error) = high_search_projection.replace_memo(memo).await {
@@ -303,8 +340,10 @@ impl ProjectionReconciler {
                 }
             }
             None => {
-                if let Err(error) = self.search_projection.delete_memo(event.memo_id).await {
-                    failures.push(format!("search_projection={error}"));
+                if search_route == HighSearchQueryRoute::Legacy {
+                    if let Err(error) = self.search_projection.delete_memo(event.memo_id).await {
+                        failures.push(format!("search_projection={error}"));
+                    }
                 }
                 if let Some(high_search_projection) = self.high_search_projection.as_ref() {
                     if let Err(error) = high_search_projection
@@ -659,6 +698,34 @@ mod tests {
         }
     }
 
+    struct FakeSearchRouteReader {
+        route: HighSearchQueryRoute,
+        fail: bool,
+        events: Arc<TestEvents>,
+    }
+
+    #[async_trait::async_trait]
+    impl HighSearchQueryRouteReader for FakeSearchRouteReader {
+        async fn current_query_route(
+            &self,
+        ) -> AppResult<crate::application::high_search_routing::HighSearchQueryRouteSnapshot>
+        {
+            self.events.push("search-route-read");
+            if self.fail {
+                Err(AppError::ServiceUnavailable(
+                    "search route read failed".into(),
+                ))
+            } else {
+                Ok(
+                    crate::application::high_search_routing::HighSearchQueryRouteSnapshot {
+                        route: self.route,
+                        generation: 5,
+                    },
+                )
+            }
+        }
+    }
+
     struct FakeMemoAccessGuard {
         route: HighMemoDataRoute,
         fail_release: bool,
@@ -915,6 +982,121 @@ mod tests {
         assert_eq!(
             events.snapshot().last().copied(),
             Some("memo-access-release")
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_search_route_never_writes_legacy_plaintext_projection() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        let reconciler = reconciler.with_search_route(Arc::new(FakeSearchRouteReader {
+            route: HighSearchQueryRoute::Protected,
+            fail: false,
+            events: events.clone(),
+        }));
+
+        assert_eq!(
+            reconciler.reconcile_event(&event).await.unwrap(),
+            ReconcileOutcome::Completed
+        );
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "search-route-read",
+                "high-index",
+                "cache-delete",
+                "cache-set",
+                "guard-release",
+                "ack"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_search_route_delete_skips_legacy_plaintext_projection() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let event = ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Deleted);
+        let (reconciler, store, high, events) = test_reconciler(None, false, false);
+        let reconciler = reconciler.with_search_route(Arc::new(FakeSearchRouteReader {
+            route: HighSearchQueryRoute::Protected,
+            fail: false,
+            events: events.clone(),
+        }));
+
+        assert_eq!(
+            reconciler.reconcile_event(&event).await.unwrap(),
+            ReconcileOutcome::Completed
+        );
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+        assert_eq!(*high.deleted.lock().unwrap(), Some((user_id, memo_id)));
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "search-route-read",
+                "high-delete",
+                "cache-delete",
+                "guard-release",
+                "ack"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn search_route_read_failure_touches_no_secondary_state_and_keeps_outbox() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        let reconciler = reconciler.with_search_route(Arc::new(FakeSearchRouteReader {
+            route: HighSearchQueryRoute::Protected,
+            fail: true,
+            events: events.clone(),
+        }));
+
+        assert!(reconciler.reconcile_event(&event).await.is_err());
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot(),
+            vec!["guard-acquire", "search-route-read", "guard-release"]
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_search_route_without_high_projection_fails_closed() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        let reconciler = ProjectionReconciler {
+            high_search_projection: None,
+            ..reconciler
+        }
+        .with_search_route(Arc::new(FakeSearchRouteReader {
+            route: HighSearchQueryRoute::Protected,
+            fail: false,
+            events: events.clone(),
+        }));
+
+        assert!(matches!(
+            reconciler.reconcile_event(&event).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot(),
+            vec!["guard-acquire", "search-route-read", "guard-release"]
         );
     }
 

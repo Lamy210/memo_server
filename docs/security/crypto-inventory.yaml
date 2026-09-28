@@ -475,6 +475,14 @@ assets:
           protected_route_cutover_ambiguous_outcome: barrier_remains_closed
           protected_route_rollback_command: cutover_high_search_route_apply_legacy
           protected_route_rollback_requires_exact_generation: true
+          protected_route_rollback_page_size_required: true
+          protected_route_rollback_requires_memo_route: legacy_plaintext
+          protected_route_rollback_legacy_projection_reset: truncate_table_memos_only_when_switching_protected_to_legacy
+          protected_route_rollback_legacy_projection_rebuild: full_plaintext_authoritative_source
+          protected_route_rollback_exact_count: sql_count_star
+          protected_route_rollback_already_legacy: non_destructive_no_op
+          protected_route_rollback_convergence: source_visited_projection_counts_equal
+          protected_route_rollback_when_memo_route_encrypted: fail_closed_until_reverse_sync_exists
           protected_route_missing_reader_behavior: fail_closed
           protected_route_hydration: owner_scoped_authoritative_bulk_read
           query_lease_release_failure_behavior: fail_closed
@@ -504,6 +512,12 @@ assets:
         mutation_mirror_scope: create_update_delete
         mutation_mirror_failure_behavior: durable_intent_retry
         reconciler_maintenance_guard: shared_mongodb_writer_lease
+        reconciler_search_route_read_timing: after_writer_lease_acquisition
+        reconciler_search_route_stability: protected_by_same_maintenance_barrier_as_cutover
+        reconciler_legacy_projection_write_policy: legacy_route_only
+        reconciler_protected_projection_write_policy: dual_mirror_on_legacy_protected_only_on_protected
+        reconciler_protected_route_requires_high_projection_sink: true
+        reconciler_search_route_read_failure_behavior: durable_intent_retry_without_secondary_mutation
         reconciler_ack_after_lease_release: true
         query_shadow_observer: opt_in_bounded_best_effort
         query_shadow_user_response_influence: forbidden
@@ -523,6 +537,8 @@ assets:
         query_request_path_protected_fallback_to_legacy: forbidden
         query_request_path_shadow_on_protected_route: disabled
       legacy_plaintext_projection_active: true
+      legacy_plaintext_projection_new_writes_on_protected_route: false
+      legacy_plaintext_projection_retirement: explicit_purge_still_required
       runtime_eligible: false
     migration_status: in_progress
     owner: memo-search

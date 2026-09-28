@@ -16,7 +16,7 @@ use memo_app_backend::{
 const USAGE: &str = "usage:
   cutover_high_search_route [--status]
   cutover_high_search_route --apply-protected --confirm-protected-cutover --approval <approval.json> --page-size <n> --expected-route-generation <generation>
-  cutover_high_search_route --apply-legacy --confirm-legacy-rollback --expected-route-generation <generation>";
+  cutover_high_search_route --apply-legacy --confirm-legacy-rollback --page-size <n> --expected-route-generation <generation>";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -27,6 +27,7 @@ enum Command {
         expected_generation: i64,
     },
     Legacy {
+        page_size: usize,
         expected_generation: i64,
     },
 }
@@ -85,11 +86,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Command::Legacy {
+            page_size,
             expected_generation,
         } => {
-            let report = run_legacy_high_search_rollback(&config, expected_generation).await?;
+            let report =
+                run_legacy_high_search_rollback(&config, page_size, expected_generation).await?;
             print_route("rollback.previous", report.previous);
             print_route("rollback.current", report.current);
+            if let Some(stats) = report.legacy_rebuild {
+                println!("rollback.rebuild.source_count={}", stats.source_count);
+                println!(
+                    "rollback.rebuild.projected_visited={}",
+                    stats.projected_visited
+                );
+                println!(
+                    "rollback.rebuild.projection_count={}",
+                    stats.projection_count
+                );
+            }
         }
     }
 
@@ -209,12 +223,13 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
             if !confirm_legacy
                 || confirm_protected
                 || approval.is_some()
-                || page_size.is_some()
+                || page_size.is_none()
                 || expected_generation.is_none()
             {
                 return Err(USAGE.into());
             }
             Ok(Command::Legacy {
+                page_size: page_size.unwrap(),
                 expected_generation: expected_generation.unwrap(),
             })
         }
@@ -265,11 +280,14 @@ mod tests {
             parse_args(vec![
                 "--apply-legacy".into(),
                 "--confirm-legacy-rollback".into(),
+                "--page-size".into(),
+                "500".into(),
                 "--expected-route-generation".into(),
                 "8".into(),
             ])
             .unwrap(),
             Command::Legacy {
+                page_size: 500,
                 expected_generation: 8,
             }
         );
@@ -277,6 +295,8 @@ mod tests {
         assert!(parse_args(vec![
             "--apply-legacy".into(),
             "--confirm-legacy-rollback".into(),
+            "--page-size".into(),
+            "500".into(),
             "--expected-route-generation".into(),
             "8".into(),
             "--approval".into(),
