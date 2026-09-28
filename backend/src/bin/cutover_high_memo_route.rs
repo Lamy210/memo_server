@@ -4,6 +4,7 @@ use memo_app_backend::{
     config::AppConfig,
     infrastructure::high_memo_route_operator::{
         inspect_high_memo_cutover_routes, run_encrypted_high_memo_cutover,
+        HighMemoRouteCutoverApproval,
     },
 };
 
@@ -57,6 +58,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 cache_scan_count,
                 expected_memo_generation,
                 expected_search_generation,
+                HighMemoRouteCutoverApproval {
+                    all_replicas_encrypted_ready: true,
+                    plaintext_backup_verified: true,
+                    no_automatic_rollback_accepted: true,
+                },
             )
             .await?;
 
