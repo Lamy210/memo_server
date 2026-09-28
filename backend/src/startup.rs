@@ -86,13 +86,12 @@ impl Application {
             high_search_projection_sink.clone(),
             persistence.mutation_guard.clone(),
         );
-        let projection_reconciler = if let Some(route_reader) =
-            persistence.high_search_route_reader.clone()
-        {
-            projection_reconciler.with_search_route(route_reader)
-        } else {
-            projection_reconciler
-        };
+        let projection_reconciler =
+            if let Some(route_reader) = persistence.high_search_route_reader.clone() {
+                projection_reconciler.with_search_route(route_reader)
+            } else {
+                projection_reconciler
+            };
         let projection_reconciler = match &config.high_memo_crypto {
             HighMemoCryptoConfig::Disabled => projection_reconciler,
             HighMemoCryptoConfig::AwsKms { .. } => projection_reconciler.with_memo_route(
@@ -144,13 +143,12 @@ impl Application {
                     high_search_projection_sink.clone(),
                     persistence.mutation_guard.clone(),
                 );
-                let encrypted_reconciler = if let Some(route_reader) =
-                    persistence.high_search_route_reader.clone()
-                {
-                    encrypted_reconciler.with_search_route(route_reader)
-                } else {
-                    encrypted_reconciler
-                };
+                let encrypted_reconciler =
+                    if let Some(route_reader) = persistence.high_search_route_reader.clone() {
+                        encrypted_reconciler.with_search_route(route_reader)
+                    } else {
+                        encrypted_reconciler
+                    };
                 let encrypted_reconciler = Arc::new(encrypted_reconciler.with_memo_route(
                     persistence.high_memo_access_guard.clone(),
                     HighMemoDataRoute::Encrypted,
