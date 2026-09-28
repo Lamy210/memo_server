@@ -72,13 +72,21 @@ impl MemoService {
     pub async fn create_memo(&self, dto: CreateMemoDto, user_id: Uuid) -> AppResult<MemoResponse> {
         let memo = Memo::new(dto.title, dto.content, dto.tags, user_id);
         Self::validate_memo(&memo)?;
-        let permit = self.mutation_guard.acquire_mutation().await?;
-        let result = self
-            .memo_repository
-            .save(&memo)
-            .await
-            .map(|()| MemoResponse::from(memo));
-        Self::finish_mutation(result, permit).await
+
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let mutation = self.mutation_guard.acquire_mutation().await?;
+            let result = repository
+                .save(&memo)
+                .await
+                .map(|()| MemoResponse::from(memo));
+            Self::finish_mutation(result, mutation).await
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     pub async fn update_memo(
@@ -87,51 +95,87 @@ impl MemoService {
         dto: UpdateMemoDto,
         user_id: Uuid,
     ) -> AppResult<MemoResponse> {
-        let mut memo = self
-            .memo_repository
-            .find_by_id(user_id, id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Memo not found".into()))?;
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let mut memo = repository
+                .find_by_id(user_id, id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("Memo not found".into()))?;
 
-        if memo.user_id != user_id {
-            return Err(AppError::Unauthorized(
-                "Not authorized to update this memo".into(),
-            ));
-        }
-        if memo.version != dto.version {
-            return Err(AppError::Conflict(
-                "Memo has been updated by another client".into(),
-            ));
-        }
+            if memo.user_id != user_id {
+                return Err(AppError::Unauthorized(
+                    "Not authorized to update this memo".into(),
+                ));
+            }
+            if memo.version != dto.version {
+                return Err(AppError::Conflict(
+                    "Memo has been updated by another client".into(),
+                ));
+            }
 
-        memo.update(dto.title, dto.content, dto.tags);
-        Self::validate_memo(&memo)?;
-        let permit = self.mutation_guard.acquire_mutation().await?;
-        let result = self
-            .memo_repository
-            .save(&memo)
-            .await
-            .map(|()| MemoResponse::from(memo));
-        Self::finish_mutation(result, permit).await
+            memo.update(dto.title, dto.content, dto.tags);
+            Self::validate_memo(&memo)?;
+
+            let mutation = self.mutation_guard.acquire_mutation().await?;
+            let result = repository
+                .save(&memo)
+                .await
+                .map(|()| MemoResponse::from(memo));
+            Self::finish_mutation(result, mutation).await
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     pub async fn get_memo(&self, id: Uuid, user_id: Uuid) -> AppResult<MemoResponse> {
-        let memo = self
-            .memo_repository
-            .find_by_id(user_id, id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Memo not found".into()))?;
-        Ok(MemoResponse::from(memo))
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let memo = repository
+                .find_by_id(user_id, id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("Memo not found".into()))?;
+            Ok(MemoResponse::from(memo))
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     pub async fn delete_memo(&self, id: Uuid, user_id: Uuid) -> AppResult<()> {
-        if !self.memo_repository.exists(user_id, id).await? {
-            return Err(AppError::NotFound("Memo not found".into()));
-        }
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            if !repository.exists(user_id, id).await? {
+                return Err(AppError::NotFound("Memo not found".into()));
+            }
 
-        let permit = self.mutation_guard.acquire_mutation().await?;
-        let result = self.memo_repository.delete(user_id, id).await;
-        Self::finish_mutation(result, permit).await
+            let mutation = self.mutation_guard.acquire_mutation().await?;
+            let result = repository.delete(user_id, id).await;
+            Self::finish_mutation(result, mutation).await
+        }
+        .await;
+
+        Self::finish_access(result, access).await
+    }
+
+    async fn finish_access<T>(
+        result: AppResult<T>,
+        permit: Box<dyn HighMemoAccessPermit>,
+    ) -> AppResult<T> {
+        match (result, permit.release().await) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(primary), Ok(())) => Err(primary),
+            (Ok(_), Err(release)) => Err(release),
+            (Err(primary), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+                "memo data-path request failed and memo-access lease release also failed; primary={primary}; release={release}"
+            ))),
+        }
     }
 
     async fn finish_mutation<T>(
@@ -149,9 +193,17 @@ impl MemoService {
     }
 
     pub async fn get_user_memos(&self, user_id: Uuid) -> AppResult<Vec<MemoResponse>> {
-        let mut memos = self.memo_repository.find_all_by_user_id(user_id).await?;
-        memos.sort_by_key(|memo| Reverse(memo.updated_at));
-        Ok(memos.into_iter().map(MemoResponse::from).collect())
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let mut memos = repository.find_all_by_user_id(user_id).await?;
+            memos.sort_by_key(|memo| Reverse(memo.updated_at));
+            Ok(memos.into_iter().map(MemoResponse::from).collect())
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     pub async fn search_memos(
