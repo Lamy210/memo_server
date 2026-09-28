@@ -84,7 +84,9 @@ impl Application {
         let _projection_reconciler_task = tokio::spawn(projection_reconciler.run());
         let memo_service = Data::new(MemoService::new(
             memo_repository,
+            None,
             persistence.mutation_guard,
+            persistence.high_memo_access_guard,
             persistence.high_search_query_guard,
             high_search_query_reader,
             high_search_shadow,
