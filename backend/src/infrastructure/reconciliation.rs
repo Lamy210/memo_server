@@ -204,18 +204,15 @@ impl ProjectionReconciler {
     }
 
     async fn reconcile_event(&self, event: &ProjectionIntent) -> AppResult<ReconcileOutcome> {
-        let access = self.acquire_memo_route_access().await?;
-        if let Some((permit, required_route)) = access.as_ref() {
-            if permit.route_snapshot().route != *required_route {
-                let release = access
-                    .map(|(permit, _)| permit)
-                    .expect("route-scoped access permit must exist")
-                    .release()
-                    .await;
-                release?;
+        let access = match self.acquire_memo_route_access().await? {
+            Some((permit, required_route))
+                if permit.route_snapshot().route != required_route =>
+            {
+                permit.release().await?;
                 return Ok(ReconcileOutcome::InactiveMemoRoute);
             }
-        }
+            access => access,
+        };
 
         let result = self.reconcile_event_before_ack(event).await;
         let outcome = Self::finish_memo_route_access(result, access).await?;
