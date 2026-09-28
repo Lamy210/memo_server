@@ -49,6 +49,12 @@ impl ManticoreClient {
     }
 
     async fn execute_raw_sql(&self, sql: &str, operation: &str) -> AppResult<()> {
+        self.execute_raw_sql_result(sql, operation)
+            .await
+            .map(|_| ())
+    }
+
+    async fn execute_raw_sql_result(&self, sql: &str, operation: &str) -> AppResult<Value> {
         let response = self
             .client
             .post(format!("{}/sql?mode=raw", self.base_url))
@@ -87,7 +93,7 @@ impl ManticoreClient {
             )));
         }
 
-        Ok(())
+        Ok(result)
     }
 
     async fn post_json(&self, endpoint: &str, body: &Value) -> AppResult<Value> {
@@ -250,15 +256,26 @@ impl ManticoreClient {
 
     pub(crate) async fn count_legacy_documents(&self) -> AppResult<u64> {
         self.ensure_table().await?;
-        let body = json!({
-            "table": TABLE_NAME,
-            "query": { "match_all": {} },
-            "limit": 1
-        });
-        let result = self.post_json("search", &body).await?;
-        result["hits"]["total"].as_u64().ok_or_else(|| {
-            AppError::DatabaseError("Invalid Manticore legacy projection count response".into())
-        })
+        let result = self
+            .execute_raw_sql_result(
+                "SELECT COUNT(*) FROM memos",
+                "legacy projection exact count",
+            )
+            .await?;
+
+        result
+            .as_array()
+            .and_then(|sets| sets.first())
+            .and_then(|set| set.get("data"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| row.get("count(*)"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                AppError::DatabaseError(
+                    "Invalid Manticore legacy exact count response format".into(),
+                )
+            })
     }
 
     pub async fn health_check(&self) -> AppResult<bool> {
