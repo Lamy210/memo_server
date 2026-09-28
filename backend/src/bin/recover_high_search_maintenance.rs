@@ -2,8 +2,7 @@ use std::{env, process::ExitCode};
 
 use memo_app_backend::{
     application::{
-        high_memo_routing::HighMemoDataRoute,
-        high_search_routing::HighSearchQueryRoute,
+        high_memo_routing::HighMemoDataRoute, high_search_routing::HighSearchQueryRoute,
     },
     infrastructure::high_search_maintenance_mongodb::{
         HighSearchMaintenanceMode, MongoHighSearchMaintenanceRecovery,
@@ -181,9 +180,8 @@ fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error
             "--expected-memo-route" => {
                 let value = args.get(index + 1).ok_or(USAGE)?;
                 expected_memo_route = Some(
-                    HighMemoDataRoute::from_persisted_str(value).ok_or(
-                        "expected memo route must be `legacy_plaintext` or `encrypted`",
-                    )?,
+                    HighMemoDataRoute::from_persisted_str(value)
+                        .ok_or("expected memo route must be `legacy_plaintext` or `encrypted`")?,
                 );
                 index += 2;
             }
