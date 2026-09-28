@@ -1,16 +1,13 @@
 # Plaintext MongoDB -> HIGH Encrypted Staging Runbook
 
-Status: batch migration pipeline staged; production execution is not enabled.
+Status: guarded staging and encrypted-route cutover tooling implemented; production execution remains operator-controlled and disabled by default.
 
 ## Purpose
 
 This migration converts the current plaintext MongoDB authoritative memo records into
 verified HIGH encrypted envelopes in the isolated `memos_encrypted_v1` collection.
 
-The encrypted collection remains **non-authoritative**. Request-path CRUD continues to
-use the current authoritative collection until the staged AWS KMS key-wrapping provider is
-deployment-configured and request-path wired, ciphertext-only cache semantics are activated,
-the protected search projection is approved, and encrypted-store cutover is implemented and reviewed.
+The encrypted collection remains **non-authoritative by default** because the shared memo route starts at `legacy_plaintext`. Request-path CRUD can select the already-composed encrypted repository only after the guarded cutover command atomically advances the shared memo route.
 
 The repository now also contains a staged encrypted-authoritative persistence port and
 `HighMemoAuthoritativeAdapter`. It can satisfy the existing domain store contract from
@@ -21,7 +18,7 @@ When `HIGH_MEMO_CRYPTO_MODE=aws-kms` is enabled, the encrypted authoritative ada
 
 The shared MongoDB maintenance singleton now also stages an independent memo data route (`legacy_plaintext` or `encrypted`) with a monotonic generation plus memo-access leases. Normal memo CRUD/list/search hydration now enters through that memo-access guard and keeps the admitted route snapshot alive across cache/authoritative work. The maintenance barrier therefore drains active memo data-path requests before route CAS, preventing an old plaintext read from refilling the legacy Redis namespace after a future ciphertext-only cutover purge.
 
-The route still defaults to `legacy_plaintext`. When HIGH memo runtime configuration is enabled, the request service now receives both the legacy repository and a standby encrypted repository backed by the encrypted MongoDB collection plus ciphertext-only Redis namespace. Repository selection remains exclusively driven by the admitted memo-route snapshot; there is no encrypted-to-plaintext fallback. Legacy and encrypted durable outboxes use separate reconcilers that acquire the same memo-access route lease and refuse to touch secondary state while their authoritative route is inactive.
+The route still defaults to `legacy_plaintext`. When HIGH memo runtime configuration is enabled, the request service now receives both the legacy repository and a standby encrypted repository backed by the encrypted MongoDB collection plus ciphertext-only Redis namespace. Repository selection remains exclusively driven by the admitted memo-route snapshot; there is no encrypted-to-plaintext fallback. Legacy and encrypted authoritative adapters use route-scoped reconcilers over the shared durable MongoDB projection-intent collection. A reconciler acquires the memo-access route lease before touching an intent and leaves it unacknowledged when its authoritative route is inactive. The final cutover requires this shared outbox to be empty before changing ownership.
 
 ## Required preconditions for a final production pass
 
@@ -44,7 +41,7 @@ The staged production configuration is explicit and remains disabled by default:
 
 The key-ring JSON may contain at most 32 versions and is capped at 64 KiB. Every key ARN must be a pinned KMS key ARN in the configured Region; KMS aliases, duplicate application aliases, duplicate KMS ARNs, and an active alias absent from the ring are rejected. The environment contains routing metadata only, never plaintext DEKs or other raw key material.
 
-`HighMemoStagingRuntimeHandle` consumes this configuration only for operator/migration composition. It pins the AWS SDK Region, uses the standard refreshable AWS credential provider chain, and runs `DescribeKey` preflight for every configured historical/current key before exposing the staging cryptography port. Normal server startup deliberately does not construct this runtime yet.
+`HighMemoStagingRuntimeHandle` pins the AWS SDK Region, uses the standard refreshable AWS credential provider chain, and runs `DescribeKey` preflight for every configured historical/current key. Server startup now constructs this runtime when MEMO-HIGH-1 is explicitly enabled and injects a standby encrypted repository, but the persisted memo route remains `legacy_plaintext` until an explicit operator cutover.
 
 This pipeline is **not** CDC or dual-write replication. Count checks reduce migration
 risk but do not make concurrent source writes safe.
@@ -94,6 +91,54 @@ If migration fails after staging reset, the operator releases maintenance when p
 returns failure. The partially rebuilt encrypted collection remains non-authoritative and may be
 discarded/rebuilt on the next attempt. A simultaneous migration failure and maintenance-release
 failure is reported as a combined fail-closed error and requires the maintenance recovery runbook.
+
+## Guarded encrypted-route cutover
+
+The final data-route activation is a separate operator step from staging and remains non-destructive to the plaintext authoritative MongoDB collection.
+
+Inspect the current shared routes first:
+
+```bash
+cargo run --locked --features aws-kms-memo,aws-kms-search --bin cutover_high_memo_route -- --status
+```
+
+Protected search must already be active. Record both route generations, verify all replicas are running the route-aware encrypted standby repository, and verify a recoverable plaintext authoritative backup.
+
+Apply:
+
+```bash
+cargo run --locked --features aws-kms-memo,aws-kms-search --bin cutover_high_memo_route -- \
+  --apply-encrypted \
+  --confirm-encrypted-cutover \
+  --confirm-all-replicas-encrypted-ready \
+  --confirm-plaintext-backup-verified \
+  --confirm-no-automatic-rollback \
+  --page-size 500 \
+  --cache-scan-count 1000 \
+  --expected-memo-route-generation <memo-generation> \
+  --expected-search-route-generation <search-generation>
+```
+
+Under one shared maintenance permit the command:
+
+1. completes KMS/key-ring preflight before freezing traffic,
+2. drains memo mutations, search queries, memo-access requests, and background reconciliation,
+3. requires the exact protected search-route generation,
+4. requires the exact legacy memo-route generation,
+5. requires the shared projection outbox to be empty,
+6. resets and fully rebuilds/verifies `memos_encrypted_v1`,
+7. requires the projection outbox to remain empty,
+8. purges exact legacy plaintext memo keys from Redis/Valkey and verifies no matching legacy memo keys remain,
+9. truncates the legacy plaintext Manticore `memos` projection and verifies an exact SQL count of zero,
+10. revalidates the maintenance permit plus both route snapshots,
+11. CAS-switches `legacy_plaintext -> encrypted`,
+12. rereads the memo/search routes and releases maintenance only when the exact encrypted target generation is proven.
+
+If the memo route is already `encrypted` at the exact expected generation, rerunning the command does not rebuild encrypted authoritative data from the now-potentially-stale plaintext source. It only re-purges the retired legacy Redis/Manticore plaintext secondaries under maintenance and verifies the route snapshots.
+
+There is intentionally **no automatic encrypted-to-plaintext rollback**. Once encrypted writes resume, the retained plaintext MongoDB source can diverge. Reverse synchronization/decryption-driven rollback must be designed separately before such a rollback can be supported.
+
+This cutover still does **not** delete the plaintext authoritative MongoDB collection. Irreversible plaintext retirement is a separate post-cutover/soak operation.
 
 ## Batch traversal
 
