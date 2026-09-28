@@ -8,9 +8,7 @@
 use std::sync::Arc;
 
 use crate::{
-    application::{
-        crypto::HighMemoCryptography, crypto_migration::HighMemoStagingCryptography,
-    },
+    application::{crypto::HighMemoCryptography, crypto_migration::HighMemoStagingCryptography},
     config::HighMemoCryptoConfig,
     error::{AppError, AppResult},
 };
