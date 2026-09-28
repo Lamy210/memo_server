@@ -664,6 +664,53 @@ mod tests {
         }
     }
 
+    struct FakeMemoAccessGuard {
+        route: HighMemoDataRoute,
+        fail_release: bool,
+        events: Arc<TestEvents>,
+    }
+
+    struct FakeMemoAccessPermit {
+        route: HighMemoDataRoute,
+        fail_release: bool,
+        events: Arc<TestEvents>,
+    }
+
+    #[async_trait::async_trait]
+    impl HighMemoAccessGuard for FakeMemoAccessGuard {
+        async fn acquire_access(&self) -> AppResult<Box<dyn HighMemoAccessPermit>> {
+            self.events.push("memo-access-acquire");
+            Ok(Box::new(FakeMemoAccessPermit {
+                route: self.route,
+                fail_release: self.fail_release,
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HighMemoAccessPermit for FakeMemoAccessPermit {
+        fn route_snapshot(
+            &self,
+        ) -> crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
+            crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
+                route: self.route,
+                generation: 4,
+            }
+        }
+
+        async fn release(self: Box<Self>) -> AppResult<()> {
+            self.events.push("memo-access-release");
+            if self.fail_release {
+                Err(AppError::ServiceUnavailable(
+                    "memo access lease release failed".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     struct FakeMutationGuard {
         events: Arc<TestEvents>,
         fail_release: bool,
@@ -749,6 +796,100 @@ mod tests {
             high,
             events,
         )
+    }
+
+    #[tokio::test]
+    async fn inactive_memo_route_leaves_outbox_and_secondary_state_untouched() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        let reconciler = reconciler.with_memo_route(
+            Arc::new(FakeMemoAccessGuard {
+                route: HighMemoDataRoute::Encrypted,
+                fail_release: false,
+                events: events.clone(),
+            }),
+            HighMemoDataRoute::LegacyPlaintext,
+        );
+
+        assert_eq!(
+            reconciler.reconcile_event(&event).await.unwrap(),
+            ReconcileOutcome::InactiveMemoRoute
+        );
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot(),
+            vec!["memo-access-acquire", "memo-access-release"]
+        );
+    }
+
+    #[tokio::test]
+    async fn matching_memo_route_releases_access_before_outbox_ack() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        let reconciler = reconciler.with_memo_route(
+            Arc::new(FakeMemoAccessGuard {
+                route: HighMemoDataRoute::Encrypted,
+                fail_release: false,
+                events: events.clone(),
+            }),
+            HighMemoDataRoute::Encrypted,
+        );
+
+        assert_eq!(
+            reconciler.reconcile_event(&event).await.unwrap(),
+            ReconcileOutcome::Completed
+        );
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "memo-access-acquire",
+                "guard-acquire",
+                "legacy-index",
+                "high-index",
+                "cache-delete",
+                "cache-set",
+                "guard-release",
+                "memo-access-release",
+                "ack"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn memo_access_release_failure_keeps_outbox_unacknowledged() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event =
+            ProjectionIntent::new(user_id, memo_id, ProjectionTarget::Version(memo.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        let reconciler = reconciler.with_memo_route(
+            Arc::new(FakeMemoAccessGuard {
+                route: HighMemoDataRoute::Encrypted,
+                fail_release: true,
+                events: events.clone(),
+            }),
+            HighMemoDataRoute::Encrypted,
+        );
+
+        assert!(matches!(
+            reconciler.reconcile_event(&event).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot().last().copied(),
+            Some("memo-access-release")
+        );
     }
 
     #[tokio::test]
