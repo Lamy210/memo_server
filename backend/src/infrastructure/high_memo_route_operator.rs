@@ -182,7 +182,6 @@ pub async fn run_encrypted_high_memo_cutover(
         .await;
     }
 
-    ensure_no_pending_projection_intents(source.as_ref()).await.map_err(|error| error)?;
     if let Err(error) = ensure_no_pending_projection_intents(source.as_ref()).await {
         return release_pre_switch(permit, error).await;
     }
