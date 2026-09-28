@@ -218,7 +218,10 @@ impl ProjectionReconciler {
         }
 
         let result = self.reconcile_event_before_ack(event).await;
-        Self::finish_memo_route_access(result, access).await?;
+        let outcome = Self::finish_memo_route_access(result, access).await?;
+        if outcome != ReconcileOutcome::Completed {
+            return Ok(outcome);
+        }
 
         // Ack only after all secondary work and both maintenance/access leases
         // have been released. Any release failure leaves the durable intent for
