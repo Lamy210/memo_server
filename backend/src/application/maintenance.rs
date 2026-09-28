@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 
 use crate::{
-    application::high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
+    application::{
+        high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
+        high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
+    },
     error::AppResult,
 };
 
@@ -41,6 +44,51 @@ impl MemoMutationPermit for UnrestrictedMemoMutationPermit {
 impl MemoMutationGuard for UnrestrictedMemoMutationGuard {
     async fn acquire_mutation(&self) -> AppResult<Box<dyn MemoMutationPermit>> {
         Ok(Box::new(UnrestrictedMemoMutationPermit))
+    }
+}
+
+/// Permit held while one memo request can observe or mutate authoritative memo data.
+///
+/// The permit carries the authoritative/cache route snapshot read atomically
+/// with lease admission. Future MEMO-HIGH-1 request-path routing must hold this
+/// permit across cache access, authoritative access, and any cache fill so a
+/// maintenance-held route cutover can drain legacy plaintext activity first.
+#[async_trait]
+pub trait HighMemoAccessPermit: Send + Sync {
+    fn route_snapshot(&self) -> HighMemoDataRouteSnapshot;
+    async fn release(self: Box<Self>) -> AppResult<()>;
+}
+
+/// Application boundary for memo data-path admission.
+#[async_trait]
+pub trait HighMemoAccessGuard: Send + Sync {
+    async fn acquire_access(&self) -> AppResult<Box<dyn HighMemoAccessPermit>>;
+}
+
+/// Normal mode before MEMO-HIGH-1 routing is enabled.
+#[derive(Default)]
+pub struct UnrestrictedHighMemoAccessGuard;
+
+struct UnrestrictedHighMemoAccessPermit;
+
+#[async_trait]
+impl HighMemoAccessPermit for UnrestrictedHighMemoAccessPermit {
+    fn route_snapshot(&self) -> HighMemoDataRouteSnapshot {
+        HighMemoDataRouteSnapshot {
+            route: HighMemoDataRoute::LegacyPlaintext,
+            generation: 0,
+        }
+    }
+
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl HighMemoAccessGuard for UnrestrictedHighMemoAccessGuard {
+    async fn acquire_access(&self) -> AppResult<Box<dyn HighMemoAccessPermit>> {
+        Ok(Box::new(UnrestrictedHighMemoAccessPermit))
     }
 }
 
