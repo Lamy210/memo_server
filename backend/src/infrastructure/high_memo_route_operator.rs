@@ -30,6 +30,36 @@ use super::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighMemoRouteCutoverApproval {
+    pub all_replicas_encrypted_ready: bool,
+    pub plaintext_backup_verified: bool,
+    pub no_automatic_rollback_accepted: bool,
+}
+
+impl HighMemoRouteCutoverApproval {
+    fn validate(self) -> AppResult<()> {
+        if !self.all_replicas_encrypted_ready {
+            return Err(AppError::ValidationError(
+                "MEMO-HIGH-1 cutover requires all replicas to have the encrypted standby repository and maintenance participation"
+                    .into(),
+            ));
+        }
+        if !self.plaintext_backup_verified {
+            return Err(AppError::ValidationError(
+                "MEMO-HIGH-1 cutover requires a verified plaintext authoritative backup".into(),
+            ));
+        }
+        if !self.no_automatic_rollback_accepted {
+            return Err(AppError::ValidationError(
+                "MEMO-HIGH-1 cutover requires explicit acceptance that encrypted writes have no automatic plaintext rollback"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HighMemoRouteCutoverReport {
     pub previous_memo_route: HighMemoDataRouteSnapshot,
     pub current_memo_route: HighMemoDataRouteSnapshot,
@@ -45,7 +75,9 @@ pub fn validate_high_memo_cutover_config(
     cache_scan_count: usize,
     expected_memo_generation: i64,
     expected_search_generation: i64,
+    approval: HighMemoRouteCutoverApproval,
 ) -> AppResult<()> {
+    approval.validate()?;
     validate_page_size(page_size)?;
     validate_cache_scan_count(cache_scan_count)?;
     validate_generation("memo", expected_memo_generation)?;
@@ -100,6 +132,7 @@ pub async fn run_encrypted_high_memo_cutover(
     cache_scan_count: usize,
     expected_memo_generation: i64,
     expected_search_generation: i64,
+    approval: HighMemoRouteCutoverApproval,
 ) -> AppResult<HighMemoRouteCutoverReport> {
     validate_high_memo_cutover_config(
         config,
@@ -107,6 +140,7 @@ pub async fn run_encrypted_high_memo_cutover(
         cache_scan_count,
         expected_memo_generation,
         expected_search_generation,
+        approval,
     )?;
 
     // Complete all KMS/key-ring preflight before traffic is frozen.
@@ -473,6 +507,14 @@ mod tests {
     use crate::config::{AuthConfig, HighSearchShadowConfig};
     use std::collections::BTreeMap;
 
+    fn approved() -> HighMemoRouteCutoverApproval {
+        HighMemoRouteCutoverApproval {
+            all_replicas_encrypted_ready: true,
+            plaintext_backup_verified: true,
+            no_automatic_rollback_accepted: true,
+        }
+    }
+
     fn configured() -> AppConfig {
         AppConfig {
             authoritative_backend: AuthoritativeBackend::MongoDb,
@@ -511,10 +553,25 @@ mod tests {
 
     #[test]
     fn cutover_rejects_invalid_budgets_before_network_access() {
-        assert!(validate_high_memo_cutover_config(&configured(), 0, 100, 0, 0).is_err());
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 0, 0, 0).is_err());
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, -1, 0).is_err());
-        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, -1).is_err());
+        assert!(validate_high_memo_cutover_config(&configured(), 0, 100, 0, 0, approved()).is_err());
+        assert!(validate_high_memo_cutover_config(&configured(), 100, 0, 0, 0, approved()).is_err());
+        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, -1, 0, approved()).is_err());
+        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, -1, approved()).is_err());
+    }
+
+    #[test]
+    fn cutover_requires_every_operator_attestation() {
+        let mut approval = approved();
+        approval.all_replicas_encrypted_ready = false;
+        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err());
+
+        let mut approval = approved();
+        approval.plaintext_backup_verified = false;
+        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err());
+
+        let mut approval = approved();
+        approval.no_automatic_rollback_accepted = false;
+        assert!(validate_high_memo_cutover_config(&configured(), 100, 100, 0, 0, approval).is_err());
     }
 
     #[test]
