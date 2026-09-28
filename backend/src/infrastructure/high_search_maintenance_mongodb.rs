@@ -14,11 +14,15 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
+        high_memo_routing::{
+            HighMemoDataRoute, HighMemoDataRouteReader, HighMemoDataRouteSnapshot,
+        },
         high_search_routing::{
             HighSearchQueryRoute, HighSearchQueryRouteReader, HighSearchQueryRouteSnapshot,
         },
         maintenance::{
-            HighSearchQueryGuard, HighSearchQueryPermit, MemoMutationGuard, MemoMutationPermit,
+            HighMemoAccessGuard, HighMemoAccessPermit, HighSearchQueryGuard, HighSearchQueryPermit,
+            MemoMutationGuard, MemoMutationPermit,
         },
     },
     error::{AppError, AppResult},
@@ -27,11 +31,14 @@ use crate::{
 const STATE_COLLECTION: &str = "high_search_maintenance_state";
 const WRITER_LEASES_COLLECTION: &str = "high_search_writer_leases";
 const QUERY_LEASES_COLLECTION: &str = "high_search_query_leases";
+const MEMO_ACCESS_LEASES_COLLECTION: &str = "high_memo_access_leases";
 const STATE_ID: &str = "global";
 const MODE_OPEN: &str = "open";
 const MODE_MAINTENANCE: &str = "maintenance";
 const QUERY_ROUTE_FIELD: &str = "query_route";
 const QUERY_ROUTE_GENERATION_FIELD: &str = "query_route_generation";
+const MEMO_ROUTE_FIELD: &str = "memo_route";
+const MEMO_ROUTE_GENERATION_FIELD: &str = "memo_route_generation";
 const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
@@ -42,6 +49,9 @@ struct RecoverySnapshotMismatch;
 
 #[derive(Debug)]
 struct InvalidQueryRouteState;
+
+#[derive(Debug)]
+struct InvalidMemoRouteState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighSearchMaintenanceMode {
@@ -65,8 +75,11 @@ pub struct HighSearchMaintenanceStatus {
     writer_epoch: i64,
     query_route: HighSearchQueryRoute,
     query_route_generation: i64,
+    memo_route: HighMemoDataRoute,
+    memo_route_generation: i64,
     active_writer_leases: u64,
     active_query_leases: u64,
+    active_memo_access_leases: u64,
 }
 
 impl HighSearchMaintenanceStatus {
@@ -90,12 +103,24 @@ impl HighSearchMaintenanceStatus {
         self.query_route_generation
     }
 
+    pub fn memo_route(&self) -> HighMemoDataRoute {
+        self.memo_route
+    }
+
+    pub fn memo_route_generation(&self) -> i64 {
+        self.memo_route_generation
+    }
+
     pub fn active_writer_leases(&self) -> u64 {
         self.active_writer_leases
     }
 
     pub fn active_query_leases(&self) -> u64 {
         self.active_query_leases
+    }
+
+    pub fn active_memo_access_leases(&self) -> u64 {
+        self.active_memo_access_leases
     }
 }
 
@@ -114,6 +139,7 @@ struct RecoveryContext {
     state: Collection<Document>,
     writers: Collection<Document>,
     queries: Collection<Document>,
+    memo_access: Collection<Document>,
     expected: HighSearchMaintenanceStatus,
 }
 
@@ -128,6 +154,7 @@ pub struct MongoHighSearchMaintenanceRecovery {
     state: Collection<Document>,
     writers: Collection<Document>,
     queries: Collection<Document>,
+    memo_access: Collection<Document>,
 }
 
 impl MongoHighSearchMaintenanceRecovery {
@@ -155,6 +182,7 @@ impl MongoHighSearchMaintenanceRecovery {
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
             queries: database.collection(QUERY_LEASES_COLLECTION),
+            memo_access: database.collection(MEMO_ACCESS_LEASES_COLLECTION),
         }
     }
 
