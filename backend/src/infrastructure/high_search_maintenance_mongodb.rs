@@ -147,7 +147,7 @@ struct RecoveryContext {
 ///
 /// This type deliberately does not perform time-based lease expiry. Callers must
 /// inspect the current state, stop all application replicas, and recover only
-/// from the exact observed writer epoch / holder token snapshot.
+/// from the exact observed activity epoch, search route, memo route, and holder snapshot.
 #[derive(Clone)]
 pub struct MongoHighSearchMaintenanceRecovery {
     client: Client,
@@ -280,8 +280,9 @@ impl MongoHighSearchMaintenanceRecovery {
     /// Clear fail-closed writer leases and reopen the maintenance barrier from
     /// one exact operator-observed snapshot.
     ///
-    /// The transaction matches mode, writer epoch, and maintenance holder token
-    /// (when present). Any intervening writer acquisition or barrier ownership
+    /// The transaction matches mode, activity epoch, search route/generation,
+    /// memo route/generation, and maintenance holder token (when present).
+    /// Any intervening activity admission, route change, or barrier ownership
     /// change aborts recovery instead of clearing state from a newer generation.
     pub async fn recover_stale_state(
         &self,
