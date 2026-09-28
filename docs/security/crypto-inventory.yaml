@@ -80,7 +80,18 @@ assets:
           maintenance_drain: writers_protected_queries_and_memo_access
           route_change_scope: live_offline_window_permit_only
           route_change_cas: memo_route_and_generation
-          multi_replica_cutover_boundary: staged
+          multi_replica_cutover_boundary: guarded_operator_wired
+          cutover_operator: cutover_high_memo_route
+          cutover_default_mode: status
+          cutover_required_search_route: protected
+          cutover_exact_search_generation: required
+          cutover_exact_memo_generation: required
+          cutover_fresh_encrypted_rebuild: required
+          cutover_shared_outbox_empty: required_before_and_after_rebuild
+          cutover_plaintext_backup_confirmation: required
+          cutover_all_replicas_encrypted_ready_confirmation: required
+          cutover_no_automatic_rollback_confirmation: required
+          encrypted_to_plaintext_automatic_rollback: unsupported
           route_aware_repository_selection: wired
           legacy_repository: wired
           encrypted_repository: startup_injected_when_high_memo_enabled
@@ -103,7 +114,7 @@ assets:
           cache_replace_failure: outbox_retry_without_old_fast_path_value
           decrypted_identity_revalidation: required
           request_path_wired: standby_encrypted_repository_only
-          legacy_plaintext_cache_purge: primitive_staged
+          legacy_plaintext_cache_purge: integrated_into_guarded_data_route_cutover
           legacy_plaintext_cache_sweep:
             redis_scan_match: memo:*
             deletion_filter: exact_memo_owner_uuid_memo_uuid_shape
@@ -111,8 +122,8 @@ assets:
             high_namespace: memo:high:v1
             scan_count_range: 1..=10000
             deletion_command: UNLINK
-            operator_command: not_exposed
-            safe_execution_requirement: future_cache_mode_cutover_maintenance_window
+            operator_command: cutover_high_memo_route_integrated_only
+            safe_execution_requirement: shared_maintenance_window_and_protected_search_route
         guarded_migration:
           command: migrate_high_memo_staged
           default_mode: plan
@@ -141,6 +152,20 @@ assets:
             - after_staging_reset
             - after_full_verification
           failure_behavior: release_maintenance_and_keep_staging_non_authoritative
+        guarded_cutover:
+          command: cutover_high_memo_route
+          destructive_plaintext_authoritative_delete: false
+          kms_preflight_before_freeze: true
+          projection_outbox_collection: shared_projection_intents
+          projection_outbox_must_be_empty: true
+          staging_rebuild_under_same_permit: true
+          legacy_cache_purge_under_same_permit: true
+          legacy_search_purge_under_same_permit: true
+          legacy_search_exact_count_gate: sql_count_star
+          memo_route_cas: legacy_plaintext_to_encrypted
+          ambiguous_route_switch: maintenance_barrier_remains_closed
+          already_encrypted_rerun: cleanup_only_no_plaintext_rebuild
+          plaintext_authoritative_retirement: pending_separate_irreversible_operation
         runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto
