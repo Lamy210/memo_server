@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use crate::{
     application::{
+        crypto_migration_batch::{
+            validate_page, validate_page_size, PlaintextMemoMigrationSource,
+        },
         crypto_search_projection::HighSearchProjectionMigrationAdmin,
         crypto_search_reindex::{
             HighSearchReindexRunner, HighSearchReindexService, HighSearchReindexStats,
@@ -10,6 +13,7 @@ use crate::{
             HighSearchKeyCacheControl, HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit,
             HighSearchRotationReady, HighSearchRotationService,
         },
+        high_memo_routing::HighMemoDataRoute,
         high_search_routing::{
             HighSearchQueryRoute, HighSearchQueryRouteReader, HighSearchQueryRouteSnapshot,
         },
@@ -23,7 +27,10 @@ use super::{
     high_search_cutover_approval::HighSearchCutoverApproval,
     high_search_maintenance_mongodb::MongoHighSearchMaintenanceGuard,
     high_search_reindex_operator::ResettingHighSearchReindexRunner,
-    persistence::{manticore_high::HighManticoreClient, mongodb::MongoDbAuthoritativeStore},
+    persistence::{
+        manticore::ManticoreClient, manticore_high::HighManticoreClient,
+        mongodb::MongoDbAuthoritativeStore,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +38,14 @@ pub struct HighSearchRouteChangeReport {
     pub previous: HighSearchQueryRouteSnapshot,
     pub current: HighSearchQueryRouteSnapshot,
     pub reindex: Option<HighSearchReindexStats>,
+    pub legacy_rebuild: Option<LegacySearchRebuildStats>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LegacySearchRebuildStats {
+    pub source_count: u64,
+    pub projected_visited: u64,
+    pub projection_count: u64,
 }
 
 pub fn validate_protected_high_search_cutover(
@@ -40,16 +55,18 @@ pub fn validate_protected_high_search_cutover(
     approval: &HighSearchCutoverApproval,
 ) -> AppResult<()> {
     validate_route_topology(config)?;
-    crate::application::crypto_migration_batch::validate_page_size(page_size)?;
+    validate_page_size(page_size)?;
     validate_expected_generation(expected_generation)?;
     approval.validate_against_config(&config.high_search)
 }
 
 pub fn validate_legacy_high_search_rollback(
     config: &AppConfig,
+    page_size: usize,
     expected_generation: i64,
 ) -> AppResult<()> {
     validate_route_topology(config)?;
+    validate_page_size(page_size)?;
     validate_expected_generation(expected_generation)
 }
 
@@ -120,18 +137,22 @@ pub async fn run_protected_high_search_cutover(
         previous,
         current,
         reindex: Some(stats),
+        legacy_rebuild: None,
     })
 }
 
 pub async fn run_legacy_high_search_rollback(
     config: &AppConfig,
+    page_size: usize,
     expected_generation: i64,
 ) -> AppResult<HighSearchRouteChangeReport> {
-    validate_legacy_high_search_rollback(config, expected_generation)?;
+    validate_legacy_high_search_rollback(config, page_size, expected_generation)?;
 
-    let source =
-        MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?;
+    let source = Arc::new(
+        MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?,
+    );
     let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
+    let legacy_projection = Arc::new(ManticoreClient::new(&config.search_uri)?);
     let permit = guard.acquire_offline_window().await?;
     let previous = permit.current_query_route().await?;
 
@@ -146,22 +167,134 @@ pub async fn run_legacy_high_search_rollback(
         .await;
     }
 
-    if previous.route == HighSearchQueryRoute::Legacy {
-        permit.release().await?;
-        return Ok(HighSearchRouteChangeReport {
-            previous,
-            current: previous,
-            reindex: None,
-        });
+    let memo_route = match permit.current_memo_route().await {
+        Ok(route) => route,
+        Err(error) => return release_pre_switch(permit, error).await,
+    };
+    if memo_route.route != HighMemoDataRoute::LegacyPlaintext {
+        return release_pre_switch(
+            permit,
+            AppError::Conflict(format!(
+                "HIGH search legacy rollback requires MEMO route legacy_plaintext; observed {} generation {}",
+                memo_route.route, memo_route.generation
+            )),
+        )
+        .await;
     }
 
-    let current =
-        switch_permit_route_fail_closed(permit, previous, HighSearchQueryRoute::Legacy).await?;
+    let source_for_rebuild: Arc<dyn PlaintextMemoMigrationSource> = source;
+    let rebuild = match rebuild_legacy_search_projection(
+        source_for_rebuild,
+        legacy_projection,
+        page_size,
+        permit.as_ref(),
+    )
+    .await
+    {
+        Ok(stats) => stats,
+        Err(error) => return release_pre_switch(permit, error).await,
+    };
+
+    let observed_route = match permit.current_query_route().await {
+        Ok(route) => route,
+        Err(error) => return release_pre_switch(permit, error).await,
+    };
+    if observed_route != previous {
+        return release_pre_switch(
+            permit,
+            AppError::Conflict(format!(
+                "HIGH search route changed during legacy rollback rebuild: expected {} generation {}, observed {} generation {}",
+                previous.route, previous.generation, observed_route.route, observed_route.generation
+            )),
+        )
+        .await;
+    }
+    let observed_memo_route = match permit.current_memo_route().await {
+        Ok(route) => route,
+        Err(error) => return release_pre_switch(permit, error).await,
+    };
+    if observed_memo_route != memo_route {
+        return release_pre_switch(
+            permit,
+            AppError::Conflict(
+                "MEMO data route changed during HIGH search legacy rollback rebuild".into(),
+            ),
+        )
+        .await;
+    }
+
+    let current = if previous.route == HighSearchQueryRoute::Legacy {
+        permit.release().await?;
+        previous
+    } else {
+        switch_permit_route_fail_closed(permit, previous, HighSearchQueryRoute::Legacy).await?
+    };
 
     Ok(HighSearchRouteChangeReport {
         previous,
         current,
         reindex: None,
+        legacy_rebuild: Some(rebuild),
+    })
+}
+
+async fn rebuild_legacy_search_projection(
+    source: Arc<dyn PlaintextMemoMigrationSource>,
+    projection: Arc<ManticoreClient>,
+    page_size: usize,
+    permit: &dyn HighSearchOfflineWindowPermit,
+) -> AppResult<LegacySearchRebuildStats> {
+    validate_page_size(page_size)?;
+    permit.assert_still_enforced().await?;
+
+    let source_count_before = source.count_source_memos().await?;
+    projection.reset_legacy_projection().await?;
+    if projection.count_legacy_documents().await? != 0 {
+        return Err(AppError::Conflict(
+            "legacy plaintext search projection reset did not reach zero documents".into(),
+        ));
+    }
+
+    let mut cursor = None;
+    let mut projected_visited = 0_u64;
+    loop {
+        let page = source.page_source_memos(cursor, page_size).await?;
+        if page.is_empty() {
+            break;
+        }
+        validate_page(&page, cursor, page_size)?;
+
+        for memo in &page {
+            projection.index_memo(memo).await?;
+            projected_visited += 1;
+        }
+        cursor = page.last().map(|memo| memo.id);
+    }
+
+    let source_count_after = source.count_source_memos().await?;
+    if source_count_before != source_count_after {
+        return Err(AppError::Conflict(format!(
+            "plaintext authoritative memo count changed during legacy search rebuild: before={source_count_before} after={source_count_after}"
+        )));
+    }
+    if projected_visited != source_count_after {
+        return Err(AppError::Conflict(format!(
+            "legacy search rebuild visited {projected_visited} memo(s) but plaintext authoritative source contains {source_count_after}"
+        )));
+    }
+
+    let projection_count = projection.count_legacy_documents().await?;
+    if projection_count != source_count_after {
+        return Err(AppError::Conflict(format!(
+            "legacy search rebuild convergence failed: source={source_count_after} projection={projection_count}"
+        )));
+    }
+
+    permit.assert_still_enforced().await?;
+    Ok(LegacySearchRebuildStats {
+        source_count: source_count_after,
+        projected_visited,
+        projection_count,
     })
 }
 
@@ -346,7 +479,7 @@ mod tests {
     #[test]
     fn route_operator_rejects_disabled_runtime_before_network_access() {
         assert!(matches!(
-            validate_legacy_high_search_rollback(&disabled_config(), 0),
+            validate_legacy_high_search_rollback(&disabled_config(), 100, 0),
             Err(AppError::ServiceUnavailable(_))
         ));
     }
