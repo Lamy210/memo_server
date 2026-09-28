@@ -240,6 +240,29 @@ impl ManticoreClient {
         Ok(())
     }
 
+    /// Reset the legacy plaintext search projection while the caller holds the
+    /// shared offline maintenance window. The table schema is preserved.
+    pub(crate) async fn reset_legacy_projection(&self) -> AppResult<()> {
+        self.ensure_table().await?;
+        self.execute_raw_sql("TRUNCATE TABLE memos", "legacy projection reset")
+            .await
+    }
+
+    pub(crate) async fn count_legacy_documents(&self) -> AppResult<u64> {
+        self.ensure_table().await?;
+        let body = json!({
+            "table": TABLE_NAME,
+            "query": { "match_all": {} },
+            "limit": 0
+        });
+        let result = self.post_json("search", &body).await?;
+        result["hits"]["total"].as_u64().ok_or_else(|| {
+            AppError::DatabaseError(
+                "Invalid Manticore legacy projection count response".into(),
+            )
+        })
+    }
+
     pub async fn health_check(&self) -> AppResult<bool> {
         self.execute_raw_sql("SELECT 1", "health check").await?;
         Ok(true)
@@ -314,6 +337,32 @@ impl HealthProbe for ManticoreClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires a local Manticore Search instance"]
+    async fn legacy_projection_reset_preserves_table_and_reaches_zero_documents() {
+        let uri = std::env::var("MANTICORE_TEST_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:9308".to_string());
+        let client = ManticoreClient::new(&uri).unwrap();
+        client.reset_legacy_projection().await.unwrap();
+
+        let owner = Uuid::new_v4();
+        let mut first = Memo::new("first".into(), "one".into(), Vec::new(), owner);
+        first.id = Uuid::new_v4();
+        let mut second = Memo::new("second".into(), "two".into(), Vec::new(), owner);
+        second.id = Uuid::new_v4();
+
+        client.index_memo(&first).await.unwrap();
+        client.index_memo(&second).await.unwrap();
+        assert_eq!(client.count_legacy_documents().await.unwrap(), 2);
+
+        client.reset_legacy_projection().await.unwrap();
+        assert_eq!(client.count_legacy_documents().await.unwrap(), 0);
+
+        client.index_memo(&first).await.unwrap();
+        assert_eq!(client.count_legacy_documents().await.unwrap(), 1);
+        client.reset_legacy_projection().await.unwrap();
+    }
 
     #[test]
     fn tag_tokens_are_unambiguous_ascii_words() {
