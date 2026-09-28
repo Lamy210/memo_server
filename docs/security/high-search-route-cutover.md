@@ -106,7 +106,19 @@ The command performs a fresh protected projection reset/reindex while the route 
 
 ## Rollback
 
-Rollback deliberately does not require the cutover approval artifact. It must remain available when protected dependencies are unhealthy.
+Rollback deliberately does not require the cutover approval artifact. It must remain available when protected dependencies are unhealthy, but it must not route traffic to a stale plaintext projection.
+
+While the protected route is active, background reconciliation no longer writes to the legacy plaintext Manticore table. Rollback therefore runs a bounded full legacy rebuild under the same maintenance barrier before switching the route:
+
+1. require the operator-observed search route generation,
+2. drain writers, queries, and memo data-path requests,
+3. require the MEMO data route to still be `legacy_plaintext`,
+4. `TRUNCATE TABLE memos` while traffic remains drained,
+5. rebuild every row from the plaintext authoritative MongoDB source,
+6. verify source count, visited count, and legacy projection count converge,
+7. revalidate search and memo route snapshots,
+8. CAS-switch `protected -> legacy`,
+9. release the maintenance barrier.
 
 Inspect the current generation first, then run:
 
@@ -114,6 +126,7 @@ Inspect the current generation first, then run:
 cargo run --locked --bin cutover_high_search_route -- \
   --apply-legacy \
   --confirm-legacy-rollback \
+  --page-size 500 \
   --expected-route-generation 8
 ```
 
@@ -122,11 +135,16 @@ Expected transition:
 ```text
 rollback.previous.route=protected
 rollback.previous.generation=8
+rollback.rebuild.source_count=...
+rollback.rebuild.projected_visited=...
+rollback.rebuild.projection_count=...
 rollback.current.route=legacy
 rollback.current.generation=9
 ```
 
-If the route is already `legacy` at the exact expected generation, rollback is an idempotent no-op.
+If the search route is already `legacy` at the exact expected generation, the explicit rollback command still rebuilds and verifies the legacy projection, then leaves the route generation unchanged.
+
+Rollback is intentionally rejected when the MEMO data route is `encrypted`. Once encrypted authoritative data can diverge from the plaintext MongoDB source, rebuilding legacy search from that plaintext source would be unsafe; reverse synchronization/decryption-driven rollback must be implemented before that state can support legacy search rollback.
 
 ## Ambiguous switch outcome
 
