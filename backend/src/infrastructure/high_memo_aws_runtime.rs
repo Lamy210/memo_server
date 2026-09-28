@@ -1,13 +1,16 @@
-// Operator/migration-only composition for staged MEMO-HIGH-1 cryptography.
+// Shared composition boundary for staged MEMO-HIGH-1 cryptography.
 //
-// This module intentionally does not participate in normal application startup.
-// Building a staging runtime must never make encrypted storage authoritative.
+// Building this runtime never changes the persisted memo route. Operator
+// migration uses the staging trait while application startup may inject the
+// request-path trait behind the still-legacy-by-default route boundary.
 #![allow(dead_code)]
 
 use std::sync::Arc;
 
 use crate::{
-    application::crypto_migration::HighMemoStagingCryptography,
+    application::{
+        crypto::HighMemoCryptography, crypto_migration::HighMemoStagingCryptography,
+    },
     config::HighMemoCryptoConfig,
     error::{AppError, AppResult},
 };
@@ -16,31 +19,45 @@ use crate::{
 use super::{crypto::RingHighMemoCryptography, crypto_keys_aws_kms::AwsKmsDataKeyProvider};
 
 pub(crate) struct HighMemoStagingRuntimeHandle {
-    cryptography: Option<Arc<dyn HighMemoStagingCryptography>>,
+    staging_cryptography: Option<Arc<dyn HighMemoStagingCryptography>>,
+    request_cryptography: Option<Arc<dyn HighMemoCryptography>>,
 }
 
 impl HighMemoStagingRuntimeHandle {
     pub(crate) async fn build(config: &HighMemoCryptoConfig) -> AppResult<Self> {
         match config {
-            HighMemoCryptoConfig::Disabled => Ok(Self { cryptography: None }),
+            HighMemoCryptoConfig::Disabled => Ok(Self {
+                staging_cryptography: None,
+                request_cryptography: None,
+            }),
             HighMemoCryptoConfig::AwsKms { .. } => {
-                let cryptography = build_aws_kms_staging_cryptography(config).await?;
+                let (staging_cryptography, request_cryptography) =
+                    build_aws_kms_cryptography(config).await?;
                 Ok(Self {
-                    cryptography: Some(cryptography),
+                    staging_cryptography: Some(staging_cryptography),
+                    request_cryptography: Some(request_cryptography),
                 })
             }
         }
     }
 
+    /// Compatibility accessor for migration/operator code.
     pub(crate) fn cryptography(&self) -> Option<Arc<dyn HighMemoStagingCryptography>> {
-        self.cryptography.clone()
+        self.staging_cryptography.clone()
+    }
+
+    pub(crate) fn request_cryptography(&self) -> Option<Arc<dyn HighMemoCryptography>> {
+        self.request_cryptography.clone()
     }
 }
 
 #[cfg(feature = "aws-kms-memo")]
-async fn build_aws_kms_staging_cryptography(
+async fn build_aws_kms_cryptography(
     config: &HighMemoCryptoConfig,
-) -> AppResult<Arc<dyn HighMemoStagingCryptography>> {
+) -> AppResult<(
+    Arc<dyn HighMemoStagingCryptography>,
+    Arc<dyn HighMemoCryptography>,
+)> {
     use aws_config::BehaviorVersion;
     use aws_sdk_kms::config::Region;
 
@@ -74,15 +91,19 @@ async fn build_aws_kms_staging_cryptography(
         AwsKmsDataKeyProvider::new(kms, active_key_version.clone(), key_versions.clone())?;
     provider.verify_key_configuration().await?;
 
-    let cryptography: Arc<dyn HighMemoStagingCryptography> =
-        Arc::new(RingHighMemoCryptography::new(Arc::new(provider)));
-    Ok(cryptography)
+    let cryptography = Arc::new(RingHighMemoCryptography::new(Arc::new(provider)));
+    let staging: Arc<dyn HighMemoStagingCryptography> = cryptography.clone();
+    let request: Arc<dyn HighMemoCryptography> = cryptography;
+    Ok((staging, request))
 }
 
 #[cfg(not(feature = "aws-kms-memo"))]
-async fn build_aws_kms_staging_cryptography(
+async fn build_aws_kms_cryptography(
     _config: &HighMemoCryptoConfig,
-) -> AppResult<Arc<dyn HighMemoStagingCryptography>> {
+) -> AppResult<(
+    Arc<dyn HighMemoStagingCryptography>,
+    Arc<dyn HighMemoCryptography>,
+)> {
     Err(AppError::ServiceUnavailable(
         "MEMO-HIGH-1 AWS KMS staging runtime requires feature `aws-kms-memo`".into(),
     ))
@@ -99,5 +120,6 @@ mod tests {
             .unwrap();
 
         assert!(handle.cryptography().is_none());
+        assert!(handle.request_cryptography().is_none());
     }
 }
