@@ -6,6 +6,7 @@ use crate::{
     application::{
         crypto_migration_batch::validate_page_size,
         crypto_search_reindex::{HighSearchReindexRunner, HighSearchReindexStats},
+        high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
     },
     error::{AppError, AppResult},
@@ -25,6 +26,12 @@ pub trait HighSearchOfflineWindowPermit: Send + Sync {
         expected: HighSearchQueryRouteSnapshot,
         target: HighSearchQueryRoute,
     ) -> AppResult<HighSearchQueryRouteSnapshot>;
+    async fn current_memo_route(&self) -> AppResult<HighMemoDataRouteSnapshot>;
+    async fn switch_memo_route(
+        &self,
+        expected: HighMemoDataRouteSnapshot,
+        target: HighMemoDataRoute,
+    ) -> AppResult<HighMemoDataRouteSnapshot>;
     async fn release(self: Box<Self>) -> AppResult<()>;
 }
 
@@ -333,6 +340,28 @@ mod tests {
             Ok(HighSearchQueryRouteSnapshot {
                 route: target,
                 generation: expected.generation + 1,
+            })
+        }
+
+        async fn current_memo_route(&self) -> AppResult<HighMemoDataRouteSnapshot> {
+            Ok(HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::LegacyPlaintext,
+                generation: 0,
+            })
+        }
+
+        async fn switch_memo_route(
+            &self,
+            expected: HighMemoDataRouteSnapshot,
+            target: HighMemoDataRoute,
+        ) -> AppResult<HighMemoDataRouteSnapshot> {
+            Ok(HighMemoDataRouteSnapshot {
+                route: target,
+                generation: if target == expected.route {
+                    expected.generation
+                } else {
+                    expected.generation + 1
+                },
             })
         }
 
