@@ -1,7 +1,10 @@
 use std::{env, process::ExitCode};
 
 use memo_app_backend::{
-    application::high_search_routing::HighSearchQueryRoute,
+    application::{
+        high_memo_routing::HighMemoDataRoute,
+        high_search_routing::HighSearchQueryRoute,
+    },
     infrastructure::high_search_maintenance_mongodb::{
         HighSearchMaintenanceMode, MongoHighSearchMaintenanceRecovery,
     },
@@ -9,7 +12,7 @@ use memo_app_backend::{
 
 const USAGE: &str = "usage:
   recover_high_search_maintenance [--status]
-  recover_high_search_maintenance --apply --confirm-app-stopped --expected-writer-epoch <epoch> --expected-query-route <legacy|protected> --expected-query-route-generation <generation> [--expected-holder-token <token>]";
+  recover_high_search_maintenance --apply --confirm-app-stopped --expected-writer-epoch <epoch> --expected-query-route <legacy|protected> --expected-query-route-generation <generation> --expected-memo-route <legacy_plaintext|encrypted> --expected-memo-route-generation <generation> [--expected-holder-token <token>]";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -18,6 +21,8 @@ enum Command {
         expected_writer_epoch: i64,
         expected_query_route: HighSearchQueryRoute,
         expected_query_route_generation: i64,
+        expected_memo_route: HighMemoDataRoute,
+        expected_memo_route_generation: i64,
         expected_holder_token: Option<String>,
     },
 }
@@ -46,6 +51,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         expected_writer_epoch,
         expected_query_route,
         expected_query_route_generation,
+        expected_memo_route,
+        expected_memo_route_generation,
         expected_holder_token,
     } = command
     else {
@@ -74,6 +81,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
+    if status.memo_route() != expected_memo_route {
+        return Err(format!(
+            "memo route changed: expected {expected_memo_route}, observed {}; inspect again",
+            status.memo_route()
+        )
+        .into());
+    }
+    if status.memo_route_generation() != expected_memo_route_generation {
+        return Err(format!(
+            "memo route generation changed: expected {expected_memo_route_generation}, observed {}; inspect again",
+            status.memo_route_generation()
+        )
+        .into());
+    }
+
     match status.mode() {
         HighSearchMaintenanceMode::Open => {
             if expected_holder_token.is_some() {
@@ -82,9 +104,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .into(),
                 );
             }
-            if status.active_writer_leases() == 0 && status.active_query_leases() == 0 {
+            if status.active_writer_leases() == 0
+                && status.active_query_leases() == 0
+                && status.active_memo_access_leases() == 0
+            {
                 return Err(
-                    "nothing to recover: gate is open and no writer or protected query leases exist"
+                    "nothing to recover: gate is open and no writer, protected query, or memo-access leases exist"
                         .into(),
                 );
             }
@@ -116,6 +141,8 @@ fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error
     let mut expected_writer_epoch = None;
     let mut expected_query_route = None;
     let mut expected_query_route_generation = None;
+    let mut expected_memo_route = None;
+    let mut expected_memo_route_generation = None;
     let mut expected_holder_token = None;
     let mut index = 0;
 
@@ -151,6 +178,24 @@ fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error
                 expected_query_route_generation = Some(generation);
                 index += 2;
             }
+            "--expected-memo-route" => {
+                let value = args.get(index + 1).ok_or(USAGE)?;
+                expected_memo_route = Some(
+                    HighMemoDataRoute::from_persisted_str(value).ok_or(
+                        "expected memo route must be `legacy_plaintext` or `encrypted`",
+                    )?,
+                );
+                index += 2;
+            }
+            "--expected-memo-route-generation" => {
+                let value = args.get(index + 1).ok_or(USAGE)?;
+                let generation = value.parse::<i64>()?;
+                if generation < 0 {
+                    return Err("expected memo route generation must be non-negative".into());
+                }
+                expected_memo_route_generation = Some(generation);
+                index += 2;
+            }
             "--expected-holder-token" => {
                 let value = args.get(index + 1).ok_or(USAGE)?;
                 if value.trim().is_empty() {
@@ -175,11 +220,17 @@ fn parse_command(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error
         expected_query_route.ok_or("--expected-query-route is required for recovery")?;
     let expected_query_route_generation = expected_query_route_generation
         .ok_or("--expected-query-route-generation is required for recovery")?;
+    let expected_memo_route =
+        expected_memo_route.ok_or("--expected-memo-route is required for recovery")?;
+    let expected_memo_route_generation = expected_memo_route_generation
+        .ok_or("--expected-memo-route-generation is required for recovery")?;
 
     Ok(Command::Apply {
         expected_writer_epoch,
         expected_query_route,
         expected_query_route_generation,
+        expected_memo_route,
+        expected_memo_route_generation,
         expected_holder_token,
     })
 }
@@ -203,6 +254,11 @@ fn print_status(
         "{label}.query_route_generation={}",
         status.query_route_generation()
     );
+    println!("{label}.memo_route={}", status.memo_route());
+    println!(
+        "{label}.memo_route_generation={}",
+        status.memo_route_generation()
+    );
     println!(
         "{label}.active_writer_leases={}",
         status.active_writer_leases()
@@ -210,6 +266,10 @@ fn print_status(
     println!(
         "{label}.active_query_leases={}",
         status.active_query_leases()
+    );
+    println!(
+        "{label}.active_memo_access_leases={}",
+        status.active_memo_access_leases()
     );
     println!(
         "{label}.holder_token={}",
@@ -267,6 +327,10 @@ mod tests {
                 "protected".to_string(),
                 "--expected-query-route-generation".to_string(),
                 "3".to_string(),
+                "--expected-memo-route".to_string(),
+                "encrypted".to_string(),
+                "--expected-memo-route-generation".to_string(),
+                "5".to_string(),
                 "--expected-holder-token".to_string(),
                 "holder".to_string(),
             ])
@@ -275,6 +339,8 @@ mod tests {
                 expected_writer_epoch: 7,
                 expected_query_route: HighSearchQueryRoute::Protected,
                 expected_query_route_generation: 3,
+                expected_memo_route: HighMemoDataRoute::Encrypted,
+                expected_memo_route_generation: 5,
                 expected_holder_token: Some("holder".to_string()),
             }
         );
