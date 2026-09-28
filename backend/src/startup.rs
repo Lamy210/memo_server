@@ -11,10 +11,15 @@ use crate::{
         health::HealthService, high_search_shadow::HighSearchShadowObserver,
         memo::service::MemoService,
     },
-    config::{AppConfig, HighSearchShadowConfig},
+    config::{AppConfig, HighMemoCryptoConfig, HighSearchShadowConfig},
     infrastructure::{
-        auth::AuthService, high_search_aws_runtime::HighSearchRuntimeHandle,
-        persistence::stack::PersistenceStack, reconciliation::ProjectionReconciler,
+        auth::AuthService,
+        high_memo_authoritative::HighMemoAuthoritativeAdapter,
+        high_memo_aws_runtime::HighMemoStagingRuntimeHandle,
+        high_memo_cache::HighMemoCiphertextCacheAdapter,
+        high_search_aws_runtime::HighSearchRuntimeHandle,
+        persistence::stack::PersistenceStack,
+        reconciliation::ProjectionReconciler,
         repositories::memo::MemoRepositoryImpl,
     },
     interfaces::routes::configure_routes,
@@ -36,6 +41,14 @@ impl Application {
                 .map_err(|error| io::Error::other(error.to_string()))?;
 
         let persistence = PersistenceStack::build(&config)
+            .await
+            .map_err(|error| io::Error::other(error.to_string()))?;
+
+        // When MEMO-HIGH-1 is explicitly configured, every replica must prove
+        // that its KMS/key-ring runtime is usable before it can participate in
+        // a future encrypted-route cutover. Building this runtime does not
+        // change the persisted memo route, which remains legacy by default.
+        let high_memo_runtime = HighMemoStagingRuntimeHandle::build(&config.high_memo_crypto)
             .await
             .map_err(|error| io::Error::other(error.to_string()))?;
 
@@ -68,23 +81,73 @@ impl Application {
             persistence.cache_health.clone(),
             persistence.search_health.clone(),
         ));
+        let high_search_projection_sink = high_search_runtime.projection_sink();
         let projection_reconciler = Arc::new(ProjectionReconciler::new(
             persistence.authoritative_store.clone(),
             persistence.cache.clone(),
             persistence.search_projection.clone(),
-            high_search_runtime.projection_sink(),
+            high_search_projection_sink.clone(),
             persistence.mutation_guard.clone(),
         ));
         let memo_repository = Arc::new(MemoRepositoryImpl::new(
-            persistence.authoritative_store,
-            persistence.cache,
-            persistence.search_projection,
+            persistence.authoritative_store.clone(),
+            persistence.cache.clone(),
+            persistence.search_projection.clone(),
             projection_reconciler.clone(),
         ));
         let _projection_reconciler_task = tokio::spawn(projection_reconciler.run());
+
+        let encrypted_memo_repository = match &config.high_memo_crypto {
+            HighMemoCryptoConfig::Disabled => None,
+            HighMemoCryptoConfig::AwsKms { .. } => {
+                let cryptography = high_memo_runtime.request_cryptography().ok_or_else(|| {
+                    io::Error::other(
+                        "MEMO-HIGH-1 is enabled but no request cryptography runtime is available",
+                    )
+                })?;
+                let encrypted_store = persistence
+                    .high_encrypted_authoritative_store
+                    .clone()
+                    .ok_or_else(|| {
+                        io::Error::other(
+                            "MEMO-HIGH-1 encrypted authoritative storage requires MongoDB",
+                        )
+                    })?;
+                let encrypted_authoritative = Arc::new(HighMemoAuthoritativeAdapter::new(
+                    encrypted_store,
+                    cryptography.clone(),
+                ));
+                let encrypted_cache = Arc::new(HighMemoCiphertextCacheAdapter::new(
+                    persistence.high_encrypted_cache.clone(),
+                    cryptography,
+                ));
+
+                // The encrypted collection owns a distinct durable outbox.
+                // Never feed those intents through the legacy authoritative
+                // reconciler, or retries could hydrate the wrong generation.
+                let encrypted_reconciler = Arc::new(ProjectionReconciler::new(
+                    encrypted_authoritative.clone(),
+                    encrypted_cache.clone(),
+                    persistence.search_projection.clone(),
+                    high_search_projection_sink.clone(),
+                    persistence.mutation_guard.clone(),
+                ));
+                let encrypted_repository = Arc::new(MemoRepositoryImpl::new(
+                    encrypted_authoritative,
+                    encrypted_cache,
+                    persistence.search_projection.clone(),
+                    encrypted_reconciler.clone(),
+                ));
+                let _encrypted_projection_reconciler_task =
+                    tokio::spawn(encrypted_reconciler.run());
+
+                Some(encrypted_repository as Arc<dyn crate::domain::memo::repository::MemoRepository>)
+            }
+        };
+
         let memo_service = Data::new(MemoService::new(
             memo_repository,
-            None,
+            encrypted_memo_repository,
             persistence.mutation_guard,
             persistence.high_memo_access_guard,
             persistence.high_search_query_guard,
