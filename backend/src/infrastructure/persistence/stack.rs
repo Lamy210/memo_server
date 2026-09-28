@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     application::{
+        crypto_cache::HighEncryptedMemoCache,
         health::HealthProbe,
         maintenance::{
             HighMemoAccessGuard, HighSearchQueryGuard, MemoMutationGuard,
@@ -20,7 +21,10 @@ use super::{
     elasticsearch::ElasticsearchClient,
     manticore::ManticoreClient,
     mongodb::MongoDbAuthoritativeStore,
-    ports::{MemoAuthoritativeStore, MemoCache, MemoSearchProjection},
+    ports::{
+        HighEncryptedMemoAuthoritativeStore, MemoAuthoritativeStore, MemoCache,
+        MemoSearchProjection,
+    },
     redis::RedisCache,
     scylla::ScyllaDB,
 };
@@ -35,6 +39,9 @@ pub(crate) struct PersistenceStack {
     pub(crate) mutation_guard: Arc<dyn MemoMutationGuard>,
     pub(crate) high_search_query_guard: Arc<dyn HighSearchQueryGuard>,
     pub(crate) high_memo_access_guard: Arc<dyn HighMemoAccessGuard>,
+    pub(crate) high_encrypted_authoritative_store:
+        Option<Arc<dyn HighEncryptedMemoAuthoritativeStore>>,
+    pub(crate) high_encrypted_cache: Arc<dyn HighEncryptedMemoCache>,
 }
 
 fn maintenance_participation(
@@ -57,6 +64,7 @@ fn maintenance_participation(
 impl PersistenceStack {
     pub(crate) async fn build(config: &AppConfig) -> AppResult<Self> {
         let mut mongodb_database = None;
+        let mut high_encrypted_authoritative_store = None;
         let (authoritative_store, authoritative_health): (
             Arc<dyn MemoAuthoritativeStore>,
             Arc<dyn HealthProbe>,
@@ -74,6 +82,8 @@ impl PersistenceStack {
                     .await?,
                 );
                 mongodb_database = Some(store.database_handle());
+                let encrypted: Arc<dyn HighEncryptedMemoAuthoritativeStore> = store.clone();
+                high_encrypted_authoritative_store = Some(encrypted);
                 (store.clone(), store)
             }
         };
@@ -139,6 +149,7 @@ impl PersistenceStack {
         };
 
         let cache: Arc<dyn MemoCache> = redis.clone();
+        let high_encrypted_cache: Arc<dyn HighEncryptedMemoCache> = redis.clone();
         let cache_health: Arc<dyn HealthProbe> = redis;
 
         Ok(Self {
@@ -151,6 +162,8 @@ impl PersistenceStack {
             mutation_guard,
             high_search_query_guard,
             high_memo_access_guard,
+            high_encrypted_authoritative_store,
+            high_encrypted_cache,
         })
     }
 }
