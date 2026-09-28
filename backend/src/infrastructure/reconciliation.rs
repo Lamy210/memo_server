@@ -125,10 +125,7 @@ impl ProjectionReconciler {
     /// maintenance writer lease. Search-route cutover also requires that writer
     /// lease set to drain, so the observed route cannot change until this
     /// reconciliation releases its permit.
-    pub fn with_search_route(
-        mut self,
-        route_reader: Arc<dyn HighSearchQueryRouteReader>,
-    ) -> Self {
+    pub fn with_search_route(mut self, route_reader: Arc<dyn HighSearchQueryRouteReader>) -> Self {
         self.search_route_reader = Some(route_reader);
         self
     }
@@ -314,8 +311,7 @@ impl ProjectionReconciler {
         memo: Option<&crate::domain::memo::entity::Memo>,
         search_route: HighSearchQueryRoute,
     ) -> AppResult<()> {
-        if search_route == HighSearchQueryRoute::Protected
-            && self.high_search_projection.is_none()
+        if search_route == HighSearchQueryRoute::Protected && self.high_search_projection.is_none()
         {
             return Err(AppError::ServiceUnavailable(
                 "protected HIGH search route is active but no protected projection sink is available"
@@ -712,7 +708,8 @@ mod tests {
     impl HighSearchQueryRouteReader for FakeSearchRouteReader {
         async fn current_query_route(
             &self,
-        ) -> AppResult<crate::application::high_search_routing::HighSearchQueryRouteSnapshot> {
+        ) -> AppResult<crate::application::high_search_routing::HighSearchQueryRouteSnapshot>
+        {
             self.events.push("search-route-read");
             if self.fail {
                 Err(AppError::ServiceUnavailable(
