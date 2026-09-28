@@ -1049,7 +1049,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a local MongoDB replica set"]
-    async fn mongodb_maintenance_barrier_drains_and_blocks_writers_and_protected_queries() {
+    async fn mongodb_maintenance_barrier_drains_writers_queries_and_memo_access() {
         let uri = std::env::var("MONGODB_TEST_URI")
             .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
         let client = Client::with_uri_str(&uri).await.unwrap();
@@ -1061,10 +1061,18 @@ mod tests {
             .unwrap();
         let first_writer = guard.acquire_mutation().await.unwrap();
         let first_query = guard.acquire_query().await.unwrap();
+        let first_memo_access = guard.acquire_access().await.unwrap();
         assert_eq!(
             first_query.route_snapshot(),
             HighSearchQueryRouteSnapshot {
                 route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            }
+        );
+        assert_eq!(
+            first_memo_access.route_snapshot(),
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::LegacyPlaintext,
                 generation: 0,
             }
         );
@@ -1094,6 +1102,10 @@ mod tests {
             guard.acquire_query().await,
             Err(AppError::ServiceUnavailable(_))
         ));
+        assert!(matches!(
+            guard.acquire_access().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
         assert!(!maintenance_task.is_finished());
 
         first_writer.release().await.unwrap();
@@ -1102,6 +1114,11 @@ mod tests {
             "maintenance must also drain the protected query lease"
         );
         first_query.release().await.unwrap();
+        assert!(
+            !maintenance_task.is_finished(),
+            "maintenance must also drain the memo data-path lease"
+        );
+        first_memo_access.release().await.unwrap();
         let maintenance = maintenance_task.await.unwrap().unwrap();
         maintenance.assert_still_enforced().await.unwrap();
 
@@ -1138,12 +1155,49 @@ mod tests {
             Err(AppError::Conflict(_))
         ));
 
+        let legacy_memo_route = maintenance.current_memo_route().await.unwrap();
+        assert_eq!(
+            legacy_memo_route,
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::LegacyPlaintext,
+                generation: 0,
+            }
+        );
+        let encrypted_memo_route = maintenance
+            .switch_memo_route(legacy_memo_route, HighMemoDataRoute::Encrypted)
+            .await
+            .unwrap();
+        assert_eq!(
+            encrypted_memo_route,
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::Encrypted,
+                generation: 1,
+            }
+        );
+        assert_eq!(
+            maintenance
+                .switch_memo_route(encrypted_memo_route, HighMemoDataRoute::Encrypted)
+                .await
+                .unwrap(),
+            encrypted_memo_route
+        );
+        assert!(matches!(
+            maintenance
+                .switch_memo_route(legacy_memo_route, HighMemoDataRoute::LegacyPlaintext)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+
         assert!(matches!(
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
         ));
         assert!(matches!(
             guard.acquire_query().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert!(matches!(
+            guard.acquire_access().await,
             Err(AppError::ServiceUnavailable(_))
         ));
 
@@ -1159,6 +1213,15 @@ mod tests {
             }
         );
         query_after_release.release().await.unwrap();
+        let memo_access_after_release = guard.acquire_access().await.unwrap();
+        assert_eq!(
+            memo_access_after_release.route_snapshot(),
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::Encrypted,
+                generation: 1,
+            }
+        );
+        memo_access_after_release.release().await.unwrap();
 
         database.drop().await.unwrap();
     }
@@ -1181,15 +1244,20 @@ mod tests {
         // release intentionally leaves fail-closed activity leases behind.
         let abandoned_writer = guard.acquire_mutation().await.unwrap();
         let abandoned_query = guard.acquire_query().await.unwrap();
+        let abandoned_memo_access = guard.acquire_access().await.unwrap();
         drop(abandoned_writer);
         drop(abandoned_query);
+        drop(abandoned_memo_access);
 
         let open_snapshot = recovery.inspect().await.unwrap();
         assert_eq!(open_snapshot.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(open_snapshot.query_route(), HighSearchQueryRoute::Legacy);
         assert_eq!(open_snapshot.query_route_generation(), 0);
+        assert_eq!(open_snapshot.memo_route(), HighMemoDataRoute::LegacyPlaintext);
+        assert_eq!(open_snapshot.memo_route_generation(), 0);
         assert_eq!(open_snapshot.active_writer_leases(), 1);
         assert_eq!(open_snapshot.active_query_leases(), 1);
+        assert_eq!(open_snapshot.active_memo_access_leases(), 1);
 
         let mut stale_snapshot = open_snapshot.clone();
         stale_snapshot.writer_epoch -= 1;
@@ -1200,6 +1268,7 @@ mod tests {
         let after_stale = recovery.inspect().await.unwrap();
         assert_eq!(after_stale.active_writer_leases(), 1);
         assert_eq!(after_stale.active_query_leases(), 1);
+        assert_eq!(after_stale.active_memo_access_leases(), 1);
 
         let mut stale_route_snapshot = open_snapshot.clone();
         stale_route_snapshot.query_route_generation += 1;
@@ -1210,6 +1279,18 @@ mod tests {
         let after_stale_route = recovery.inspect().await.unwrap();
         assert_eq!(after_stale_route.active_writer_leases(), 1);
         assert_eq!(after_stale_route.active_query_leases(), 1);
+        assert_eq!(after_stale_route.active_memo_access_leases(), 1);
+
+        let mut stale_memo_route_snapshot = open_snapshot.clone();
+        stale_memo_route_snapshot.memo_route_generation += 1;
+        assert!(matches!(
+            recovery.recover_stale_state(&stale_memo_route_snapshot).await,
+            Err(AppError::Conflict(_))
+        ));
+        let after_stale_memo_route = recovery.inspect().await.unwrap();
+        assert_eq!(after_stale_memo_route.active_writer_leases(), 1);
+        assert_eq!(after_stale_memo_route.active_query_leases(), 1);
+        assert_eq!(after_stale_memo_route.active_memo_access_leases(), 1);
 
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
@@ -1217,6 +1298,9 @@ mod tests {
         assert_eq!(recovered.query_route_generation(), 0);
         assert_eq!(recovered.active_writer_leases(), 0);
         assert_eq!(recovered.active_query_leases(), 0);
+        assert_eq!(recovered.active_memo_access_leases(), 0);
+        assert_eq!(recovered.memo_route(), HighMemoDataRoute::LegacyPlaintext);
+        assert_eq!(recovered.memo_route_generation(), 0);
         assert_eq!(recovered.writer_epoch(), open_snapshot.writer_epoch() + 1);
 
         // Simulate cancellation while maintenance owns the barrier. The task
@@ -1247,12 +1331,17 @@ mod tests {
         assert!(maintenance_snapshot.holder_token().is_some());
         assert_eq!(maintenance_snapshot.active_writer_leases(), 0);
         assert_eq!(maintenance_snapshot.active_query_leases(), 0);
+        assert_eq!(maintenance_snapshot.active_memo_access_leases(), 0);
         assert!(matches!(
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
         ));
         assert!(matches!(
             guard.acquire_query().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert!(matches!(
+            guard.acquire_access().await,
             Err(AppError::ServiceUnavailable(_))
         ));
 
@@ -1271,6 +1360,8 @@ mod tests {
         writer_after_recovery.release().await.unwrap();
         let query_after_recovery = guard.acquire_query().await.unwrap();
         query_after_recovery.release().await.unwrap();
+        let memo_access_after_recovery = guard.acquire_access().await.unwrap();
+        memo_access_after_recovery.release().await.unwrap();
 
         database.drop().await.unwrap();
     }
