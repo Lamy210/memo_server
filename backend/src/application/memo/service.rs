@@ -614,6 +614,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn encrypted_memo_route_uses_only_the_encrypted_repository() {
+        let user_id = Uuid::new_v4();
+        let encrypted_item = memo(user_id, Uuid::new_v4(), "encrypted");
+        let legacy_repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: vec![memo(user_id, Uuid::new_v4(), "legacy")],
+            legacy_total: 1,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let encrypted_repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: vec![encrypted_item.clone()],
+            legacy_total: 1,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let memo_events = Arc::new(Mutex::new(Vec::new()));
+        let query_events = Arc::new(Mutex::new(Vec::new()));
+        let service = MemoService::new(
+            legacy_repository.clone(),
+            Some(encrypted_repository.clone()),
+            Arc::new(UnrestrictedMemoMutationGuard),
+            Arc::new(FakeMemoAccessGuard {
+                route: HighMemoDataRoute::Encrypted,
+                release_fail: false,
+                events: memo_events.clone(),
+            }),
+            Arc::new(FakeQueryGuard {
+                route: HighSearchQueryRoute::Legacy,
+                release_fail: false,
+                events: query_events.clone(),
+            }),
+            None,
+            None,
+        );
+
+        let response = service
+            .search_memos("encrypted", None, user_id, 1, 20)
+            .await
+            .unwrap();
+
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].id, encrypted_item.id);
+        assert_eq!(
+            legacy_repository.legacy_search_calls.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            encrypted_repository
+                .legacy_search_calls
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            *memo_events.lock().unwrap(),
+            vec!["memo-acquire", "memo-release"]
+        );
+        assert_eq!(*query_events.lock().unwrap(), vec!["acquire", "release"]);
+    }
+
+    #[tokio::test]
     async fn memo_access_release_failure_fails_closed() {
         let repository = Arc::new(FakeRepository {
             legacy_search_calls: AtomicUsize::new(0),
