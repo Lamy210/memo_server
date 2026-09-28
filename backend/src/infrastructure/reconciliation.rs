@@ -13,7 +13,10 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_orchestration::HighSearchProjectionSink,
-        maintenance::{MemoMutationGuard, MemoMutationPermit},
+        high_memo_routing::HighMemoDataRoute,
+        maintenance::{
+            HighMemoAccessGuard, HighMemoAccessPermit, MemoMutationGuard, MemoMutationPermit,
+        },
     },
     error::{AppError, AppResult},
     infrastructure::persistence::ports::{
@@ -65,6 +68,7 @@ impl RetryState {
 enum ReconcileOutcome {
     Completed,
     WaitingForTarget,
+    InactiveMemoRoute,
 }
 
 pub struct ProjectionReconciler {
@@ -73,6 +77,7 @@ pub struct ProjectionReconciler {
     search_projection: Arc<dyn MemoSearchProjection>,
     high_search_projection: Option<Arc<dyn HighSearchProjectionSink>>,
     mutation_guard: Arc<dyn MemoMutationGuard>,
+    memo_route_scope: Option<(Arc<dyn HighMemoAccessGuard>, HighMemoDataRoute)>,
     retry_states: Mutex<HashMap<Uuid, RetryState>>,
     counters: ReconciliationCounters,
 }
@@ -91,9 +96,24 @@ impl ProjectionReconciler {
             search_projection,
             high_search_projection,
             mutation_guard,
+            memo_route_scope: None,
             retry_states: Mutex::new(HashMap::new()),
             counters: ReconciliationCounters::default(),
         }
+    }
+
+    /// Scope this reconciler to exactly one admitted MEMO-HIGH-1 data route.
+    ///
+    /// The access lease is acquired before reading the authoritative source and
+    /// remains held through all secondary writes. If the shared route does not
+    /// match, the durable intent is left untouched for the route that owns it.
+    pub fn with_memo_route(
+        mut self,
+        access_guard: Arc<dyn HighMemoAccessGuard>,
+        required_route: HighMemoDataRoute,
+    ) -> Self {
+        self.memo_route_scope = Some((access_guard, required_route));
+        self
     }
 
     pub async fn reconcile_now(&self, event: &ProjectionIntent) {
@@ -101,7 +121,7 @@ impl ProjectionReconciler {
         self.track_event(event.event_id, now);
         match self.reconcile_event(event).await {
             Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
-            Ok(ReconcileOutcome::WaitingForTarget) => {}
+            Ok(ReconcileOutcome::WaitingForTarget | ReconcileOutcome::InactiveMemoRoute) => {}
             Err(error) => {
                 let retry_after = self.defer_after_failure(event.event_id, now);
                 log::warn!(
@@ -158,6 +178,10 @@ impl ProjectionReconciler {
                         );
                     }
                 }
+                Ok(ReconcileOutcome::InactiveMemoRoute) => {
+                    // This outbox belongs to the other authoritative generation.
+                    // Do not acknowledge, stale-drop, or touch secondary state.
+                }
                 Err(error) => {
                     let retry_after = self.defer_after_failure(event.event_id, now);
                     log::warn!(
@@ -180,6 +204,35 @@ impl ProjectionReconciler {
     }
 
     async fn reconcile_event(&self, event: &ProjectionIntent) -> AppResult<ReconcileOutcome> {
+        let access = self.acquire_memo_route_access().await?;
+        if let Some((permit, required_route)) = access.as_ref() {
+            if permit.route_snapshot().route != *required_route {
+                let release = access
+                    .map(|(permit, _)| permit)
+                    .expect("route-scoped access permit must exist")
+                    .release()
+                    .await;
+                release?;
+                return Ok(ReconcileOutcome::InactiveMemoRoute);
+            }
+        }
+
+        let result = self.reconcile_event_before_ack(event).await;
+        Self::finish_memo_route_access(result, access).await?;
+
+        // Ack only after all secondary work and both maintenance/access leases
+        // have been released. Any release failure leaves the durable intent for
+        // an idempotent retry rather than silently losing reconciliation work.
+        self.authoritative_store
+            .acknowledge_projection_intent(event)
+            .await?;
+        Ok(ReconcileOutcome::Completed)
+    }
+
+    async fn reconcile_event_before_ack(
+        &self,
+        event: &ProjectionIntent,
+    ) -> AppResult<ReconcileOutcome> {
         let memo = self
             .authoritative_store
             .find_by_id(event.user_id, event.memo_id)
@@ -197,13 +250,35 @@ impl ProjectionReconciler {
         let result = self.reconcile_secondary_state(event, memo.as_ref()).await;
         Self::finish_guarded_reconciliation(result, permit).await?;
 
-        // Ack only after the secondary work and lease release both succeed.
-        // A release failure therefore leaves the durable intent available for
-        // an idempotent retry instead of silently losing reconciliation work.
-        self.authoritative_store
-            .acknowledge_projection_intent(event)
-            .await?;
         Ok(ReconcileOutcome::Completed)
+    }
+
+    async fn acquire_memo_route_access(
+        &self,
+    ) -> AppResult<Option<(Box<dyn HighMemoAccessPermit>, HighMemoDataRoute)>> {
+        let Some((guard, required_route)) = self.memo_route_scope.as_ref() else {
+            return Ok(None);
+        };
+        let permit = guard.acquire_access().await?;
+        Ok(Some((permit, *required_route)))
+    }
+
+    async fn finish_memo_route_access<T>(
+        result: AppResult<T>,
+        access: Option<(Box<dyn HighMemoAccessPermit>, HighMemoDataRoute)>,
+    ) -> AppResult<T> {
+        let Some((permit, _)) = access else {
+            return result;
+        };
+
+        match (result, permit.release().await) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(primary), Ok(())) => Err(primary),
+            (Ok(_), Err(release)) => Err(release),
+            (Err(primary), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+                "projection reconciliation failed and memo-access lease release also failed; primary={primary}; release={release}"
+            ))),
+        }
     }
 
     async fn reconcile_secondary_state(
