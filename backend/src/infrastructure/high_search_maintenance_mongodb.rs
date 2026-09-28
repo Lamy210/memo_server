@@ -220,6 +220,7 @@ impl MongoHighSearchMaintenanceRecovery {
         })?;
 
         let route_snapshot = app_query_route_snapshot(&state)?;
+        let memo_route_snapshot = app_memo_route_snapshot(&state)?;
 
         let holder_token = match state.get("holder_token") {
             None | Some(Bson::Null) => None,
@@ -256,6 +257,11 @@ impl MongoHighSearchMaintenanceRecovery {
             .count_documents(doc! {})
             .await
             .map_err(|error| maintenance_db_error("inspect protected query leases", error))?;
+        let active_memo_access_leases = self
+            .memo_access
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| maintenance_db_error("inspect memo access leases", error))?;
 
         Ok(HighSearchMaintenanceStatus {
             mode,
@@ -263,8 +269,11 @@ impl MongoHighSearchMaintenanceRecovery {
             writer_epoch,
             query_route: route_snapshot.route,
             query_route_generation: route_snapshot.generation,
+            memo_route: memo_route_snapshot.route,
+            memo_route_generation: memo_route_snapshot.generation,
             active_writer_leases,
             active_query_leases,
+            active_memo_access_leases,
         })
     }
 
@@ -286,6 +295,7 @@ impl MongoHighSearchMaintenanceRecovery {
             state: self.state.clone(),
             writers: self.writers.clone(),
             queries: self.queries.clone(),
+            memo_access: self.memo_access.clone(),
             expected: expected.clone(),
         };
 
@@ -304,6 +314,11 @@ impl MongoHighSearchMaintenanceRecovery {
                         .delete_many(doc! {})
                         .session(&mut *session)
                         .await?;
+                    context
+                        .memo_access
+                        .delete_many(doc! {})
+                        .session(&mut *session)
+                        .await?;
 
                     let mut filter = doc! {
                         "_id": STATE_ID,
@@ -311,6 +326,8 @@ impl MongoHighSearchMaintenanceRecovery {
                         "writer_epoch": context.expected.writer_epoch,
                         "query_route": context.expected.query_route.as_persisted_str(),
                         "query_route_generation": context.expected.query_route_generation,
+                        "memo_route": context.expected.memo_route.as_persisted_str(),
+                        "memo_route_generation": context.expected.memo_route_generation,
                     };
                     match context.expected.holder_token.as_deref() {
                         Some(holder_token) => {
@@ -366,6 +383,7 @@ pub(crate) struct MongoHighSearchMaintenanceGuard {
     state: Collection<Document>,
     writers: Collection<Document>,
     queries: Collection<Document>,
+    memo_access: Collection<Document>,
 }
 
 impl MongoHighSearchMaintenanceGuard {
@@ -375,6 +393,7 @@ impl MongoHighSearchMaintenanceGuard {
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
             queries: database.collection(QUERY_LEASES_COLLECTION),
+            memo_access: database.collection(MEMO_ACCESS_LEASES_COLLECTION),
         };
         guard.initialize_state().await?;
         Ok(guard)
@@ -392,6 +411,8 @@ impl MongoHighSearchMaintenanceGuard {
                         "writer_epoch": 0_i64,
                         "query_route": HighSearchQueryRoute::Legacy.as_persisted_str(),
                         "query_route_generation": 0_i64,
+                        "memo_route": HighMemoDataRoute::LegacyPlaintext.as_persisted_str(),
+                        "memo_route_generation": 0_i64,
                     }
                 },
             )
@@ -434,6 +455,22 @@ impl MongoHighSearchMaintenanceGuard {
             .map_err(|error| {
                 maintenance_db_error("backfill HIGH search query route generation", error)
             })?;
+        self.state
+            .update_one(
+                doc! { "_id": STATE_ID, "memo_route": { "$exists": false } },
+                doc! { "$set": { "memo_route": HighMemoDataRoute::LegacyPlaintext.as_persisted_str() } },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("backfill HIGH memo data route", error))?;
+        self.state
+            .update_one(
+                doc! { "_id": STATE_ID, "memo_route_generation": { "$exists": false } },
+                doc! { "$set": { "memo_route_generation": 0_i64 } },
+            )
+            .await
+            .map_err(|error| {
+                maintenance_db_error("backfill HIGH memo data route generation", error)
+            })?;
 
         let state = self
             .state
@@ -446,6 +483,7 @@ impl MongoHighSearchMaintenanceGuard {
                 )
             })?;
         app_query_route_snapshot(&state)?;
+        app_memo_route_snapshot(&state)?;
         Ok(())
     }
 
