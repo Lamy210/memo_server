@@ -17,11 +17,11 @@ The repository now also contains a staged encrypted-authoritative persistence po
 `memos_encrypted_v1` while preserving owner scoping, optimistic version checks, ordered bulk
 hydration, and atomic projection intents. Because `updated_at` remains inside the encrypted
 payload, list ordering is performed after decryption rather than by adding plaintext sort metadata.
-This adapter is not startup-wired and does not make the staging collection authoritative.
+When `HIGH_MEMO_CRYPTO_MODE=aws-kms` is enabled, the encrypted authoritative adapter and ciphertext-only cache are now startup-composed as a standby repository. The shared route still defaults to `legacy_plaintext`, so startup composition does not make the staging collection authoritative.
 
 The shared MongoDB maintenance singleton now also stages an independent memo data route (`legacy_plaintext` or `encrypted`) with a monotonic generation plus memo-access leases. Normal memo CRUD/list/search hydration now enters through that memo-access guard and keeps the admitted route snapshot alive across cache/authoritative work. The maintenance barrier therefore drains active memo data-path requests before route CAS, preventing an old plaintext read from refilling the legacy Redis namespace after a future ciphertext-only cutover purge.
 
-The route still defaults to `legacy_plaintext`. The request service has a route-aware repository boundary, but the encrypted repository/cache are deliberately not injected yet; an unexpected `encrypted` route fails closed instead of falling back to plaintext.
+The route still defaults to `legacy_plaintext`. When HIGH memo runtime configuration is enabled, the request service now receives both the legacy repository and a standby encrypted repository backed by the encrypted MongoDB collection plus ciphertext-only Redis namespace. Repository selection remains exclusively driven by the admitted memo-route snapshot; there is no encrypted-to-plaintext fallback. Legacy and encrypted durable outboxes use separate reconcilers that acquire the same memo-access route lease and refuse to touch secondary state while their authoritative route is inactive.
 
 ## Required preconditions for a final production pass
 
