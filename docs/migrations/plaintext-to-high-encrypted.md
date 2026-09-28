@@ -19,7 +19,9 @@ hydration, and atomic projection intents. Because `updated_at` remains inside th
 payload, list ordering is performed after decryption rather than by adding plaintext sort metadata.
 This adapter is not startup-wired and does not make the staging collection authoritative.
 
-The shared MongoDB maintenance singleton now also stages an independent memo data route (`legacy_plaintext` or `encrypted`) with a monotonic generation plus memo-access leases. A future request-path cutover must admit every cache/authoritative read through that lease and route from the permit snapshot. The maintenance barrier drains these leases before route CAS, preventing an old plaintext read from refilling the legacy Redis namespace after the ciphertext-only cutover purge. The route defaults to `legacy_plaintext`; this foundation does not activate encrypted CRUD by itself.
+The shared MongoDB maintenance singleton now also stages an independent memo data route (`legacy_plaintext` or `encrypted`) with a monotonic generation plus memo-access leases. Normal memo CRUD/list/search hydration now enters through that memo-access guard and keeps the admitted route snapshot alive across cache/authoritative work. The maintenance barrier therefore drains active memo data-path requests before route CAS, preventing an old plaintext read from refilling the legacy Redis namespace after a future ciphertext-only cutover purge.
+
+The route still defaults to `legacy_plaintext`. The request service has a route-aware repository boundary, but the encrypted repository/cache are deliberately not injected yet; an unexpected `encrypted` route fails closed instead of falling back to plaintext.
 
 ## Required preconditions for a final production pass
 

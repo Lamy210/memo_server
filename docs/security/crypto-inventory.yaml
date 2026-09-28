@@ -68,13 +68,24 @@ assets:
           default: legacy_plaintext
           values: [legacy_plaintext, encrypted]
           generation: monotonic_i64
-          memo_access_lease: staged
+          memo_access_lease: request_path_wired
           admission_snapshot: atomic_with_memo_access_lease
+          lease_scope:
+            - create
+            - update_read_and_write
+            - get
+            - delete_check_and_delete
+            - list
+            - search_hydration
           maintenance_drain: writers_protected_queries_and_memo_access
           route_change_scope: live_offline_window_permit_only
           route_change_cas: memo_route_and_generation
           multi_replica_cutover_boundary: staged
-          request_path_wired: false
+          route_aware_repository_selection: wired
+          legacy_repository: wired
+          encrypted_repository: fail_closed_until_injected
+          access_lease_release_failure: fail_closed
+          request_path_wired: route_foundation_only
         cache_foundation:
           domain_cache_contract: owner_partition_and_memo_id_typed
           legacy_plaintext_key_derivation: redis_adapter_internal_only

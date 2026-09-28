@@ -6,10 +6,12 @@ use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
 use crate::{
     application::{
         crypto_search_orchestration::HighSearchQueryReader,
+        high_memo_routing::HighMemoDataRoute,
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
         high_search_shadow::{HighSearchShadowObservation, HighSearchShadowObserver},
         maintenance::{
-            HighSearchQueryGuard, HighSearchQueryPermit, MemoMutationGuard, MemoMutationPermit,
+            HighMemoAccessGuard, HighMemoAccessPermit, HighSearchQueryGuard, HighSearchQueryPermit,
+            MemoMutationGuard, MemoMutationPermit,
         },
     },
     domain::memo::{
@@ -22,8 +24,10 @@ use crate::{
 const MAX_SEARCH_QUERY_CHARS: usize = 512;
 
 pub struct MemoService {
-    memo_repository: Arc<dyn MemoRepository>,
+    legacy_memo_repository: Arc<dyn MemoRepository>,
+    encrypted_memo_repository: Option<Arc<dyn MemoRepository>>,
     mutation_guard: Arc<dyn MemoMutationGuard>,
+    high_memo_access_guard: Arc<dyn HighMemoAccessGuard>,
     high_search_query_guard: Arc<dyn HighSearchQueryGuard>,
     high_search_query_reader: Option<Arc<dyn HighSearchQueryReader>>,
     high_search_shadow: Option<Arc<HighSearchShadowObserver>>,
@@ -31,31 +35,60 @@ pub struct MemoService {
 
 impl MemoService {
     pub fn new(
-        memo_repository: Arc<dyn MemoRepository>,
+        legacy_memo_repository: Arc<dyn MemoRepository>,
+        encrypted_memo_repository: Option<Arc<dyn MemoRepository>>,
         mutation_guard: Arc<dyn MemoMutationGuard>,
+        high_memo_access_guard: Arc<dyn HighMemoAccessGuard>,
         high_search_query_guard: Arc<dyn HighSearchQueryGuard>,
         high_search_query_reader: Option<Arc<dyn HighSearchQueryReader>>,
         high_search_shadow: Option<Arc<HighSearchShadowObserver>>,
     ) -> Self {
         Self {
-            memo_repository,
+            legacy_memo_repository,
+            encrypted_memo_repository,
             mutation_guard,
+            high_memo_access_guard,
             high_search_query_guard,
             high_search_query_reader,
             high_search_shadow,
         }
     }
 
+    fn repository_for_route(
+        &self,
+        route: HighMemoDataRoute,
+    ) -> AppResult<&Arc<dyn MemoRepository>> {
+        match route {
+            HighMemoDataRoute::LegacyPlaintext => Ok(&self.legacy_memo_repository),
+            HighMemoDataRoute::Encrypted => {
+                self.encrypted_memo_repository.as_ref().ok_or_else(|| {
+                    AppError::ServiceUnavailable(
+                        "encrypted MEMO-HIGH-1 route is active but no encrypted repository is available"
+                            .into(),
+                    )
+                })
+            }
+        }
+    }
+
     pub async fn create_memo(&self, dto: CreateMemoDto, user_id: Uuid) -> AppResult<MemoResponse> {
         let memo = Memo::new(dto.title, dto.content, dto.tags, user_id);
         Self::validate_memo(&memo)?;
-        let permit = self.mutation_guard.acquire_mutation().await?;
-        let result = self
-            .memo_repository
-            .save(&memo)
-            .await
-            .map(|()| MemoResponse::from(memo));
-        Self::finish_mutation(result, permit).await
+
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let mutation = self.mutation_guard.acquire_mutation().await?;
+            let result = repository
+                .save(&memo)
+                .await
+                .map(|()| MemoResponse::from(memo));
+            Self::finish_mutation(result, mutation).await
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     pub async fn update_memo(
@@ -64,51 +97,87 @@ impl MemoService {
         dto: UpdateMemoDto,
         user_id: Uuid,
     ) -> AppResult<MemoResponse> {
-        let mut memo = self
-            .memo_repository
-            .find_by_id(user_id, id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Memo not found".into()))?;
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let mut memo = repository
+                .find_by_id(user_id, id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("Memo not found".into()))?;
 
-        if memo.user_id != user_id {
-            return Err(AppError::Unauthorized(
-                "Not authorized to update this memo".into(),
-            ));
-        }
-        if memo.version != dto.version {
-            return Err(AppError::Conflict(
-                "Memo has been updated by another client".into(),
-            ));
-        }
+            if memo.user_id != user_id {
+                return Err(AppError::Unauthorized(
+                    "Not authorized to update this memo".into(),
+                ));
+            }
+            if memo.version != dto.version {
+                return Err(AppError::Conflict(
+                    "Memo has been updated by another client".into(),
+                ));
+            }
 
-        memo.update(dto.title, dto.content, dto.tags);
-        Self::validate_memo(&memo)?;
-        let permit = self.mutation_guard.acquire_mutation().await?;
-        let result = self
-            .memo_repository
-            .save(&memo)
-            .await
-            .map(|()| MemoResponse::from(memo));
-        Self::finish_mutation(result, permit).await
+            memo.update(dto.title, dto.content, dto.tags);
+            Self::validate_memo(&memo)?;
+
+            let mutation = self.mutation_guard.acquire_mutation().await?;
+            let result = repository
+                .save(&memo)
+                .await
+                .map(|()| MemoResponse::from(memo));
+            Self::finish_mutation(result, mutation).await
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     pub async fn get_memo(&self, id: Uuid, user_id: Uuid) -> AppResult<MemoResponse> {
-        let memo = self
-            .memo_repository
-            .find_by_id(user_id, id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Memo not found".into()))?;
-        Ok(MemoResponse::from(memo))
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let memo = repository
+                .find_by_id(user_id, id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("Memo not found".into()))?;
+            Ok(MemoResponse::from(memo))
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     pub async fn delete_memo(&self, id: Uuid, user_id: Uuid) -> AppResult<()> {
-        if !self.memo_repository.exists(user_id, id).await? {
-            return Err(AppError::NotFound("Memo not found".into()));
-        }
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            if !repository.exists(user_id, id).await? {
+                return Err(AppError::NotFound("Memo not found".into()));
+            }
 
-        let permit = self.mutation_guard.acquire_mutation().await?;
-        let result = self.memo_repository.delete(user_id, id).await;
-        Self::finish_mutation(result, permit).await
+            let mutation = self.mutation_guard.acquire_mutation().await?;
+            let result = repository.delete(user_id, id).await;
+            Self::finish_mutation(result, mutation).await
+        }
+        .await;
+
+        Self::finish_access(result, access).await
+    }
+
+    async fn finish_access<T>(
+        result: AppResult<T>,
+        permit: Box<dyn HighMemoAccessPermit>,
+    ) -> AppResult<T> {
+        match (result, permit.release().await) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(primary), Ok(())) => Err(primary),
+            (Ok(_), Err(release)) => Err(release),
+            (Err(primary), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+                "memo data-path request failed and memo-access lease release also failed; primary={primary}; release={release}"
+            ))),
+        }
     }
 
     async fn finish_mutation<T>(
@@ -126,9 +195,17 @@ impl MemoService {
     }
 
     pub async fn get_user_memos(&self, user_id: Uuid) -> AppResult<Vec<MemoResponse>> {
-        let mut memos = self.memo_repository.find_all_by_user_id(user_id).await?;
-        memos.sort_by_key(|memo| Reverse(memo.updated_at));
-        Ok(memos.into_iter().map(MemoResponse::from).collect())
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let mut memos = repository.find_all_by_user_id(user_id).await?;
+            memos.sort_by_key(|memo| Reverse(memo.updated_at));
+            Ok(memos.into_iter().map(MemoResponse::from).collect())
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     pub async fn search_memos(
@@ -197,28 +274,37 @@ impl MemoService {
         page: usize,
         limit: usize,
     ) -> AppResult<(MemoSearchPage, HighSearchQueryRouteSnapshot)> {
-        let permit = self.high_search_query_guard.acquire_query().await?;
-        let route_snapshot = permit.route_snapshot();
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let memo_route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(memo_route.route)?;
+            let query_permit = self.high_search_query_guard.acquire_query().await?;
+            let search_route = query_permit.route_snapshot();
 
-        let result = match route_snapshot.route {
-            HighSearchQueryRoute::Legacy => {
-                self.memo_repository
-                    .search(query, tag.map(str::to_owned), user_id, page, limit)
-                    .await
-            }
-            HighSearchQueryRoute::Protected => {
-                self.search_memos_protected(query, tag, user_id, page, limit)
-                    .await
-            }
-        };
+            let result = match search_route.route {
+                HighSearchQueryRoute::Legacy => {
+                    repository
+                        .search(query, tag.map(str::to_owned), user_id, page, limit)
+                        .await
+                }
+                HighSearchQueryRoute::Protected => {
+                    self.search_memos_protected(repository, query, tag, user_id, page, limit)
+                        .await
+                }
+            };
 
-        Self::finish_query(result, permit)
-            .await
-            .map(|page| (page, route_snapshot))
+            Self::finish_query(result, query_permit)
+                .await
+                .map(|page| (page, search_route))
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     async fn search_memos_protected(
         &self,
+        repository: &Arc<dyn MemoRepository>,
         query: &str,
         tag: Option<&str>,
         user_id: Uuid,
@@ -234,10 +320,7 @@ impl MemoService {
         let hits = reader
             .search_memo_ids(user_id, query, tag, page, limit)
             .await?;
-        let items = self
-            .memo_repository
-            .find_many_by_ids(user_id, &hits.memo_ids)
-            .await?;
+        let items = repository.find_many_by_ids(user_id, &hits.memo_ids).await?;
 
         Ok(MemoSearchPage {
             items,
@@ -284,7 +367,7 @@ mod tests {
     use super::*;
     use crate::application::{
         crypto_search_projection::HighSearchProjectionPage,
-        maintenance::UnrestrictedMemoMutationGuard,
+        maintenance::{UnrestrictedHighMemoAccessGuard, UnrestrictedMemoMutationGuard},
     };
 
     struct FakeRepository {
@@ -371,6 +454,53 @@ mod tests {
         }
     }
 
+    struct FakeMemoAccessGuard {
+        route: HighMemoDataRoute,
+        release_fail: bool,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct FakeMemoAccessPermit {
+        route: HighMemoDataRoute,
+        release_fail: bool,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl HighMemoAccessGuard for FakeMemoAccessGuard {
+        async fn acquire_access(&self) -> AppResult<Box<dyn HighMemoAccessPermit>> {
+            self.events.lock().unwrap().push("memo-acquire");
+            Ok(Box::new(FakeMemoAccessPermit {
+                route: self.route,
+                release_fail: self.release_fail,
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl HighMemoAccessPermit for FakeMemoAccessPermit {
+        fn route_snapshot(
+            &self,
+        ) -> crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
+            crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
+                route: self.route,
+                generation: 3,
+            }
+        }
+
+        async fn release(self: Box<Self>) -> AppResult<()> {
+            self.events.lock().unwrap().push("memo-release");
+            if self.release_fail {
+                Err(AppError::ServiceUnavailable(
+                    "memo access lease release failed".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     struct FakeQueryGuard {
         route: HighSearchQueryRoute,
         release_fail: bool,
@@ -431,7 +561,9 @@ mod tests {
     ) -> MemoService {
         MemoService::new(
             repository,
+            None,
             Arc::new(UnrestrictedMemoMutationGuard),
+            Arc::new(UnrestrictedHighMemoAccessGuard),
             Arc::new(FakeQueryGuard {
                 route,
                 release_fail,
@@ -440,6 +572,147 @@ mod tests {
             reader.map(|reader| -> Arc<dyn HighSearchQueryReader> { reader }),
             None,
         )
+    }
+
+    #[tokio::test]
+    async fn encrypted_memo_route_without_repository_fails_closed_and_releases_access() {
+        let repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: Vec::new(),
+            legacy_total: 0,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let memo_events = Arc::new(Mutex::new(Vec::new()));
+        let query_events = Arc::new(Mutex::new(Vec::new()));
+        let service = MemoService::new(
+            repository,
+            None,
+            Arc::new(UnrestrictedMemoMutationGuard),
+            Arc::new(FakeMemoAccessGuard {
+                route: HighMemoDataRoute::Encrypted,
+                release_fail: false,
+                events: memo_events.clone(),
+            }),
+            Arc::new(FakeQueryGuard {
+                route: HighSearchQueryRoute::Legacy,
+                release_fail: false,
+                events: query_events,
+            }),
+            None,
+            None,
+        );
+
+        assert!(matches!(
+            service.get_user_memos(Uuid::new_v4()).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert_eq!(
+            *memo_events.lock().unwrap(),
+            vec!["memo-acquire", "memo-release"]
+        );
+    }
+
+    #[tokio::test]
+    async fn encrypted_memo_route_uses_only_the_encrypted_repository() {
+        let user_id = Uuid::new_v4();
+        let encrypted_item = memo(user_id, Uuid::new_v4(), "encrypted");
+        let legacy_repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: vec![memo(user_id, Uuid::new_v4(), "legacy")],
+            legacy_total: 1,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let encrypted_repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: vec![encrypted_item.clone()],
+            legacy_total: 1,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let memo_events = Arc::new(Mutex::new(Vec::new()));
+        let query_events = Arc::new(Mutex::new(Vec::new()));
+        let service = MemoService::new(
+            legacy_repository.clone(),
+            Some(encrypted_repository.clone()),
+            Arc::new(UnrestrictedMemoMutationGuard),
+            Arc::new(FakeMemoAccessGuard {
+                route: HighMemoDataRoute::Encrypted,
+                release_fail: false,
+                events: memo_events.clone(),
+            }),
+            Arc::new(FakeQueryGuard {
+                route: HighSearchQueryRoute::Legacy,
+                release_fail: false,
+                events: query_events.clone(),
+            }),
+            None,
+            None,
+        );
+
+        let response = service
+            .search_memos("encrypted", None, user_id, 1, 20)
+            .await
+            .unwrap();
+
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].id, encrypted_item.id);
+        assert_eq!(
+            legacy_repository
+                .legacy_search_calls
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            encrypted_repository
+                .legacy_search_calls
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            *memo_events.lock().unwrap(),
+            vec!["memo-acquire", "memo-release"]
+        );
+        assert_eq!(*query_events.lock().unwrap(), vec!["acquire", "release"]);
+    }
+
+    #[tokio::test]
+    async fn memo_access_release_failure_fails_closed() {
+        let repository = Arc::new(FakeRepository {
+            legacy_search_calls: AtomicUsize::new(0),
+            legacy_items: Vec::new(),
+            legacy_total: 0,
+            hydrated_ids: Mutex::new(Vec::new()),
+            hydrated_items: Vec::new(),
+        });
+        let memo_events = Arc::new(Mutex::new(Vec::new()));
+        let service = MemoService::new(
+            repository,
+            None,
+            Arc::new(UnrestrictedMemoMutationGuard),
+            Arc::new(FakeMemoAccessGuard {
+                route: HighMemoDataRoute::LegacyPlaintext,
+                release_fail: true,
+                events: memo_events.clone(),
+            }),
+            Arc::new(FakeQueryGuard {
+                route: HighSearchQueryRoute::Legacy,
+                release_fail: false,
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            None,
+            None,
+        );
+
+        assert!(matches!(
+            service.get_user_memos(Uuid::new_v4()).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert_eq!(
+            *memo_events.lock().unwrap(),
+            vec!["memo-acquire", "memo-release"]
+        );
     }
 
     #[tokio::test]
