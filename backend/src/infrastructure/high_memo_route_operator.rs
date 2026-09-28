@@ -26,7 +26,10 @@ use super::{
     persistence::{
         manticore::ManticoreClient,
         mongodb::MongoDbAuthoritativeStore,
-        ports::{LegacyMemoCacheSweepStats, LegacyMemoPlaintextCacheMaintenance},
+        ports::{
+            HighMemoCacheSweepStats, HighMemoCiphertextCacheMaintenance, LegacyMemoCacheSweepStats,
+            LegacyMemoPlaintextCacheMaintenance,
+        },
         redis::RedisCache,
     },
 };
@@ -68,6 +71,7 @@ pub struct HighMemoRouteCutoverReport {
     pub search_route: HighSearchQueryRouteSnapshot,
     pub migration: Option<HighMemoBatchMigrationStats>,
     pub legacy_cache_purge: Option<LegacyMemoCacheSweepStats>,
+    pub encrypted_cache_purge: Option<HighMemoCacheSweepStats>,
     pub legacy_search_purged: bool,
 }
 
@@ -195,16 +199,17 @@ pub async fn run_encrypted_high_memo_cutover(
     };
 
     if previous_memo_route.route == HighMemoDataRoute::Encrypted {
-        let legacy_cache_purge = match purge_legacy_plaintext_secondaries(
-            legacy_cache.as_ref(),
-            legacy_search.as_ref(),
-            cache_scan_count,
-        )
-        .await
-        {
-            Ok(stats) => stats,
-            Err(error) => return release_pre_switch(permit, error).await,
-        };
+        let (legacy_cache_purge, encrypted_cache_purge) =
+            match purge_cutover_cache_and_legacy_search(
+                legacy_cache.as_ref(),
+                legacy_search.as_ref(),
+                cache_scan_count,
+            )
+            .await
+            {
+                Ok(stats) => stats,
+                Err(error) => return release_pre_switch(permit, error).await,
+            };
 
         let revalidated_search = permit.current_query_route().await.map_err(|error| {
             fail_closed_after_destructive_pre_switch("search route revalidation failed", error)
@@ -226,6 +231,7 @@ pub async fn run_encrypted_high_memo_cutover(
             search_route: observed_search,
             migration: None,
             legacy_cache_purge: Some(legacy_cache_purge),
+            encrypted_cache_purge: Some(encrypted_cache_purge),
             legacy_search_purged: true,
         });
     }
@@ -267,16 +273,17 @@ pub async fn run_encrypted_high_memo_cutover(
         return release_pre_switch(permit, error).await;
     }
 
-    let legacy_cache_purge = match purge_legacy_plaintext_secondaries(
-        legacy_cache.as_ref(),
-        legacy_search.as_ref(),
-        cache_scan_count,
-    )
-    .await
-    {
-        Ok(stats) => stats,
-        Err(error) => return release_pre_switch(permit, error).await,
-    };
+    let (legacy_cache_purge, encrypted_cache_purge) =
+        match purge_cutover_cache_and_legacy_search(
+            legacy_cache.as_ref(),
+            legacy_search.as_ref(),
+            cache_scan_count,
+        )
+        .await
+        {
+            Ok(stats) => stats,
+            Err(error) => return release_pre_switch(permit, error).await,
+        };
 
     if let Err(error) = permit.assert_still_enforced().await {
         return Err(fail_closed_after_destructive_pre_switch(
@@ -325,6 +332,7 @@ pub async fn run_encrypted_high_memo_cutover(
         search_route: expected_search,
         migration: Some(migration),
         legacy_cache_purge: Some(legacy_cache_purge),
+        encrypted_cache_purge: Some(encrypted_cache_purge),
         legacy_search_purged: true,
     })
 }
@@ -367,21 +375,37 @@ async fn ensure_no_pending_projection_intents(source: &MongoDbAuthoritativeStore
     }
 }
 
-async fn purge_legacy_plaintext_secondaries(
-    legacy_cache: &RedisCache,
+async fn purge_cutover_cache_and_legacy_search(
+    cache: &RedisCache,
     legacy_search: &ManticoreClient,
     cache_scan_count: usize,
-) -> AppResult<LegacyMemoCacheSweepStats> {
-    let purge = legacy_cache
+) -> AppResult<(LegacyMemoCacheSweepStats, HighMemoCacheSweepStats)> {
+    // Purge the encrypted namespace too. Although it contains ciphertext only,
+    // a stale standby/test envelope could otherwise become a stale fast-path
+    // value immediately after the encrypted route activates.
+    let encrypted_purge = cache
+        .purge_high_encrypted_memo_cache(cache_scan_count)
+        .await?;
+    let encrypted_after = cache
+        .inspect_high_encrypted_memo_cache(cache_scan_count)
+        .await?;
+    if encrypted_after.encrypted_keys != 0 {
+        return Err(AppError::Conflict(format!(
+            "HIGH encrypted memo cache purge left {} memo key(s)",
+            encrypted_after.encrypted_keys
+        )));
+    }
+
+    let legacy_purge = cache
         .purge_legacy_plaintext_memo_cache(cache_scan_count)
         .await?;
-    let cache_after = legacy_cache
+    let legacy_after = cache
         .inspect_legacy_plaintext_memo_cache(cache_scan_count)
         .await?;
-    if cache_after.legacy_keys != 0 {
+    if legacy_after.legacy_keys != 0 {
         return Err(AppError::Conflict(format!(
             "legacy plaintext memo cache purge left {} memo key(s)",
-            cache_after.legacy_keys
+            legacy_after.legacy_keys
         )));
     }
 
@@ -393,7 +417,7 @@ async fn purge_legacy_plaintext_secondaries(
         )));
     }
 
-    Ok(purge)
+    Ok((legacy_purge, encrypted_purge))
 }
 
 fn expected_memo_target(
