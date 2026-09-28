@@ -63,6 +63,18 @@ assets:
           list_ordering: decrypt_then_updated_at_desc
           corrupt_or_undecryptable_envelope_behavior: fail_closed
           request_path_wired: false
+        request_path_route_foundation:
+          storage: shared_mongodb_maintenance_singleton
+          default: legacy_plaintext
+          values: [legacy_plaintext, encrypted]
+          generation: monotonic_i64
+          memo_access_lease: staged
+          admission_snapshot: atomic_with_memo_access_lease
+          maintenance_drain: writers_protected_queries_and_memo_access
+          route_change_scope: live_offline_window_permit_only
+          route_change_cas: memo_route_and_generation
+          multi_replica_cutover_boundary: staged
+          request_path_wired: false
         cache_foundation:
           domain_cache_contract: owner_partition_and_memo_id_typed
           legacy_plaintext_key_derivation: redis_adapter_internal_only
@@ -98,6 +110,7 @@ assets:
           source_write_freeze: shared_mongodb_offline_window
           background_reconciliation_drain: true
           high_search_query_drain: true
+          memo_data_path_drain: true_when_request_path_guard_is_wired
           kms_preflight_before_freeze: true
           staging_reset_before_full_rebuild: true
           staging_reset_scope: memos_encrypted_v1_only
@@ -415,7 +428,7 @@ assets:
         maintenance_release: explicit_async
         operator_recovery: explicit_cas_guarded
         recovery_requires_application_stop_confirmation: true
-        recovery_snapshot_guard: mode_holder_token_writer_epoch_query_route_and_generation
+        recovery_snapshot_guard: mode_holder_token_writer_epoch_query_route_generation_memo_route_and_generation
         recovery_clears_stale_writer_leases: explicit_only
         recovery_clears_stale_query_leases: explicit_only
         recovery_writer_epoch_advance: required

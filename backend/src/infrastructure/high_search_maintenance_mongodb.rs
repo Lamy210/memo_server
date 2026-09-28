@@ -14,11 +14,15 @@ use uuid::Uuid;
 use crate::{
     application::{
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
+        high_memo_routing::{
+            HighMemoDataRoute, HighMemoDataRouteReader, HighMemoDataRouteSnapshot,
+        },
         high_search_routing::{
             HighSearchQueryRoute, HighSearchQueryRouteReader, HighSearchQueryRouteSnapshot,
         },
         maintenance::{
-            HighSearchQueryGuard, HighSearchQueryPermit, MemoMutationGuard, MemoMutationPermit,
+            HighMemoAccessGuard, HighMemoAccessPermit, HighSearchQueryGuard, HighSearchQueryPermit,
+            MemoMutationGuard, MemoMutationPermit,
         },
     },
     error::{AppError, AppResult},
@@ -27,11 +31,14 @@ use crate::{
 const STATE_COLLECTION: &str = "high_search_maintenance_state";
 const WRITER_LEASES_COLLECTION: &str = "high_search_writer_leases";
 const QUERY_LEASES_COLLECTION: &str = "high_search_query_leases";
+const MEMO_ACCESS_LEASES_COLLECTION: &str = "high_memo_access_leases";
 const STATE_ID: &str = "global";
 const MODE_OPEN: &str = "open";
 const MODE_MAINTENANCE: &str = "maintenance";
 const QUERY_ROUTE_FIELD: &str = "query_route";
 const QUERY_ROUTE_GENERATION_FIELD: &str = "query_route_generation";
+const MEMO_ROUTE_FIELD: &str = "memo_route";
+const MEMO_ROUTE_GENERATION_FIELD: &str = "memo_route_generation";
 const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
@@ -42,6 +49,9 @@ struct RecoverySnapshotMismatch;
 
 #[derive(Debug)]
 struct InvalidQueryRouteState;
+
+#[derive(Debug)]
+struct InvalidMemoRouteState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighSearchMaintenanceMode {
@@ -65,8 +75,11 @@ pub struct HighSearchMaintenanceStatus {
     writer_epoch: i64,
     query_route: HighSearchQueryRoute,
     query_route_generation: i64,
+    memo_route: HighMemoDataRoute,
+    memo_route_generation: i64,
     active_writer_leases: u64,
     active_query_leases: u64,
+    active_memo_access_leases: u64,
 }
 
 impl HighSearchMaintenanceStatus {
@@ -90,12 +103,24 @@ impl HighSearchMaintenanceStatus {
         self.query_route_generation
     }
 
+    pub fn memo_route(&self) -> HighMemoDataRoute {
+        self.memo_route
+    }
+
+    pub fn memo_route_generation(&self) -> i64 {
+        self.memo_route_generation
+    }
+
     pub fn active_writer_leases(&self) -> u64 {
         self.active_writer_leases
     }
 
     pub fn active_query_leases(&self) -> u64 {
         self.active_query_leases
+    }
+
+    pub fn active_memo_access_leases(&self) -> u64 {
+        self.active_memo_access_leases
     }
 }
 
@@ -114,6 +139,7 @@ struct RecoveryContext {
     state: Collection<Document>,
     writers: Collection<Document>,
     queries: Collection<Document>,
+    memo_access: Collection<Document>,
     expected: HighSearchMaintenanceStatus,
 }
 
@@ -121,13 +147,14 @@ struct RecoveryContext {
 ///
 /// This type deliberately does not perform time-based lease expiry. Callers must
 /// inspect the current state, stop all application replicas, and recover only
-/// from the exact observed writer epoch / holder token snapshot.
+/// from the exact observed activity epoch, search route, memo route, and holder snapshot.
 #[derive(Clone)]
 pub struct MongoHighSearchMaintenanceRecovery {
     client: Client,
     state: Collection<Document>,
     writers: Collection<Document>,
     queries: Collection<Document>,
+    memo_access: Collection<Document>,
 }
 
 impl MongoHighSearchMaintenanceRecovery {
@@ -155,6 +182,7 @@ impl MongoHighSearchMaintenanceRecovery {
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
             queries: database.collection(QUERY_LEASES_COLLECTION),
+            memo_access: database.collection(MEMO_ACCESS_LEASES_COLLECTION),
         }
     }
 
@@ -192,6 +220,7 @@ impl MongoHighSearchMaintenanceRecovery {
         })?;
 
         let route_snapshot = app_query_route_snapshot(&state)?;
+        let memo_route_snapshot = app_memo_route_snapshot(&state)?;
 
         let holder_token = match state.get("holder_token") {
             None | Some(Bson::Null) => None,
@@ -228,6 +257,11 @@ impl MongoHighSearchMaintenanceRecovery {
             .count_documents(doc! {})
             .await
             .map_err(|error| maintenance_db_error("inspect protected query leases", error))?;
+        let active_memo_access_leases = self
+            .memo_access
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| maintenance_db_error("inspect memo access leases", error))?;
 
         Ok(HighSearchMaintenanceStatus {
             mode,
@@ -235,16 +269,20 @@ impl MongoHighSearchMaintenanceRecovery {
             writer_epoch,
             query_route: route_snapshot.route,
             query_route_generation: route_snapshot.generation,
+            memo_route: memo_route_snapshot.route,
+            memo_route_generation: memo_route_snapshot.generation,
             active_writer_leases,
             active_query_leases,
+            active_memo_access_leases,
         })
     }
 
     /// Clear fail-closed writer leases and reopen the maintenance barrier from
     /// one exact operator-observed snapshot.
     ///
-    /// The transaction matches mode, writer epoch, and maintenance holder token
-    /// (when present). Any intervening writer acquisition or barrier ownership
+    /// The transaction matches mode, activity epoch, search route/generation,
+    /// memo route/generation, and maintenance holder token (when present).
+    /// Any intervening activity admission, route change, or barrier ownership
     /// change aborts recovery instead of clearing state from a newer generation.
     pub async fn recover_stale_state(
         &self,
@@ -258,6 +296,7 @@ impl MongoHighSearchMaintenanceRecovery {
             state: self.state.clone(),
             writers: self.writers.clone(),
             queries: self.queries.clone(),
+            memo_access: self.memo_access.clone(),
             expected: expected.clone(),
         };
 
@@ -276,6 +315,11 @@ impl MongoHighSearchMaintenanceRecovery {
                         .delete_many(doc! {})
                         .session(&mut *session)
                         .await?;
+                    context
+                        .memo_access
+                        .delete_many(doc! {})
+                        .session(&mut *session)
+                        .await?;
 
                     let mut filter = doc! {
                         "_id": STATE_ID,
@@ -283,6 +327,8 @@ impl MongoHighSearchMaintenanceRecovery {
                         "writer_epoch": context.expected.writer_epoch,
                         "query_route": context.expected.query_route.as_persisted_str(),
                         "query_route_generation": context.expected.query_route_generation,
+                        "memo_route": context.expected.memo_route.as_persisted_str(),
+                        "memo_route_generation": context.expected.memo_route_generation,
                     };
                     match context.expected.holder_token.as_deref() {
                         Some(holder_token) => {
@@ -338,6 +384,7 @@ pub(crate) struct MongoHighSearchMaintenanceGuard {
     state: Collection<Document>,
     writers: Collection<Document>,
     queries: Collection<Document>,
+    memo_access: Collection<Document>,
 }
 
 impl MongoHighSearchMaintenanceGuard {
@@ -347,6 +394,7 @@ impl MongoHighSearchMaintenanceGuard {
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
             queries: database.collection(QUERY_LEASES_COLLECTION),
+            memo_access: database.collection(MEMO_ACCESS_LEASES_COLLECTION),
         };
         guard.initialize_state().await?;
         Ok(guard)
@@ -364,6 +412,8 @@ impl MongoHighSearchMaintenanceGuard {
                         "writer_epoch": 0_i64,
                         "query_route": HighSearchQueryRoute::Legacy.as_persisted_str(),
                         "query_route_generation": 0_i64,
+                        "memo_route": HighMemoDataRoute::LegacyPlaintext.as_persisted_str(),
+                        "memo_route_generation": 0_i64,
                     }
                 },
             )
@@ -406,6 +456,22 @@ impl MongoHighSearchMaintenanceGuard {
             .map_err(|error| {
                 maintenance_db_error("backfill HIGH search query route generation", error)
             })?;
+        self.state
+            .update_one(
+                doc! { "_id": STATE_ID, "memo_route": { "$exists": false } },
+                doc! { "$set": { "memo_route": HighMemoDataRoute::LegacyPlaintext.as_persisted_str() } },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("backfill HIGH memo data route", error))?;
+        self.state
+            .update_one(
+                doc! { "_id": STATE_ID, "memo_route_generation": { "$exists": false } },
+                doc! { "$set": { "memo_route_generation": 0_i64 } },
+            )
+            .await
+            .map_err(|error| {
+                maintenance_db_error("backfill HIGH memo data route generation", error)
+            })?;
 
         let state = self
             .state
@@ -418,6 +484,7 @@ impl MongoHighSearchMaintenanceGuard {
                 )
             })?;
         app_query_route_snapshot(&state)?;
+        app_memo_route_snapshot(&state)?;
         Ok(())
     }
 
@@ -455,25 +522,27 @@ impl MongoHighSearchMaintenanceGuard {
                         .session(&mut *session)
                         .await?
                         .ok_or_else(|| MongoError::custom(MaintenanceActive))?;
-                    let route_snapshot = mongo_query_route_snapshot(&gate)?;
+                    let query_route_snapshot = mongo_query_route_snapshot(&gate)?;
+                    let memo_route_snapshot = mongo_memo_route_snapshot(&gate)?;
 
                     context
                         .leases
                         .insert_one(doc! { "_id": context.lease_id.clone() })
                         .session(&mut *session)
                         .await?;
-                    Ok(route_snapshot)
+                    Ok((query_route_snapshot, memo_route_snapshot))
                 }
                 .boxed()
             })
             .await;
 
         match result {
-            Ok(route_snapshot) => Ok(MongoMaintenanceActivityPermit {
+            Ok((query_route_snapshot, memo_route_snapshot)) => Ok(MongoMaintenanceActivityPermit {
                 leases,
                 lease_id,
                 activity,
-                route_snapshot,
+                query_route_snapshot,
+                memo_route_snapshot,
             }),
             Err(error) if error.get_custom::<MaintenanceActive>().is_some() => {
                 Err(AppError::ServiceUnavailable(format!(
@@ -482,6 +551,9 @@ impl MongoHighSearchMaintenanceGuard {
             }
             Err(error) if error.get_custom::<InvalidQueryRouteState>().is_some() => Err(
                 AppError::ServiceUnavailable("HIGH search query route state is invalid".into()),
+            ),
+            Err(error) if error.get_custom::<InvalidMemoRouteState>().is_some() => Err(
+                AppError::ServiceUnavailable("HIGH memo data route state is invalid".into()),
             ),
             Err(error) => Err(maintenance_db_error(
                 "acquire HIGH search maintenance activity lease",
@@ -497,6 +569,11 @@ impl MongoHighSearchMaintenanceGuard {
 
     async fn acquire_query_lease(&self) -> AppResult<MongoMaintenanceActivityPermit> {
         self.acquire_activity_lease(self.queries.clone(), "protected HIGH search queries")
+            .await
+    }
+
+    async fn acquire_memo_access_lease(&self) -> AppResult<MongoMaintenanceActivityPermit> {
+        self.acquire_activity_lease(self.memo_access.clone(), "memo data-path requests")
             .await
     }
 
@@ -568,13 +645,21 @@ impl MongoHighSearchMaintenanceGuard {
             .await
             .map_err(|error| maintenance_db_error("count active protected query leases", error))
     }
+
+    async fn active_memo_access_count(&self) -> AppResult<u64> {
+        self.memo_access
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| maintenance_db_error("count active memo access leases", error))
+    }
 }
 
 struct MongoMaintenanceActivityPermit {
     leases: Collection<Document>,
     lease_id: String,
     activity: &'static str,
-    route_snapshot: HighSearchQueryRouteSnapshot,
+    query_route_snapshot: HighSearchQueryRouteSnapshot,
+    memo_route_snapshot: HighMemoDataRouteSnapshot,
 }
 
 impl MongoMaintenanceActivityPermit {
@@ -604,9 +689,20 @@ impl MemoMutationPermit for MongoMaintenanceActivityPermit {
 }
 
 #[async_trait]
+impl HighMemoAccessPermit for MongoMaintenanceActivityPermit {
+    fn route_snapshot(&self) -> HighMemoDataRouteSnapshot {
+        self.memo_route_snapshot
+    }
+
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        (*self).release_lease().await
+    }
+}
+
+#[async_trait]
 impl HighSearchQueryPermit for MongoMaintenanceActivityPermit {
     fn route_snapshot(&self) -> HighSearchQueryRouteSnapshot {
-        self.route_snapshot
+        self.query_route_snapshot
     }
 
     async fn release(self: Box<Self>) -> AppResult<()> {
@@ -706,6 +802,70 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
         self.current_query_route().await
     }
 
+    async fn current_memo_route(&self) -> AppResult<HighMemoDataRouteSnapshot> {
+        let state = self
+            .state
+            .find_one(doc! {
+                "_id": STATE_ID,
+                "mode": MODE_MAINTENANCE,
+                "holder_token": self.holder_token.clone(),
+            })
+            .await
+            .map_err(|error| maintenance_db_error("read HIGH memo data route", error))?
+            .ok_or_else(|| {
+                AppError::Conflict("HIGH maintenance barrier ownership was lost".into())
+            })?;
+        app_memo_route_snapshot(&state)
+    }
+
+    async fn switch_memo_route(
+        &self,
+        expected: HighMemoDataRouteSnapshot,
+        target: HighMemoDataRoute,
+    ) -> AppResult<HighMemoDataRouteSnapshot> {
+        if expected.generation < 0 || expected.generation == i64::MAX {
+            return Err(AppError::Conflict(
+                "HIGH memo data route generation cannot advance safely".into(),
+            ));
+        }
+
+        if target == expected.route {
+            let current = self.current_memo_route().await?;
+            if current == expected {
+                return Ok(current);
+            }
+            return Err(AppError::Conflict(
+                "HIGH memo data route changed before idempotent cutover validation".into(),
+            ));
+        }
+
+        let update = self
+            .state
+            .update_one(
+                doc! {
+                    "_id": STATE_ID,
+                    "mode": MODE_MAINTENANCE,
+                    "holder_token": self.holder_token.clone(),
+                    "memo_route": expected.route.as_persisted_str(),
+                    "memo_route_generation": expected.generation,
+                },
+                doc! {
+                    "$set": { "memo_route": target.as_persisted_str() },
+                    "$inc": { "memo_route_generation": 1_i64 },
+                },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("switch HIGH memo data route", error))?;
+
+        if update.matched_count != 1 {
+            return Err(AppError::Conflict(
+                "HIGH memo data route changed before cutover".into(),
+            ));
+        }
+
+        self.current_memo_route().await
+    }
+
     async fn release(self: Box<Self>) -> AppResult<()> {
         let result = self
             .state
@@ -741,9 +901,31 @@ impl MemoMutationGuard for MongoHighSearchMaintenanceGuard {
 }
 
 #[async_trait]
+impl HighMemoAccessGuard for MongoHighSearchMaintenanceGuard {
+    async fn acquire_access(&self) -> AppResult<Box<dyn HighMemoAccessPermit>> {
+        Ok(Box::new(self.acquire_memo_access_lease().await?))
+    }
+}
+
+#[async_trait]
 impl HighSearchQueryGuard for MongoHighSearchMaintenanceGuard {
     async fn acquire_query(&self) -> AppResult<Box<dyn HighSearchQueryPermit>> {
         Ok(Box::new(self.acquire_query_lease().await?))
+    }
+}
+
+#[async_trait]
+impl HighMemoDataRouteReader for MongoHighSearchMaintenanceGuard {
+    async fn current_memo_data_route(&self) -> AppResult<HighMemoDataRouteSnapshot> {
+        let state = self
+            .state
+            .find_one(doc! { "_id": STATE_ID })
+            .await
+            .map_err(|error| maintenance_db_error("read HIGH memo data route state", error))?
+            .ok_or_else(|| {
+                AppError::ServiceUnavailable("HIGH maintenance state is not initialized".into())
+            })?;
+        app_memo_route_snapshot(&state)
     }
 }
 
@@ -771,7 +953,10 @@ impl HighSearchOfflineWindowGuard for MongoHighSearchMaintenanceGuard {
 
         loop {
             permit.assert_still_enforced().await?;
-            if self.active_writer_count().await? == 0 && self.active_query_count().await? == 0 {
+            if self.active_writer_count().await? == 0
+                && self.active_query_count().await? == 0
+                && self.active_memo_access_count().await? == 0
+            {
                 return Ok(Box::new(permit));
             }
             sleep(DRAIN_POLL_INTERVAL).await;
@@ -815,6 +1000,40 @@ fn app_query_route_snapshot(state: &Document) -> AppResult<HighSearchQueryRouteS
     Ok(HighSearchQueryRouteSnapshot { route, generation })
 }
 
+fn mongo_memo_route_snapshot(state: &Document) -> Result<HighMemoDataRouteSnapshot, MongoError> {
+    let route = state
+        .get_str(MEMO_ROUTE_FIELD)
+        .ok()
+        .and_then(HighMemoDataRoute::from_persisted_str)
+        .ok_or_else(|| MongoError::custom(InvalidMemoRouteState))?;
+    let generation = state
+        .get_i64(MEMO_ROUTE_GENERATION_FIELD)
+        .map_err(|_| MongoError::custom(InvalidMemoRouteState))?;
+    if generation < 0 {
+        return Err(MongoError::custom(InvalidMemoRouteState));
+    }
+    Ok(HighMemoDataRouteSnapshot { route, generation })
+}
+
+fn app_memo_route_snapshot(state: &Document) -> AppResult<HighMemoDataRouteSnapshot> {
+    let route = state
+        .get_str(MEMO_ROUTE_FIELD)
+        .ok()
+        .and_then(HighMemoDataRoute::from_persisted_str)
+        .ok_or_else(|| {
+            AppError::ServiceUnavailable("HIGH memo data route state is invalid".into())
+        })?;
+    let generation = state.get_i64(MEMO_ROUTE_GENERATION_FIELD).map_err(|_| {
+        AppError::ServiceUnavailable("HIGH memo data route generation is invalid".into())
+    })?;
+    if generation < 0 {
+        return Err(AppError::ServiceUnavailable(
+            "HIGH memo data route generation is invalid".into(),
+        ));
+    }
+    Ok(HighMemoDataRouteSnapshot { route, generation })
+}
+
 fn maintenance_db_error(operation: &str, error: MongoError) -> AppError {
     AppError::DatabaseError(format!("{operation} failed: {error}"))
 }
@@ -827,7 +1046,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a local MongoDB replica set"]
-    async fn mongodb_maintenance_barrier_drains_and_blocks_writers_and_protected_queries() {
+    async fn mongodb_maintenance_barrier_drains_writers_queries_and_memo_access() {
         let uri = std::env::var("MONGODB_TEST_URI")
             .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
         let client = Client::with_uri_str(&uri).await.unwrap();
@@ -839,10 +1058,18 @@ mod tests {
             .unwrap();
         let first_writer = guard.acquire_mutation().await.unwrap();
         let first_query = guard.acquire_query().await.unwrap();
+        let first_memo_access = guard.acquire_access().await.unwrap();
         assert_eq!(
             first_query.route_snapshot(),
             HighSearchQueryRouteSnapshot {
                 route: HighSearchQueryRoute::Legacy,
+                generation: 0,
+            }
+        );
+        assert_eq!(
+            first_memo_access.route_snapshot(),
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::LegacyPlaintext,
                 generation: 0,
             }
         );
@@ -872,6 +1099,10 @@ mod tests {
             guard.acquire_query().await,
             Err(AppError::ServiceUnavailable(_))
         ));
+        assert!(matches!(
+            guard.acquire_access().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
         assert!(!maintenance_task.is_finished());
 
         first_writer.release().await.unwrap();
@@ -880,6 +1111,11 @@ mod tests {
             "maintenance must also drain the protected query lease"
         );
         first_query.release().await.unwrap();
+        assert!(
+            !maintenance_task.is_finished(),
+            "maintenance must also drain the memo data-path lease"
+        );
+        first_memo_access.release().await.unwrap();
         let maintenance = maintenance_task.await.unwrap().unwrap();
         maintenance.assert_still_enforced().await.unwrap();
 
@@ -916,12 +1152,49 @@ mod tests {
             Err(AppError::Conflict(_))
         ));
 
+        let legacy_memo_route = maintenance.current_memo_route().await.unwrap();
+        assert_eq!(
+            legacy_memo_route,
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::LegacyPlaintext,
+                generation: 0,
+            }
+        );
+        let encrypted_memo_route = maintenance
+            .switch_memo_route(legacy_memo_route, HighMemoDataRoute::Encrypted)
+            .await
+            .unwrap();
+        assert_eq!(
+            encrypted_memo_route,
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::Encrypted,
+                generation: 1,
+            }
+        );
+        assert_eq!(
+            maintenance
+                .switch_memo_route(encrypted_memo_route, HighMemoDataRoute::Encrypted)
+                .await
+                .unwrap(),
+            encrypted_memo_route
+        );
+        assert!(matches!(
+            maintenance
+                .switch_memo_route(legacy_memo_route, HighMemoDataRoute::LegacyPlaintext)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+
         assert!(matches!(
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
         ));
         assert!(matches!(
             guard.acquire_query().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert!(matches!(
+            guard.acquire_access().await,
             Err(AppError::ServiceUnavailable(_))
         ));
 
@@ -937,6 +1210,15 @@ mod tests {
             }
         );
         query_after_release.release().await.unwrap();
+        let memo_access_after_release = guard.acquire_access().await.unwrap();
+        assert_eq!(
+            memo_access_after_release.route_snapshot(),
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::Encrypted,
+                generation: 1,
+            }
+        );
+        memo_access_after_release.release().await.unwrap();
 
         database.drop().await.unwrap();
     }
@@ -959,15 +1241,23 @@ mod tests {
         // release intentionally leaves fail-closed activity leases behind.
         let abandoned_writer = guard.acquire_mutation().await.unwrap();
         let abandoned_query = guard.acquire_query().await.unwrap();
+        let abandoned_memo_access = guard.acquire_access().await.unwrap();
         drop(abandoned_writer);
         drop(abandoned_query);
+        drop(abandoned_memo_access);
 
         let open_snapshot = recovery.inspect().await.unwrap();
         assert_eq!(open_snapshot.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(open_snapshot.query_route(), HighSearchQueryRoute::Legacy);
         assert_eq!(open_snapshot.query_route_generation(), 0);
+        assert_eq!(
+            open_snapshot.memo_route(),
+            HighMemoDataRoute::LegacyPlaintext
+        );
+        assert_eq!(open_snapshot.memo_route_generation(), 0);
         assert_eq!(open_snapshot.active_writer_leases(), 1);
         assert_eq!(open_snapshot.active_query_leases(), 1);
+        assert_eq!(open_snapshot.active_memo_access_leases(), 1);
 
         let mut stale_snapshot = open_snapshot.clone();
         stale_snapshot.writer_epoch -= 1;
@@ -978,6 +1268,7 @@ mod tests {
         let after_stale = recovery.inspect().await.unwrap();
         assert_eq!(after_stale.active_writer_leases(), 1);
         assert_eq!(after_stale.active_query_leases(), 1);
+        assert_eq!(after_stale.active_memo_access_leases(), 1);
 
         let mut stale_route_snapshot = open_snapshot.clone();
         stale_route_snapshot.query_route_generation += 1;
@@ -988,6 +1279,20 @@ mod tests {
         let after_stale_route = recovery.inspect().await.unwrap();
         assert_eq!(after_stale_route.active_writer_leases(), 1);
         assert_eq!(after_stale_route.active_query_leases(), 1);
+        assert_eq!(after_stale_route.active_memo_access_leases(), 1);
+
+        let mut stale_memo_route_snapshot = open_snapshot.clone();
+        stale_memo_route_snapshot.memo_route_generation += 1;
+        assert!(matches!(
+            recovery
+                .recover_stale_state(&stale_memo_route_snapshot)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+        let after_stale_memo_route = recovery.inspect().await.unwrap();
+        assert_eq!(after_stale_memo_route.active_writer_leases(), 1);
+        assert_eq!(after_stale_memo_route.active_query_leases(), 1);
+        assert_eq!(after_stale_memo_route.active_memo_access_leases(), 1);
 
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
@@ -995,6 +1300,9 @@ mod tests {
         assert_eq!(recovered.query_route_generation(), 0);
         assert_eq!(recovered.active_writer_leases(), 0);
         assert_eq!(recovered.active_query_leases(), 0);
+        assert_eq!(recovered.active_memo_access_leases(), 0);
+        assert_eq!(recovered.memo_route(), HighMemoDataRoute::LegacyPlaintext);
+        assert_eq!(recovered.memo_route_generation(), 0);
         assert_eq!(recovered.writer_epoch(), open_snapshot.writer_epoch() + 1);
 
         // Simulate cancellation while maintenance owns the barrier. The task
@@ -1025,12 +1333,17 @@ mod tests {
         assert!(maintenance_snapshot.holder_token().is_some());
         assert_eq!(maintenance_snapshot.active_writer_leases(), 0);
         assert_eq!(maintenance_snapshot.active_query_leases(), 0);
+        assert_eq!(maintenance_snapshot.active_memo_access_leases(), 0);
         assert!(matches!(
             guard.acquire_mutation().await,
             Err(AppError::ServiceUnavailable(_))
         ));
         assert!(matches!(
             guard.acquire_query().await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert!(matches!(
+            guard.acquire_access().await,
             Err(AppError::ServiceUnavailable(_))
         ));
 
@@ -1049,6 +1362,8 @@ mod tests {
         writer_after_recovery.release().await.unwrap();
         let query_after_recovery = guard.acquire_query().await.unwrap();
         query_after_recovery.release().await.unwrap();
+        let memo_access_after_recovery = guard.acquire_access().await.unwrap();
+        memo_access_after_recovery.release().await.unwrap();
 
         database.drop().await.unwrap();
     }

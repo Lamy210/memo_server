@@ -42,8 +42,9 @@ fn maintenance_participation(
     let high_memo_enabled = matches!(high_memo_crypto, HighMemoCryptoConfig::AwsKms { .. });
     let high_search_enabled = matches!(high_search, HighSearchConfig::AwsKms { .. });
 
-    // MEMO-HIGH-1 migration only needs to freeze memo mutations. Protected
-    // search reads need query leases only when SEARCH-HIGH-1 itself is enabled.
+    // Any HIGH mode participates in writer maintenance. SEARCH-HIGH-1 adds
+    // protected-query leases. MEMO-HIGH-1 memo-access leases are staged on the
+    // same guard but are not request-path wired until the follow-up cutover PR.
     (
         high_memo_enabled || high_search_enabled,
         high_search_enabled,
