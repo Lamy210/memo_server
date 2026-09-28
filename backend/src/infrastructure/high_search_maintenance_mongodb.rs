@@ -922,9 +922,7 @@ impl HighMemoDataRouteReader for MongoHighSearchMaintenanceGuard {
             .await
             .map_err(|error| maintenance_db_error("read HIGH memo data route state", error))?
             .ok_or_else(|| {
-                AppError::ServiceUnavailable(
-                    "HIGH maintenance state is not initialized".into(),
-                )
+                AppError::ServiceUnavailable("HIGH maintenance state is not initialized".into())
             })?;
         app_memo_route_snapshot(&state)
     }
@@ -1001,9 +999,7 @@ fn app_query_route_snapshot(state: &Document) -> AppResult<HighSearchQueryRouteS
     Ok(HighSearchQueryRouteSnapshot { route, generation })
 }
 
-fn mongo_memo_route_snapshot(
-    state: &Document,
-) -> Result<HighMemoDataRouteSnapshot, MongoError> {
+fn mongo_memo_route_snapshot(state: &Document) -> Result<HighMemoDataRouteSnapshot, MongoError> {
     let route = state
         .get_str(MEMO_ROUTE_FIELD)
         .ok()
@@ -1253,7 +1249,10 @@ mod tests {
         assert_eq!(open_snapshot.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(open_snapshot.query_route(), HighSearchQueryRoute::Legacy);
         assert_eq!(open_snapshot.query_route_generation(), 0);
-        assert_eq!(open_snapshot.memo_route(), HighMemoDataRoute::LegacyPlaintext);
+        assert_eq!(
+            open_snapshot.memo_route(),
+            HighMemoDataRoute::LegacyPlaintext
+        );
         assert_eq!(open_snapshot.memo_route_generation(), 0);
         assert_eq!(open_snapshot.active_writer_leases(), 1);
         assert_eq!(open_snapshot.active_query_leases(), 1);
@@ -1284,7 +1283,9 @@ mod tests {
         let mut stale_memo_route_snapshot = open_snapshot.clone();
         stale_memo_route_snapshot.memo_route_generation += 1;
         assert!(matches!(
-            recovery.recover_stale_state(&stale_memo_route_snapshot).await,
+            recovery
+                .recover_stale_state(&stale_memo_route_snapshot)
+                .await,
             Err(AppError::Conflict(_))
         ));
         let after_stale_memo_route = recovery.inspect().await.unwrap();
