@@ -1,8 +1,8 @@
 // Staged MEMO-HIGH-1 authoritative adapter.
 //
-// This adapter is intentionally not startup-wired yet. It proves that the
-// encrypted MongoDB collection can satisfy the existing domain-facing
-// MemoAuthoritativeStore contract without persisting semantic plaintext.
+// This adapter is startup-composed only when MEMO-HIGH-1 AWS KMS runtime
+// configuration is explicitly enabled. The persisted memo route still defaults
+// to legacy plaintext, so composition alone does not make this store authoritative.
 #![allow(dead_code)]
 
 use std::{cmp::Reverse, sync::Arc};

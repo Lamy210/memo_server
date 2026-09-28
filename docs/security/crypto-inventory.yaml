@@ -62,7 +62,7 @@ assets:
           semantic_sort_metadata_persisted: false
           list_ordering: decrypt_then_updated_at_desc
           corrupt_or_undecryptable_envelope_behavior: fail_closed
-          request_path_wired: false
+          request_path_wired: standby_repository_injected
         request_path_route_foundation:
           storage: shared_mongodb_maintenance_singleton
           default: legacy_plaintext
@@ -83,9 +83,11 @@ assets:
           multi_replica_cutover_boundary: staged
           route_aware_repository_selection: wired
           legacy_repository: wired
-          encrypted_repository: fail_closed_until_injected
+          encrypted_repository: startup_injected_when_high_memo_enabled
+          encrypted_repository_route_selection: atomic_memo_access_snapshot
+          encrypted_repository_route_default: unreachable_while_legacy
           access_lease_release_failure: fail_closed
-          request_path_wired: route_foundation_only
+          request_path_wired: standby_repository_injected
         cache_foundation:
           domain_cache_contract: owner_partition_and_memo_id_typed
           legacy_plaintext_key_derivation: redis_adapter_internal_only
@@ -100,7 +102,7 @@ assets:
           mutation_cache_replace: invalidate_then_set
           cache_replace_failure: outbox_retry_without_old_fast_path_value
           decrypted_identity_revalidation: required
-          request_path_wired: false
+          request_path_wired: standby_encrypted_repository_only
           legacy_plaintext_cache_purge: primitive_staged
           legacy_plaintext_cache_sweep:
             redis_scan_match: memo:*
@@ -120,6 +122,11 @@ assets:
           all_writer_replicas_guard_participation: required_operator_confirmation
           source_write_freeze: shared_mongodb_offline_window
           background_reconciliation_drain: true
+          route_scoped_reconcilers:
+            legacy_outbox_required_route: legacy_plaintext
+            encrypted_outbox_required_route: encrypted
+            inactive_route_behavior: leave_intent_unacknowledged_and_do_not_touch_secondary_state
+            access_lease_release_before_ack: required
           high_search_query_drain: true
           memo_data_path_drain: true_when_request_path_guard_is_wired
           kms_preflight_before_freeze: true
@@ -197,9 +204,11 @@ assets:
         aws_sdk_region: explicit
         credentials: aws_standard_refreshable_provider_chain
         kms_preflight_before_use: required
-        application_startup_wired: false
-        operator_or_migration_only: true
-      runtime_wired: operator_or_migration_only
+        application_startup_wired: standby_when_high_memo_enabled
+        operator_migration_trait: available
+        request_crypto_trait: available
+        startup_composition_changes_persisted_route: false
+      runtime_wired: operator_migration_and_standby_request_repository
       runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto
