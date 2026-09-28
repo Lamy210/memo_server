@@ -149,6 +149,8 @@ jobs:
         run: |
           cargo test --locked high_manticore_preserves_owner_scope_and_blind_tokens \
             -- --ignored --nocapture
+          cargo test --locked legacy_projection_reset_preserves_table_and_reaches_zero_documents \
+            -- --ignored --nocapture
 
       - name: Stop Manticore Search
         if: always()
