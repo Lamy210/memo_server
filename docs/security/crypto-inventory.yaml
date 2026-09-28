@@ -204,8 +204,10 @@ assets:
         aws_sdk_region: explicit
         credentials: aws_standard_refreshable_provider_chain
         kms_preflight_before_use: required
-        application_startup_wired: false
-        operator_or_migration_only: true
+        application_startup_wired: standby_when_high_memo_enabled
+        operator_migration_trait: available
+        request_crypto_trait: available
+        startup_composition_changes_persisted_route: false
       runtime_wired: operator_migration_and_standby_request_repository
       runtime_eligible: false
     migration_status: in_progress
