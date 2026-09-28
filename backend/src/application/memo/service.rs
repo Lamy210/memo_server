@@ -374,7 +374,7 @@ mod tests {
     use super::*;
     use crate::application::{
         crypto_search_projection::HighSearchProjectionPage,
-        maintenance::UnrestrictedMemoMutationGuard,
+        maintenance::{UnrestrictedHighMemoAccessGuard, UnrestrictedMemoMutationGuard},
     };
 
     struct FakeRepository {
@@ -521,7 +521,9 @@ mod tests {
     ) -> MemoService {
         MemoService::new(
             repository,
+            None,
             Arc::new(UnrestrictedMemoMutationGuard),
+            Arc::new(UnrestrictedHighMemoAccessGuard),
             Arc::new(FakeQueryGuard {
                 route,
                 release_fail,
