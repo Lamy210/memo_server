@@ -152,6 +152,7 @@ mod tests {
         application::{
             crypto::{HighEncryptedMemoEnvelope, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID},
             crypto_migration::{EncryptedMemoStageResult, HighMemoStagingCryptography},
+            high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
             high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
         },
         config::{AuthConfig, HighSearchConfig, HighSearchShadowConfig, SearchBackend},
@@ -183,6 +184,21 @@ mod tests {
             _expected: HighSearchQueryRouteSnapshot,
             _target: HighSearchQueryRoute,
         ) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Err(AppError::Conflict("not used by memo migration".into()))
+        }
+
+        async fn current_memo_route(&self) -> AppResult<HighMemoDataRouteSnapshot> {
+            Ok(HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::LegacyPlaintext,
+                generation: 0,
+            })
+        }
+
+        async fn switch_memo_route(
+            &self,
+            _expected: HighMemoDataRouteSnapshot,
+            _target: HighMemoDataRoute,
+        ) -> AppResult<HighMemoDataRouteSnapshot> {
             Err(AppError::Conflict("not used by memo migration".into()))
         }
 
