@@ -824,6 +824,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn waiting_target_releases_access_without_acknowledging_intent() {
+        let user_id = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(user_id, memo_id);
+        let event = ProjectionIntent::new(
+            user_id,
+            memo_id,
+            ProjectionTarget::Version(memo.version + 1),
+        );
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        let reconciler = reconciler.with_memo_route(
+            Arc::new(FakeMemoAccessGuard {
+                route: HighMemoDataRoute::Encrypted,
+                fail_release: false,
+                events: events.clone(),
+            }),
+            HighMemoDataRoute::Encrypted,
+        );
+
+        assert_eq!(
+            reconciler.reconcile_event(&event).await.unwrap(),
+            ReconcileOutcome::WaitingForTarget
+        );
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            events.snapshot(),
+            vec!["memo-access-acquire", "memo-access-release"]
+        );
+    }
+
+    #[tokio::test]
     async fn matching_memo_route_releases_access_before_outbox_ack() {
         let user_id = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
