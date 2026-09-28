@@ -24,7 +24,7 @@ use super::{
     persistence::{
         manticore::ManticoreClient,
         mongodb::MongoDbAuthoritativeStore,
-        ports::{LegacyMemoCacheSweepStats, LegacyMemoPlaintextCacheMaintenance, MemoAuthoritativeStore},
+        ports::{LegacyMemoCacheSweepStats, LegacyMemoPlaintextCacheMaintenance},
         redis::RedisCache,
     },
 };
@@ -160,14 +160,38 @@ pub async fn run_encrypted_high_memo_cutover(
     };
 
     if previous_memo_route.route == HighMemoDataRoute::Encrypted {
+        let legacy_cache_purge = match purge_legacy_plaintext_secondaries(
+            legacy_cache.as_ref(),
+            legacy_search.as_ref(),
+            cache_scan_count,
+        )
+        .await
+        {
+            Ok(stats) => stats,
+            Err(error) => return release_pre_switch(permit, error).await,
+        };
+
+        let revalidated_search = permit.current_query_route().await.map_err(|error| {
+            fail_closed_after_destructive_pre_switch("search route revalidation failed", error)
+        })?;
+        let revalidated_memo = permit.current_memo_route().await.map_err(|error| {
+            fail_closed_after_destructive_pre_switch("memo route revalidation failed", error)
+        })?;
+        if revalidated_search != expected_search || revalidated_memo != previous_memo_route {
+            return Err(AppError::ServiceUnavailable(
+                "MEMO-HIGH-1 idempotent cleanup observed a route change; maintenance barrier remains closed"
+                    .into(),
+            ));
+        }
+
         permit.release().await?;
         return Ok(HighMemoRouteCutoverReport {
             previous_memo_route,
             current_memo_route: previous_memo_route,
             search_route: observed_search,
             migration: None,
-            legacy_cache_purge: None,
-            legacy_search_purged: false,
+            legacy_cache_purge: Some(legacy_cache_purge),
+            legacy_search_purged: true,
         });
     }
 
@@ -208,47 +232,16 @@ pub async fn run_encrypted_high_memo_cutover(
         return release_pre_switch(permit, error).await;
     }
 
-    let legacy_cache_purge = match legacy_cache
-        .purge_legacy_plaintext_memo_cache(cache_scan_count)
-        .await
+    let legacy_cache_purge = match purge_legacy_plaintext_secondaries(
+        legacy_cache.as_ref(),
+        legacy_search.as_ref(),
+        cache_scan_count,
+    )
+    .await
     {
         Ok(stats) => stats,
         Err(error) => return release_pre_switch(permit, error).await,
     };
-    let cache_after = match legacy_cache
-        .inspect_legacy_plaintext_memo_cache(cache_scan_count)
-        .await
-    {
-        Ok(stats) => stats,
-        Err(error) => return release_pre_switch(permit, error).await,
-    };
-    if cache_after.legacy_keys != 0 {
-        return release_pre_switch(
-            permit,
-            AppError::Conflict(format!(
-                "legacy plaintext memo cache purge left {} memo key(s)",
-                cache_after.legacy_keys
-            )),
-        )
-        .await;
-    }
-
-    if let Err(error) = legacy_search.reset_legacy_projection().await {
-        return release_pre_switch(permit, error).await;
-    }
-    match legacy_search.count_legacy_documents().await {
-        Ok(0) => {}
-        Ok(count) => {
-            return release_pre_switch(
-                permit,
-                AppError::Conflict(format!(
-                    "legacy plaintext search purge left {count} document(s)"
-                )),
-            )
-            .await;
-        }
-        Err(error) => return release_pre_switch(permit, error).await,
-    }
 
     if let Err(error) = permit.assert_still_enforced().await {
         return Err(fail_closed_after_destructive_pre_switch(
@@ -331,15 +324,43 @@ fn validate_generation(label: &str, generation: i64) -> AppResult<()> {
 async fn ensure_no_pending_projection_intents(
     source: &MongoDbAuthoritativeStore,
 ) -> AppResult<()> {
-    let pending = source.list_projection_intents().await?;
-    if pending.is_empty() {
+    let pending = source.count_projection_intents_for_cutover().await?;
+    if pending == 0 {
         Ok(())
     } else {
         Err(AppError::Conflict(format!(
-            "MEMO-HIGH-1 cutover requires projection outbox convergence; {} intent(s) remain pending",
-            pending.len()
+            "MEMO-HIGH-1 cutover requires projection outbox convergence; {pending} intent(s) remain pending"
         )))
     }
+}
+
+async fn purge_legacy_plaintext_secondaries(
+    legacy_cache: &RedisCache,
+    legacy_search: &ManticoreClient,
+    cache_scan_count: usize,
+) -> AppResult<LegacyMemoCacheSweepStats> {
+    let purge = legacy_cache
+        .purge_legacy_plaintext_memo_cache(cache_scan_count)
+        .await?;
+    let cache_after = legacy_cache
+        .inspect_legacy_plaintext_memo_cache(cache_scan_count)
+        .await?;
+    if cache_after.legacy_keys != 0 {
+        return Err(AppError::Conflict(format!(
+            "legacy plaintext memo cache purge left {} memo key(s)",
+            cache_after.legacy_keys
+        )));
+    }
+
+    legacy_search.reset_legacy_projection().await?;
+    let remaining = legacy_search.count_legacy_documents().await?;
+    if remaining != 0 {
+        return Err(AppError::Conflict(format!(
+            "legacy plaintext search purge left {remaining} document(s)"
+        )));
+    }
+
+    Ok(purge)
 }
 
 fn expected_memo_target(
