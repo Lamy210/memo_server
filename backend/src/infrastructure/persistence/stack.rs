@@ -4,7 +4,8 @@ use crate::{
     application::{
         health::HealthProbe,
         maintenance::{
-            HighSearchQueryGuard, MemoMutationGuard, UnrestrictedHighSearchQueryGuard,
+            HighMemoAccessGuard, HighSearchQueryGuard, MemoMutationGuard,
+            UnrestrictedHighMemoAccessGuard, UnrestrictedHighSearchQueryGuard,
             UnrestrictedMemoMutationGuard,
         },
     },
@@ -32,21 +33,24 @@ pub(crate) struct PersistenceStack {
     pub(crate) cache_health: Arc<dyn HealthProbe>,
     pub(crate) search_health: Arc<dyn HealthProbe>,
     pub(crate) mutation_guard: Arc<dyn MemoMutationGuard>,
+    pub(crate) high_memo_access_guard: Arc<dyn HighMemoAccessGuard>,
     pub(crate) high_search_query_guard: Arc<dyn HighSearchQueryGuard>,
 }
 
 fn maintenance_participation(
     high_memo_crypto: &HighMemoCryptoConfig,
     high_search: &HighSearchConfig,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
     let high_memo_enabled = matches!(high_memo_crypto, HighMemoCryptoConfig::AwsKms { .. });
     let high_search_enabled = matches!(high_search, HighSearchConfig::AwsKms { .. });
 
-    // MEMO-HIGH-1 migration only needs to freeze memo mutations. Protected
-    // search reads need query leases only when SEARCH-HIGH-1 itself is enabled.
+    // Any HIGH mode participates in writer maintenance. SEARCH-HIGH-1 adds
+    // protected-query leases, while MEMO-HIGH-1 adds a memo data-path lease
+    // whose route snapshot will govern cache/authoritative selection.
     (
         high_memo_enabled || high_search_enabled,
         high_search_enabled,
+        high_memo_enabled,
     )
 }
 
@@ -74,7 +78,7 @@ impl PersistenceStack {
             }
         };
 
-        let (guard_memo_mutations, guard_high_search_queries) =
+        let (guard_memo_mutations, guard_high_search_queries, guard_high_memo_access) =
             maintenance_participation(&config.high_memo_crypto, &config.high_search);
         let shared_maintenance_guard = if guard_memo_mutations {
             let database = mongodb_database.as_ref().ok_or_else(|| {
@@ -95,6 +99,17 @@ impl PersistenceStack {
             } else {
                 Arc::new(UnrestrictedMemoMutationGuard)
             };
+
+        let high_memo_access_guard: Arc<dyn HighMemoAccessGuard> = if guard_high_memo_access {
+            let guard = shared_maintenance_guard.as_ref().ok_or_else(|| {
+                AppError::ServiceUnavailable(
+                    "HIGH memo data-path maintenance requires the shared MongoDB guard".into(),
+                )
+            })?;
+            guard.clone()
+        } else {
+            Arc::new(UnrestrictedHighMemoAccessGuard)
+        };
 
         let high_search_query_guard: Arc<dyn HighSearchQueryGuard> = if guard_high_search_queries {
             let guard = shared_maintenance_guard.as_ref().ok_or_else(|| {
@@ -134,6 +149,7 @@ impl PersistenceStack {
             cache_health,
             search_health,
             mutation_guard,
+            high_memo_access_guard,
             high_search_query_guard,
         })
     }
@@ -177,7 +193,7 @@ mod tests {
     fn memo_crypto_alone_guards_mutations_but_not_legacy_queries() {
         assert_eq!(
             maintenance_participation(&high_memo_enabled(), &HighSearchConfig::Disabled),
-            (true, false)
+            (true, false, true)
         );
     }
 
@@ -185,7 +201,7 @@ mod tests {
     fn high_search_guards_both_mutations_and_routed_queries() {
         assert_eq!(
             maintenance_participation(&HighMemoCryptoConfig::Disabled, &high_search_enabled()),
-            (true, true)
+            (true, true, false)
         );
     }
 
@@ -193,7 +209,7 @@ mod tests {
     fn disabled_high_modes_need_no_shared_guard() {
         assert_eq!(
             maintenance_participation(&HighMemoCryptoConfig::Disabled, &HighSearchConfig::Disabled,),
-            (false, false)
+            (false, false, false)
         );
     }
 }
