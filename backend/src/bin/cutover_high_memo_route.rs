@@ -112,6 +112,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!("cutover.legacy_cache.legacy_keys={}", stats.legacy_keys);
                 println!("cutover.legacy_cache.deleted_keys={}", stats.deleted_keys);
             }
+            if let Some(stats) = report.encrypted_cache_purge {
+                println!(
+                    "cutover.encrypted_cache.scanned_candidates={}",
+                    stats.scanned_candidates
+                );
+                println!(
+                    "cutover.encrypted_cache.encrypted_keys={}",
+                    stats.encrypted_keys
+                );
+                println!(
+                    "cutover.encrypted_cache.deleted_keys={}",
+                    stats.deleted_keys
+                );
+            }
         }
     }
 
