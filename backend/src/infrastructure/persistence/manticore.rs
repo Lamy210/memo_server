@@ -253,7 +253,7 @@ impl ManticoreClient {
         let body = json!({
             "table": TABLE_NAME,
             "query": { "match_all": {} },
-            "limit": 0
+            "limit": 1
         });
         let result = self.post_json("search", &body).await?;
         result["hits"]["total"].as_u64().ok_or_else(|| {
