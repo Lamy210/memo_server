@@ -659,7 +659,9 @@ mod tests {
         assert_eq!(response.items.len(), 1);
         assert_eq!(response.items[0].id, encrypted_item.id);
         assert_eq!(
-            legacy_repository.legacy_search_calls.load(Ordering::Relaxed),
+            legacy_repository
+                .legacy_search_calls
+                .load(Ordering::Relaxed),
             0
         );
         assert_eq!(
