@@ -45,7 +45,10 @@ fn maintenance_participation(
     // Any HIGH mode participates in writer maintenance. SEARCH-HIGH-1 adds
     // protected-query leases. MEMO-HIGH-1 memo-access leases are staged on the
     // same guard but are not request-path wired until the follow-up cutover PR.
-    (high_memo_enabled || high_search_enabled, high_search_enabled)
+    (
+        high_memo_enabled || high_search_enabled,
+        high_search_enabled,
+    )
 }
 
 impl PersistenceStack {
