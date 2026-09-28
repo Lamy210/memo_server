@@ -4,7 +4,7 @@ Status: break-glass operator tooling; no automatic lease expiry.
 
 ## Purpose
 
-The MongoDB HIGH search maintenance barrier intentionally fails closed. A cancelled memo mutation/background reconciliation can leave a writer lease behind, a cancelled protected query can leave a query lease behind, and an interrupted rotation can leave the shared maintenance barrier closed. The recovery command exists to restore service only after an operator has independently established that the abandoned work is no longer running.
+The shared MongoDB HIGH maintenance barrier intentionally fails closed. A cancelled memo mutation/background reconciliation can leave a writer lease behind, a cancelled protected query can leave a query lease behind, a cancelled memo data-path request can leave a memo-access lease behind, and an interrupted rotation/cutover can leave the shared maintenance barrier closed. The recovery command exists to restore service only after an operator has independently established that the abandoned work is no longer running.
 
 Do not use this command as a normal rotation or deployment step.
 
@@ -12,13 +12,13 @@ Do not use this command as a normal rotation or deployment step.
 
 Before any `--apply` recovery:
 
-1. Stop every memo_server application replica and any operator job that can acquire memo mutation or protected-query leases.
+1. Stop every memo_server application replica and any operator job that can acquire memo mutation, protected-query, or memo-access leases.
 2. Verify those processes are no longer running.
 3. Keep MongoDB available as the authoritative recovery source.
-4. Run status inspection and record the reported mode, writer epoch (the legacy-named shared activity generation), query route, query-route generation, active writer/query lease counts, and holder token.
+4. Run status inspection and record the reported mode, writer epoch (the legacy-named shared activity generation), search query route/generation, memo data route/generation, active writer/query/memo-access lease counts, and holder token.
 5. Do not reuse an older snapshot after any application process has restarted.
 
-Recovery never relies on lease age or a timeout. If the operator cannot establish that all writers and protected-query workers are stopped, leave the state fail-closed.
+Recovery never relies on lease age or a timeout. If the operator cannot establish that all writers, protected-query workers, and memo data-path users are stopped, leave the state fail-closed.
 
 ## Inspect
 
@@ -39,8 +39,11 @@ current.mode=maintenance
 current.writer_epoch=42
 current.query_route=legacy
 current.query_route_generation=0
+current.memo_route=legacy_plaintext
+current.memo_route_generation=0
 current.active_writer_leases=0
 current.active_query_leases=0
+current.active_memo_access_leases=0
 current.holder_token=...
 ```
 
@@ -48,7 +51,7 @@ The holder token is a compare-and-swap recovery value, not an authentication cre
 
 ## Recover an abandoned maintenance barrier
 
-If status reports `mode=maintenance`, recovery requires the exact writer epoch, query route, query-route generation, and holder token observed immediately before recovery:
+If status reports `mode=maintenance`, recovery requires the exact writer epoch, search query route/generation, memo data route/generation, and holder token observed immediately before recovery:
 
 ```bash
 MONGODB_URI='mongodb://...' \
@@ -59,16 +62,20 @@ cargo run --locked --bin recover_high_search_maintenance -- \
   --expected-writer-epoch 42 \
   --expected-query-route legacy \
   --expected-query-route-generation 0 \
+  --expected-memo-route legacy_plaintext \
+  --expected-memo-route-generation 0 \
   --expected-query-route legacy \
   --expected-query-route-generation 0 \
+  --expected-memo-route legacy_plaintext \
+  --expected-memo-route-generation 0 \
   --expected-holder-token '<observed-holder-token>'
 ```
 
-The command transactionally clears stale writer and protected-query leases, changes the gate back to `open`, removes the holder token, and increments the legacy-named `writer_epoch` activity generation.
+The command transactionally clears stale writer, protected-query, and memo-access leases, changes the gate back to `open`, removes the holder token, and increments the legacy-named `writer_epoch` activity generation.
 
 ## Recover abandoned activity leases while the gate is open
 
-If status reports `mode=open` with a non-zero writer or protected-query lease count, still supply the exact observed route snapshot but omit the holder token:
+If status reports `mode=open` with any non-zero writer, protected-query, or memo-access lease count, still supply both exact observed route snapshots but omit the holder token:
 
 ```bash
 MONGODB_URI='mongodb://...' \
@@ -79,19 +86,19 @@ cargo run --locked --bin recover_high_search_maintenance -- \
   --expected-writer-epoch 42
 ```
 
-Recovery is rejected when the gate is already open and neither writer nor protected-query leases exist.
+Recovery is rejected when the gate is already open and writer, protected-query, and memo-access lease counts are all zero.
 
 ## Compare-and-swap behavior
 
-Recovery is executed in a majority-write MongoDB transaction. The transaction is accepted only when the current maintenance mode, writer epoch, query route, query-route generation, and holder token still match the inspected snapshot. Any intervening writer/query acquisition, route cutover/rollback, or maintenance ownership change causes a conflict and leaves the newer state untouched.
+Recovery is executed in a majority-write MongoDB transaction. The transaction is accepted only when the current maintenance mode, writer epoch, search query route/generation, memo data route/generation, and holder token still match the inspected snapshot. Any intervening writer/query/memo-access acquisition, search-route change, memo-route change, or maintenance ownership change causes a conflict and leaves the newer state untouched.
 
-After a conflict, run status inspection again. Never substitute a newly observed token, epoch, route, or route generation without re-establishing the safety prerequisites.
+After a conflict, run status inspection again. Never substitute a newly observed token, epoch, search route/generation, or memo route/generation without re-establishing the safety prerequisites.
 
 ## Restart
 
 After successful recovery:
 
-1. inspect status again and confirm `mode=open`, `active_writer_leases=0`, `active_query_leases=0`, and the expected query route/generation,
+1. inspect status again and confirm `mode=open`, all three lease counts are zero, and both search/memo routes have the expected generations,
 2. start one application replica,
 3. verify health and a controlled memo mutation,
 4. restore the remaining replicas gradually,
