@@ -142,7 +142,7 @@ rollback.current.route=legacy
 rollback.current.generation=9
 ```
 
-If the search route is already `legacy` at the exact expected generation, the explicit rollback command still rebuilds and verifies the legacy projection, then leaves the route generation unchanged.
+If the search route is already `legacy` at the exact expected generation, the explicit rollback command is a non-destructive no-op and leaves the route generation unchanged. It does not TRUNCATE an already-serving legacy projection.
 
 Rollback is intentionally rejected when the MEMO data route is `encrypted`. Once encrypted authoritative data can diverge from the plaintext MongoDB source, rebuilding legacy search from that plaintext source would be unsafe; reverse synchronization/decryption-driven rollback must be implemented before that state can support legacy search rollback.
 
