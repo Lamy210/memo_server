@@ -477,8 +477,10 @@ assets:
           protected_route_rollback_requires_exact_generation: true
           protected_route_rollback_page_size_required: true
           protected_route_rollback_requires_memo_route: legacy_plaintext
-          protected_route_rollback_legacy_projection_reset: truncate_table_memos
+          protected_route_rollback_legacy_projection_reset: truncate_table_memos_only_when_switching_protected_to_legacy
           protected_route_rollback_legacy_projection_rebuild: full_plaintext_authoritative_source
+          protected_route_rollback_exact_count: sql_count_star
+          protected_route_rollback_already_legacy: non_destructive_no_op
           protected_route_rollback_convergence: source_visited_projection_counts_equal
           protected_route_rollback_when_memo_route_encrypted: fail_closed_until_reverse_sync_exists
           protected_route_missing_reader_behavior: fail_closed
