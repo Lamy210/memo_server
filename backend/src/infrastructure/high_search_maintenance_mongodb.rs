@@ -521,25 +521,27 @@ impl MongoHighSearchMaintenanceGuard {
                         .session(&mut *session)
                         .await?
                         .ok_or_else(|| MongoError::custom(MaintenanceActive))?;
-                    let route_snapshot = mongo_query_route_snapshot(&gate)?;
+                    let query_route_snapshot = mongo_query_route_snapshot(&gate)?;
+                    let memo_route_snapshot = mongo_memo_route_snapshot(&gate)?;
 
                     context
                         .leases
                         .insert_one(doc! { "_id": context.lease_id.clone() })
                         .session(&mut *session)
                         .await?;
-                    Ok(route_snapshot)
+                    Ok((query_route_snapshot, memo_route_snapshot))
                 }
                 .boxed()
             })
             .await;
 
         match result {
-            Ok(route_snapshot) => Ok(MongoMaintenanceActivityPermit {
+            Ok((query_route_snapshot, memo_route_snapshot)) => Ok(MongoMaintenanceActivityPermit {
                 leases,
                 lease_id,
                 activity,
-                route_snapshot,
+                query_route_snapshot,
+                memo_route_snapshot,
             }),
             Err(error) if error.get_custom::<MaintenanceActive>().is_some() => {
                 Err(AppError::ServiceUnavailable(format!(
@@ -548,6 +550,9 @@ impl MongoHighSearchMaintenanceGuard {
             }
             Err(error) if error.get_custom::<InvalidQueryRouteState>().is_some() => Err(
                 AppError::ServiceUnavailable("HIGH search query route state is invalid".into()),
+            ),
+            Err(error) if error.get_custom::<InvalidMemoRouteState>().is_some() => Err(
+                AppError::ServiceUnavailable("HIGH memo data route state is invalid".into()),
             ),
             Err(error) => Err(maintenance_db_error(
                 "acquire HIGH search maintenance activity lease",
@@ -563,6 +568,11 @@ impl MongoHighSearchMaintenanceGuard {
 
     async fn acquire_query_lease(&self) -> AppResult<MongoMaintenanceActivityPermit> {
         self.acquire_activity_lease(self.queries.clone(), "protected HIGH search queries")
+            .await
+    }
+
+    async fn acquire_memo_access_lease(&self) -> AppResult<MongoMaintenanceActivityPermit> {
+        self.acquire_activity_lease(self.memo_access.clone(), "memo data-path requests")
             .await
     }
 
@@ -634,13 +644,21 @@ impl MongoHighSearchMaintenanceGuard {
             .await
             .map_err(|error| maintenance_db_error("count active protected query leases", error))
     }
+
+    async fn active_memo_access_count(&self) -> AppResult<u64> {
+        self.memo_access
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| maintenance_db_error("count active memo access leases", error))
+    }
 }
 
 struct MongoMaintenanceActivityPermit {
     leases: Collection<Document>,
     lease_id: String,
     activity: &'static str,
-    route_snapshot: HighSearchQueryRouteSnapshot,
+    query_route_snapshot: HighSearchQueryRouteSnapshot,
+    memo_route_snapshot: HighMemoDataRouteSnapshot,
 }
 
 impl MongoMaintenanceActivityPermit {
@@ -670,9 +688,20 @@ impl MemoMutationPermit for MongoMaintenanceActivityPermit {
 }
 
 #[async_trait]
+impl HighMemoAccessPermit for MongoMaintenanceActivityPermit {
+    fn route_snapshot(&self) -> HighMemoDataRouteSnapshot {
+        self.memo_route_snapshot
+    }
+
+    async fn release(self: Box<Self>) -> AppResult<()> {
+        (*self).release_lease().await
+    }
+}
+
+#[async_trait]
 impl HighSearchQueryPermit for MongoMaintenanceActivityPermit {
     fn route_snapshot(&self) -> HighSearchQueryRouteSnapshot {
-        self.route_snapshot
+        self.query_route_snapshot
     }
 
     async fn release(self: Box<Self>) -> AppResult<()> {
