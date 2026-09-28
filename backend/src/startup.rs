@@ -8,21 +8,16 @@ use actix_web::{
 
 use crate::{
     application::{
-        health::HealthService,
-        high_memo_routing::HighMemoDataRoute,
-        high_search_shadow::HighSearchShadowObserver,
-        memo::service::MemoService,
+        health::HealthService, high_memo_routing::HighMemoDataRoute,
+        high_search_shadow::HighSearchShadowObserver, memo::service::MemoService,
     },
     config::{AppConfig, HighMemoCryptoConfig, HighSearchShadowConfig},
     infrastructure::{
-        auth::AuthService,
-        high_memo_authoritative::HighMemoAuthoritativeAdapter,
+        auth::AuthService, high_memo_authoritative::HighMemoAuthoritativeAdapter,
         high_memo_aws_runtime::HighMemoStagingRuntimeHandle,
         high_memo_cache::HighMemoCiphertextCacheAdapter,
-        high_search_aws_runtime::HighSearchRuntimeHandle,
-        persistence::stack::PersistenceStack,
-        reconciliation::ProjectionReconciler,
-        repositories::memo::MemoRepositoryImpl,
+        high_search_aws_runtime::HighSearchRuntimeHandle, persistence::stack::PersistenceStack,
+        reconciliation::ProjectionReconciler, repositories::memo::MemoRepositoryImpl,
     },
     interfaces::routes::configure_routes,
 };
