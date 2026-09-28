@@ -8,7 +8,9 @@ use actix_web::{
 
 use crate::{
     application::{
-        health::HealthService, high_search_shadow::HighSearchShadowObserver,
+        health::HealthService,
+        high_memo_routing::HighMemoDataRoute,
+        high_search_shadow::HighSearchShadowObserver,
         memo::service::MemoService,
     },
     config::{AppConfig, HighMemoCryptoConfig, HighSearchShadowConfig},
@@ -82,13 +84,21 @@ impl Application {
             persistence.search_health.clone(),
         ));
         let high_search_projection_sink = high_search_runtime.projection_sink();
-        let projection_reconciler = Arc::new(ProjectionReconciler::new(
+        let projection_reconciler = ProjectionReconciler::new(
             persistence.authoritative_store.clone(),
             persistence.cache.clone(),
             persistence.search_projection.clone(),
             high_search_projection_sink.clone(),
             persistence.mutation_guard.clone(),
-        ));
+        );
+        let projection_reconciler = match &config.high_memo_crypto {
+            HighMemoCryptoConfig::Disabled => projection_reconciler,
+            HighMemoCryptoConfig::AwsKms { .. } => projection_reconciler.with_memo_route(
+                persistence.high_memo_access_guard.clone(),
+                HighMemoDataRoute::LegacyPlaintext,
+            ),
+        };
+        let projection_reconciler = Arc::new(projection_reconciler);
         let memo_repository = Arc::new(MemoRepositoryImpl::new(
             persistence.authoritative_store.clone(),
             persistence.cache.clone(),
@@ -125,13 +135,19 @@ impl Application {
                 // The encrypted collection owns a distinct durable outbox.
                 // Never feed those intents through the legacy authoritative
                 // reconciler, or retries could hydrate the wrong generation.
-                let encrypted_reconciler = Arc::new(ProjectionReconciler::new(
-                    encrypted_authoritative.clone(),
-                    encrypted_cache.clone(),
-                    persistence.search_projection.clone(),
-                    high_search_projection_sink.clone(),
-                    persistence.mutation_guard.clone(),
-                ));
+                let encrypted_reconciler = Arc::new(
+                    ProjectionReconciler::new(
+                        encrypted_authoritative.clone(),
+                        encrypted_cache.clone(),
+                        persistence.search_projection.clone(),
+                        high_search_projection_sink.clone(),
+                        persistence.mutation_guard.clone(),
+                    )
+                    .with_memo_route(
+                        persistence.high_memo_access_guard.clone(),
+                        HighMemoDataRoute::Encrypted,
+                    ),
+                );
                 let encrypted_repository = Arc::new(MemoRepositoryImpl::new(
                     encrypted_authoritative,
                     encrypted_cache,
@@ -141,7 +157,9 @@ impl Application {
                 let _encrypted_projection_reconciler_task =
                     tokio::spawn(encrypted_reconciler.run());
 
-                Some(encrypted_repository as Arc<dyn crate::domain::memo::repository::MemoRepository>)
+                let repository: Arc<dyn crate::domain::memo::repository::MemoRepository> =
+                    encrypted_repository;
+                Some(repository)
             }
         };
 
