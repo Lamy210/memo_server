@@ -60,12 +60,14 @@ impl MemoService {
     ) -> AppResult<&Arc<dyn MemoRepository>> {
         match route {
             HighMemoDataRoute::LegacyPlaintext => Ok(&self.legacy_memo_repository),
-            HighMemoDataRoute::Encrypted => self.encrypted_memo_repository.as_ref().ok_or_else(|| {
-                AppError::ServiceUnavailable(
-                    "encrypted MEMO-HIGH-1 route is active but no encrypted repository is available"
-                        .into(),
-                )
-            }),
+            HighMemoDataRoute::Encrypted => {
+                self.encrypted_memo_repository.as_ref().ok_or_else(|| {
+                    AppError::ServiceUnavailable(
+                        "encrypted MEMO-HIGH-1 route is active but no encrypted repository is available"
+                            .into(),
+                    )
+                })
+            }
         }
     }
 
@@ -286,15 +288,8 @@ impl MemoService {
                         .await
                 }
                 HighSearchQueryRoute::Protected => {
-                    self.search_memos_protected(
-                        repository,
-                        query,
-                        tag,
-                        user_id,
-                        page,
-                        limit,
-                    )
-                    .await
+                    self.search_memos_protected(repository, query, tag, user_id, page, limit)
+                        .await
                 }
             };
 
@@ -325,9 +320,7 @@ impl MemoService {
         let hits = reader
             .search_memo_ids(user_id, query, tag, page, limit)
             .await?;
-        let items = repository
-            .find_many_by_ids(user_id, &hits.memo_ids)
-            .await?;
+        let items = repository.find_many_by_ids(user_id, &hits.memo_ids).await?;
 
         Ok(MemoSearchPage {
             items,
@@ -487,7 +480,9 @@ mod tests {
 
     #[async_trait]
     impl HighMemoAccessPermit for FakeMemoAccessPermit {
-        fn route_snapshot(&self) -> crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
+        fn route_snapshot(
+            &self,
+        ) -> crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
             crate::application::high_memo_routing::HighMemoDataRouteSnapshot {
                 route: self.route,
                 generation: 3,
