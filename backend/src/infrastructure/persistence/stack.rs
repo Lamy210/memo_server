@@ -54,8 +54,8 @@ fn maintenance_participation(
     let high_search_enabled = matches!(high_search, HighSearchConfig::AwsKms { .. });
 
     // Any HIGH mode participates in writer maintenance. SEARCH-HIGH-1 adds
-    // protected-query leases. MEMO-HIGH-1 memo-access leases are staged on the
-    // same guard but are not request-path wired until the follow-up cutover PR.
+    // protected-query leases. MEMO-HIGH-1 uses the same MongoDB guard for
+    // request-path memo-access leases and guarded route cutover.
     (
         high_memo_enabled || high_search_enabled,
         high_search_enabled,
