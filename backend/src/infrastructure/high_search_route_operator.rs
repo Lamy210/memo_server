@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     application::{
-        crypto_migration_batch::{
-            validate_page, validate_page_size, PlaintextMemoMigrationSource,
-        },
+        crypto_migration_batch::{validate_page, validate_page_size, PlaintextMemoMigrationSource},
         crypto_search_projection::HighSearchProjectionMigrationAdmin,
         crypto_search_reindex::{
             HighSearchReindexRunner, HighSearchReindexService, HighSearchReindexStats,
