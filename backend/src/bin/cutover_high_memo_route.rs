@@ -110,10 +110,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     stats.scanned_candidates
                 );
                 println!("cutover.legacy_cache.legacy_keys={}", stats.legacy_keys);
-                println!(
-                    "cutover.legacy_cache.deleted_keys={}",
-                    stats.deleted_keys
-                );
+                println!("cutover.legacy_cache.deleted_keys={}", stats.deleted_keys);
             }
         }
     }
