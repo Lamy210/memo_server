@@ -272,28 +272,44 @@ impl MemoService {
         page: usize,
         limit: usize,
     ) -> AppResult<(MemoSearchPage, HighSearchQueryRouteSnapshot)> {
-        let permit = self.high_search_query_guard.acquire_query().await?;
-        let route_snapshot = permit.route_snapshot();
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let memo_route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(memo_route.route)?;
+            let query_permit = self.high_search_query_guard.acquire_query().await?;
+            let search_route = query_permit.route_snapshot();
 
-        let result = match route_snapshot.route {
-            HighSearchQueryRoute::Legacy => {
-                self.memo_repository
-                    .search(query, tag.map(str::to_owned), user_id, page, limit)
+            let result = match search_route.route {
+                HighSearchQueryRoute::Legacy => {
+                    repository
+                        .search(query, tag.map(str::to_owned), user_id, page, limit)
+                        .await
+                }
+                HighSearchQueryRoute::Protected => {
+                    self.search_memos_protected(
+                        repository,
+                        query,
+                        tag,
+                        user_id,
+                        page,
+                        limit,
+                    )
                     .await
-            }
-            HighSearchQueryRoute::Protected => {
-                self.search_memos_protected(query, tag, user_id, page, limit)
-                    .await
-            }
-        };
+                }
+            };
 
-        Self::finish_query(result, permit)
-            .await
-            .map(|page| (page, route_snapshot))
+            Self::finish_query(result, query_permit)
+                .await
+                .map(|page| (page, search_route))
+        }
+        .await;
+
+        Self::finish_access(result, access).await
     }
 
     async fn search_memos_protected(
         &self,
+        repository: &Arc<dyn MemoRepository>,
         query: &str,
         tag: Option<&str>,
         user_id: Uuid,
@@ -309,8 +325,7 @@ impl MemoService {
         let hits = reader
             .search_memo_ids(user_id, query, tag, page, limit)
             .await?;
-        let items = self
-            .memo_repository
+        let items = repository
             .find_many_by_ids(user_id, &hits.memo_ids)
             .await?;
 
