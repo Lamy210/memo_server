@@ -162,6 +162,7 @@ cargo run --locked --features aws-kms-memo,aws-kms-search --bin verify_high_memo
   --confirm-maintenance-window \
   --confirm-post-cutover-backup-verified \
   --confirm-restore-rehearsed \
+  --confirm-legacy-backup-retention-reviewed \
   --minimum-soak-hours 168 \
   --encrypted-page-size 500 \
   --cache-scan-count 1000 \
@@ -241,6 +242,8 @@ The command advances `in_progress -> retired` only after:
 If deletion reaches zero but the final state transition fails, the next invocation can resume from `in_progress` with expected plaintext count zero. An already-`retired` state is accepted only when the exact plaintext count is zero.
 
 There is no command that moves `in_progress` or `retired` back to `available`.
+
+The live MongoDB deletion is a **logical dataset retirement**, not a secure-media erase. It does not prove removal from historical database backups, snapshots, storage-engine free pages, replicas that are no longer part of the deployment, or external exports. The destructive command therefore requires an explicit confirmation that legacy plaintext backup retention/disposal has been reviewed. Storage/media sanitization and historical-backup lifecycle remain deployment responsibilities outside this application command.
 
 ## Batch traversal
 
