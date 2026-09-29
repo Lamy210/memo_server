@@ -167,9 +167,7 @@ pub enum ConfigError {
     InvalidJwtJwksUri(String),
     #[error("AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`")]
     InvalidJwtSignatureMode(String),
-    #[error(
-        "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS must be an integer in 60..=3600, got `{0}`"
-    )]
+    #[error("AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS must be an integer in 60..=3600, got `{0}`")]
     InvalidJwtAccessTokenMaxLifetime(String),
 }
 
@@ -269,8 +267,9 @@ impl AppConfig {
                     audience,
                     jwks_uri,
                     signature_mode: parse_jwt_signature_mode(&vars)?,
-                    max_access_token_lifetime_seconds:
-                        parse_jwt_access_token_max_lifetime_seconds(&vars)?,
+                    max_access_token_lifetime_seconds: parse_jwt_access_token_max_lifetime_seconds(
+                        &vars,
+                    )?,
                 }
             }
             _ => return Err(ConfigError::InvalidAuthMode(auth_mode_value)),
@@ -331,8 +330,7 @@ fn parse_jwt_access_token_max_lifetime_seconds(
         .parse::<u64>()
         .map_err(|_| ConfigError::InvalidJwtAccessTokenMaxLifetime(value.clone()))?;
 
-    if !(MIN_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS
-        ..=MAX_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS)
+    if !(MIN_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS..=MAX_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS)
         .contains(&parsed)
     {
         return Err(ConfigError::InvalidJwtAccessTokenMaxLifetime(value));
