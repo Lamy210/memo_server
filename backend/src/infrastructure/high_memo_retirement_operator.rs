@@ -1,5 +1,3 @@
-use chrono::Utc;
-
 use crate::{
     application::{
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
@@ -239,7 +237,7 @@ async fn verify_under_permit(
                 .into(),
         )
     })?;
-    let observed_at_ms = Utc::now().timestamp_millis();
+    let observed_at_ms = recovery.server_time_ms().await?;
     let observed_soak_hours =
         validate_and_measure_soak(changed_at_ms, observed_at_ms, minimum_soak_hours)?;
 
