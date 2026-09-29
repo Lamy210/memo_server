@@ -4,7 +4,9 @@ use crate::{
         high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
     },
-    config::{AppConfig, AuthoritativeBackend, HighMemoCryptoConfig, HighSearchConfig, SearchBackend},
+    config::{
+        AppConfig, AuthoritativeBackend, HighMemoCryptoConfig, HighSearchConfig, SearchBackend,
+    },
     error::{AppError, AppResult},
 };
 
@@ -16,10 +18,8 @@ use super::{
         MongoHighSearchMaintenanceRecovery,
     },
     persistence::{
-        manticore::ManticoreClient,
-        mongodb::MongoDbAuthoritativeStore,
-        ports::LegacyMemoPlaintextCacheMaintenance,
-        redis::RedisCache,
+        manticore::ManticoreClient, mongodb::MongoDbAuthoritativeStore,
+        ports::LegacyMemoPlaintextCacheMaintenance, redis::RedisCache,
     },
 };
 
@@ -115,9 +115,11 @@ pub async fn inspect_high_memo_retirement_status(
         ));
     }
 
-    let recovery =
-        MongoHighSearchMaintenanceRecovery::connect(&config.authoritative_uri, &config.mongodb_database)
-            .await?;
+    let recovery = MongoHighSearchMaintenanceRecovery::connect(
+        &config.authoritative_uri,
+        &config.mongodb_database,
+    )
+    .await?;
     let status = recovery.inspect().await?;
     Ok(status_from_maintenance(&status))
 }
@@ -149,7 +151,8 @@ pub async fn verify_high_memo_retirement_readiness(
                 .into(),
         ));
     }
-    let search_runtime = HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri).await?;
+    let search_runtime =
+        HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri).await?;
     if search_runtime.reader().is_none() {
         return Err(AppError::ServiceUnavailable(
             "MEMO-HIGH-1 retirement readiness could not obtain the protected search runtime".into(),
@@ -161,9 +164,11 @@ pub async fn verify_high_memo_retirement_readiness(
     let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
     let cache = RedisCache::new(&config.redis_uri)?;
     let legacy_search = ManticoreClient::new(&config.search_uri)?;
-    let recovery =
-        MongoHighSearchMaintenanceRecovery::connect(&config.authoritative_uri, &config.mongodb_database)
-            .await?;
+    let recovery = MongoHighSearchMaintenanceRecovery::connect(
+        &config.authoritative_uri,
+        &config.mongodb_database,
+    )
+    .await?;
 
     let permit = guard.acquire_offline_window().await?;
 
@@ -422,27 +427,16 @@ mod tests {
 
     #[test]
     fn retirement_requires_operator_attestations_and_valid_bounds() {
-        assert!(validate_high_memo_retirement_config(
-            &configured(),
-            24,
-            1000,
-            1,
-            1,
-            approved(),
-        )
-        .is_ok());
+        assert!(
+            validate_high_memo_retirement_config(&configured(), 24, 1000, 1, 1, approved(),)
+                .is_ok()
+        );
 
         let mut approval = approved();
         approval.post_cutover_backup_verified = false;
-        assert!(validate_high_memo_retirement_config(
-            &configured(),
-            24,
-            1000,
-            1,
-            1,
-            approval,
-        )
-        .is_err());
+        assert!(
+            validate_high_memo_retirement_config(&configured(), 24, 1000, 1, 1, approval,).is_err()
+        );
 
         let mut approval = approved();
         approval.restore_rehearsed = false;
@@ -456,24 +450,13 @@ mod tests {
         )
         .is_err());
 
-        assert!(validate_high_memo_retirement_config(
-            &configured(),
-            0,
-            1000,
-            1,
-            1,
-            approved(),
-        )
-        .is_err());
-        assert!(validate_high_memo_retirement_config(
-            &configured(),
-            24,
-            0,
-            1,
-            1,
-            approved(),
-        )
-        .is_err());
+        assert!(
+            validate_high_memo_retirement_config(&configured(), 0, 1000, 1, 1, approved(),)
+                .is_err()
+        );
+        assert!(
+            validate_high_memo_retirement_config(&configured(), 24, 0, 1, 1, approved(),).is_err()
+        );
     }
 
     #[test]
