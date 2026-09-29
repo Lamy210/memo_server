@@ -47,6 +47,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "current.memo_route_generation={}",
                 status.memo_route.generation
             );
+            println!(
+                "current.plaintext_retirement_state={}",
+                status.plaintext_retirement_state
+            );
             println!("current.search_route={}", status.search_route.route);
             println!(
                 "current.search_route_generation={}",
@@ -83,6 +87,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!(
                 "readiness.memo_route_generation={}",
                 report.memo_route.generation
+            );
+            println!(
+                "readiness.plaintext_retirement_state={}",
+                report.plaintext_retirement_state
             );
             println!("readiness.search_route={}", report.search_route.route);
             println!(
