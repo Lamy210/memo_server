@@ -33,6 +33,21 @@ impl ProjectionIntent {
 }
 
 #[async_trait]
+pub trait LegacyMemoPlaintextRetirementAdmin: Send + Sync {
+    /// Exact count of plaintext authoritative memo documents.
+    ///
+    /// Callers must hold the shared maintenance window.
+    async fn count_plaintext_memos_for_retirement(&self) -> AppResult<u64>;
+
+    /// Irreversibly delete all plaintext authoritative memo documents.
+    ///
+    /// This intentionally preserves the collection/index structure. Callers
+    /// must have entered the durable plaintext-retirement `in_progress` state
+    /// while holding the shared maintenance window before invoking it.
+    async fn purge_plaintext_memos_for_retirement(&self) -> AppResult<u64>;
+}
+
+#[async_trait]
 pub trait HighEncryptedMemoIntegritySource: Send + Sync {
     async fn count_encrypted_memos_for_integrity(&self) -> AppResult<u64>;
 
