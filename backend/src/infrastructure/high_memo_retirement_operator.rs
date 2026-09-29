@@ -525,6 +525,7 @@ mod tests {
         assert!(validate_high_memo_retirement_config(
             &configured(),
             24,
+            500,
             1000,
             1,
             1,
@@ -538,6 +539,10 @@ mod tests {
         );
         assert!(
             validate_high_memo_retirement_config(&configured(), 24, 500, 0, 1, 1, approved(),).is_err()
+        );
+        assert!(
+            validate_high_memo_retirement_config(&configured(), 24, 0, 1000, 1, 1, approved(),)
+                .is_err()
         );
     }
 
