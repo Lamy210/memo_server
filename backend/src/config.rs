@@ -252,12 +252,14 @@ impl AppConfig {
         let auth = match auth_mode_value.as_str() {
             "development" => AuthConfig::Development,
             "jwt" => {
+                let issuer = required_jwt_setting(&vars, "AUTH_ISSUER")?;
+                let audience = required_jwt_setting(&vars, "AUTH_AUDIENCE")?;
                 let jwks_uri = required_jwt_setting(&vars, "AUTH_JWKS_URI")?;
                 validate_jwt_jwks_uri(&jwks_uri)?;
 
                 AuthConfig::Jwt {
-                    issuer: required_jwt_setting(&vars, "AUTH_ISSUER")?,
-                    audience: required_jwt_setting(&vars, "AUTH_AUDIENCE")?,
+                    issuer,
+                    audience,
                     jwks_uri,
                     signature_mode: parse_jwt_signature_mode(&vars)?,
                 }
