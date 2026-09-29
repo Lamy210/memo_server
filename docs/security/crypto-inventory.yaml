@@ -165,7 +165,28 @@ assets:
           memo_route_cas: legacy_plaintext_to_encrypted
           ambiguous_route_switch: maintenance_barrier_remains_closed
           already_encrypted_rerun: cleanup_only_no_plaintext_rebuild
-          plaintext_authoritative_retirement: pending_separate_irreversible_operation
+          memo_route_transition_timestamp:
+            storage: shared_mongodb_maintenance_singleton
+            clock: mongodb_server_time
+            update: atomic_with_route_generation_change
+            unknown_timestamp_retirement_behavior: fail_closed
+          plaintext_authoritative_retirement:
+            state: readiness_verifier_staged
+            verifier_command: verify_high_memo_retirement
+            destructive_delete: not_implemented
+            exact_verification_requires_maintenance_window: true
+            minimum_soak_hours: operator_selected_1_to_8760
+            required_routes:
+              memo: encrypted
+              search: protected
+            required_exact_generations: true
+            kms_key_ring_preflight: true
+            protected_search_runtime_preflight: true
+            projection_outbox_empty: true
+            legacy_plaintext_cache_keys_zero: true
+            legacy_plaintext_search_documents_zero: true
+            post_cutover_backup_confirmation: required
+            restore_rehearsal_confirmation: required
         runtime_eligible: false
     migration_status: in_progress
     owner: memo-crypto
