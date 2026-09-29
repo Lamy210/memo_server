@@ -144,13 +144,14 @@ struct RetirementVerificationResources<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RetirementVerificationRequest {
-    minimum_soak_hours: u64,
-    encrypted_page_size: usize,
-    cache_scan_count: usize,
-    expected_memo_generation: i64,
-    expected_search_generation: i64,
-    expected_plaintext_retirement_state: HighMemoPlaintextRetirementState,
+pub(crate) struct HighMemoRetirementReadinessRequest {
+    pub(crate) minimum_soak_hours: u64,
+    pub(crate) encrypted_page_size: usize,
+    pub(crate) cache_scan_count: usize,
+    pub(crate) expected_memo_generation: i64,
+    pub(crate) expected_search_generation: i64,
+    pub(crate) approval: HighMemoRetirementApproval,
+    pub(crate) expected_plaintext_retirement_state: HighMemoPlaintextRetirementState,
 }
 
 pub async fn verify_high_memo_retirement_readiness(
@@ -181,13 +182,15 @@ pub async fn verify_high_memo_retirement_readiness(
         config,
         &source,
         permit.as_ref(),
-        minimum_soak_hours,
-        encrypted_page_size,
-        cache_scan_count,
-        expected_memo_generation,
-        expected_search_generation,
-        approval,
-        HighMemoPlaintextRetirementState::Available,
+        HighMemoRetirementReadinessRequest {
+            minimum_soak_hours,
+            encrypted_page_size,
+            cache_scan_count,
+            expected_memo_generation,
+            expected_search_generation,
+            approval,
+            expected_plaintext_retirement_state: HighMemoPlaintextRetirementState::Available,
+        },
     )
     .await;
 
@@ -198,22 +201,16 @@ pub(crate) async fn verify_high_memo_retirement_readiness_under_permit(
     config: &AppConfig,
     source: &MongoDbAuthoritativeStore,
     permit: &dyn HighSearchOfflineWindowPermit,
-    minimum_soak_hours: u64,
-    encrypted_page_size: usize,
-    cache_scan_count: usize,
-    expected_memo_generation: i64,
-    expected_search_generation: i64,
-    approval: HighMemoRetirementApproval,
-    expected_plaintext_retirement_state: HighMemoPlaintextRetirementState,
+    request: HighMemoRetirementReadinessRequest,
 ) -> AppResult<HighMemoRetirementReadinessReport> {
     validate_high_memo_retirement_config(
         config,
-        minimum_soak_hours,
-        encrypted_page_size,
-        cache_scan_count,
-        expected_memo_generation,
-        expected_search_generation,
-        approval,
+        request.minimum_soak_hours,
+        request.encrypted_page_size,
+        request.cache_scan_count,
+        request.expected_memo_generation,
+        request.expected_search_generation,
+        request.approval,
     )?;
 
     // Preflight the entire configured historical/current KMS key ring and
@@ -250,14 +247,7 @@ pub(crate) async fn verify_high_memo_retirement_readiness_under_permit(
             cryptography: cryptography.as_ref(),
         },
         permit,
-        RetirementVerificationRequest {
-            minimum_soak_hours,
-            encrypted_page_size,
-            cache_scan_count,
-            expected_memo_generation,
-            expected_search_generation,
-            expected_plaintext_retirement_state,
-        },
+        request,
     )
     .await
 }
@@ -265,7 +255,7 @@ pub(crate) async fn verify_high_memo_retirement_readiness_under_permit(
 async fn verify_under_permit(
     resources: RetirementVerificationResources<'_>,
     permit: &dyn HighSearchOfflineWindowPermit,
-    request: RetirementVerificationRequest,
+    request: HighMemoRetirementReadinessRequest,
 ) -> AppResult<HighMemoRetirementReadinessReport> {
     let RetirementVerificationResources {
         source,
@@ -274,12 +264,13 @@ async fn verify_under_permit(
         recovery,
         cryptography,
     } = resources;
-    let RetirementVerificationRequest {
+    let HighMemoRetirementReadinessRequest {
         minimum_soak_hours,
         encrypted_page_size,
         cache_scan_count,
         expected_memo_generation,
         expected_search_generation,
+        approval: _,
         expected_plaintext_retirement_state,
     } = request;
 
