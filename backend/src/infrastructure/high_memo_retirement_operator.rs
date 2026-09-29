@@ -162,7 +162,7 @@ pub async fn verify_high_memo_retirement_readiness(
     })?;
     let search_runtime =
         HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri).await?;
-    if search_runtime.reader().is_none() {
+    if search_runtime.query_reader().is_none() {
         return Err(AppError::ServiceUnavailable(
             "MEMO-HIGH-1 retirement readiness could not obtain the protected search runtime".into(),
         ));
