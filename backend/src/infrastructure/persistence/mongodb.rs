@@ -26,8 +26,9 @@ use crate::{
 };
 
 use super::ports::{
-    HighEncryptedMemoAuthoritativeStore, HighEncryptedMemoIntegritySource, MemoAuthoritativeStore,
-    ProjectionIntent, ProjectionTarget,
+    HighEncryptedMemoAuthoritativeStore, HighEncryptedMemoIntegritySource,
+    LegacyMemoPlaintextRetirementAdmin, MemoAuthoritativeStore, ProjectionIntent,
+    ProjectionTarget,
 };
 
 #[cfg(test)]
@@ -973,6 +974,24 @@ impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
 
     async fn count_staged(&self) -> AppResult<u64> {
         self.count_staged_encrypted_memos_for_migration().await
+    }
+}
+
+#[async_trait]
+impl LegacyMemoPlaintextRetirementAdmin for MongoDbAuthoritativeStore {
+    async fn count_plaintext_memos_for_retirement(&self) -> AppResult<u64> {
+        self.memos
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| mongo_error("count plaintext MongoDB memos for retirement", error))
+    }
+
+    async fn purge_plaintext_memos_for_retirement(&self) -> AppResult<u64> {
+        self.memos
+            .delete_many(doc! {})
+            .await
+            .map(|result| result.deleted_count)
+            .map_err(|error| mongo_error("purge plaintext MongoDB memos for retirement", error))
     }
 }
 
