@@ -131,6 +131,23 @@ pub async fn inspect_high_memo_retirement_status(
     Ok(status_from_maintenance(&status))
 }
 
+struct RetirementVerificationResources<'a> {
+    source: &'a MongoDbAuthoritativeStore,
+    cache: &'a RedisCache,
+    legacy_search: &'a ManticoreClient,
+    recovery: &'a MongoHighSearchMaintenanceRecovery,
+    cryptography: &'a dyn HighMemoCryptography,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RetirementVerificationRequest {
+    minimum_soak_hours: u64,
+    encrypted_page_size: usize,
+    cache_scan_count: usize,
+    expected_memo_generation: i64,
+    expected_search_generation: i64,
+}
+
 pub async fn verify_high_memo_retirement_readiness(
     config: &AppConfig,
     minimum_soak_hours: u64,
@@ -182,17 +199,21 @@ pub async fn verify_high_memo_retirement_readiness(
     let permit = guard.acquire_offline_window().await?;
 
     let result = verify_under_permit(
-        &source,
-        &cache,
-        &legacy_search,
-        &recovery,
-        cryptography.as_ref(),
+        RetirementVerificationResources {
+            source: &source,
+            cache: &cache,
+            legacy_search: &legacy_search,
+            recovery: &recovery,
+            cryptography: cryptography.as_ref(),
+        },
         permit.as_ref(),
-        minimum_soak_hours,
-        encrypted_page_size,
-        cache_scan_count,
-        expected_memo_generation,
-        expected_search_generation,
+        RetirementVerificationRequest {
+            minimum_soak_hours,
+            encrypted_page_size,
+            cache_scan_count,
+            expected_memo_generation,
+            expected_search_generation,
+        },
     )
     .await;
 
@@ -200,18 +221,25 @@ pub async fn verify_high_memo_retirement_readiness(
 }
 
 async fn verify_under_permit(
-    source: &MongoDbAuthoritativeStore,
-    cache: &RedisCache,
-    legacy_search: &ManticoreClient,
-    recovery: &MongoHighSearchMaintenanceRecovery,
-    cryptography: &dyn HighMemoCryptography,
+    resources: RetirementVerificationResources<'_>,
     permit: &dyn HighSearchOfflineWindowPermit,
-    minimum_soak_hours: u64,
-    encrypted_page_size: usize,
-    cache_scan_count: usize,
-    expected_memo_generation: i64,
-    expected_search_generation: i64,
+    request: RetirementVerificationRequest,
 ) -> AppResult<HighMemoRetirementReadinessReport> {
+    let RetirementVerificationResources {
+        source,
+        cache,
+        legacy_search,
+        recovery,
+        cryptography,
+    } = resources;
+    let RetirementVerificationRequest {
+        minimum_soak_hours,
+        encrypted_page_size,
+        cache_scan_count,
+        expected_memo_generation,
+        expected_search_generation,
+    } = request;
+
     permit.assert_still_enforced().await?;
 
     let memo_route = permit.current_memo_route().await?;
