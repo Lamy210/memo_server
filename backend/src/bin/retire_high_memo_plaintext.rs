@@ -327,5 +327,4 @@ mod tests {
             assert!(parse_args(args).is_err(), "{required}");
         }
     }
-
 }
