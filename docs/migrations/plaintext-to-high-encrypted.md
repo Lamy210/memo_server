@@ -162,7 +162,6 @@ cargo run --locked --features aws-kms-memo,aws-kms-search --bin verify_high_memo
   --confirm-maintenance-window \
   --confirm-post-cutover-backup-verified \
   --confirm-restore-rehearsed \
-  --confirm-legacy-backup-retention-reviewed \
   --minimum-soak-hours 168 \
   --encrypted-page-size 500 \
   --cache-scan-count 1000 \
@@ -222,6 +221,7 @@ cargo run --locked --features aws-kms-memo,aws-kms-search \
   --confirm-maintenance-window \
   --confirm-post-cutover-backup-verified \
   --confirm-restore-rehearsed \
+  --confirm-legacy-backup-retention-reviewed \
   --minimum-soak-hours 168 \
   --encrypted-page-size 500 \
   --cache-scan-count 1000 \
