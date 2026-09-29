@@ -89,6 +89,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 plan.retirement_state
                     != memo_app_backend::application::high_memo_routing::HighMemoPlaintextRetirementState::Retired
             );
+            println!(
+                "plan.post_retirement_audit={}",
+                plan.retirement_state
+                    == memo_app_backend::application::high_memo_routing::HighMemoPlaintextRetirementState::Retired
+            );
 
             if let Some(readiness) = plan.readiness {
                 println!("plan.memo_route={}", readiness.memo_route.route);
