@@ -526,8 +526,8 @@ fn format_search_observation(result: AppResult<HighSearchQueryRouteSnapshot>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::config::{AuthConfig, HighSearchShadowConfig};
+    use async_trait::async_trait;
     use std::{
         collections::BTreeMap,
         sync::{
@@ -669,14 +669,9 @@ mod tests {
         });
 
         assert_eq!(
-            switch_memo_route_fail_closed(
-                permit,
-                expected,
-                search,
-                HighMemoDataRoute::Encrypted,
-            )
-            .await
-            .unwrap(),
+            switch_memo_route_fail_closed(permit, expected, search, HighMemoDataRoute::Encrypted,)
+                .await
+                .unwrap(),
             target
         );
         assert!(released.load(Ordering::Relaxed));
