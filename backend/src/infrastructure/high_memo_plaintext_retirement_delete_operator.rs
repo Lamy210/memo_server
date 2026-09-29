@@ -30,6 +30,7 @@ pub struct HighMemoPlaintextRetirementRequest {
     pub expected_memo_generation: i64,
     pub expected_search_generation: i64,
     pub expected_plaintext_documents: u64,
+    pub legacy_backup_retention_reviewed: bool,
     pub approval: HighMemoRetirementApproval,
 }
 
@@ -54,7 +55,16 @@ pub fn validate_high_memo_plaintext_retirement_request(
         request.expected_memo_generation,
         request.expected_search_generation,
         request.approval,
-    )
+    )?;
+
+    if !request.legacy_backup_retention_reviewed {
+        return Err(AppError::ValidationError(
+            "MEMO-HIGH-1 destructive retirement requires review of legacy plaintext backup retention/disposal"
+                .into(),
+        ));
+    }
+
+    Ok(())
 }
 
 pub async fn retire_high_memo_plaintext(
@@ -243,6 +253,7 @@ mod tests {
             expected_memo_generation: 5,
             expected_search_generation: 9,
             expected_plaintext_documents: 42,
+            legacy_backup_retention_reviewed: true,
             approval: HighMemoRetirementApproval {
                 post_cutover_backup_verified: true,
                 restore_rehearsed: true,
@@ -260,6 +271,10 @@ mod tests {
 
         let mut invalid = request();
         invalid.approval.restore_rehearsed = false;
+        assert!(validate_high_memo_plaintext_retirement_request(&configured(), invalid).is_err());
+
+        let mut invalid = request();
+        invalid.legacy_backup_retention_reviewed = false;
         assert!(validate_high_memo_plaintext_retirement_request(&configured(), invalid).is_err());
     }
 }
