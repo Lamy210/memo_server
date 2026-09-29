@@ -187,6 +187,7 @@ assets:
             destructive_expected_plaintext_count: exact_planner_value_required
             destructive_count_mismatch_behavior: reject_before_state_transition_or_delete
             destructive_delete: mongodb_delete_many_all_plaintext_memos
+            destructive_write_concern: majority
             destructive_delete_transaction_scope: intentionally_not_collection_wide_transaction
             destructive_resume_state: in_progress
             destructive_ambiguous_or_partial_delete_behavior: remain_in_progress_and_replan
