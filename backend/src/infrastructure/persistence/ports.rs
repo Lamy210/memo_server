@@ -33,6 +33,20 @@ impl ProjectionIntent {
 }
 
 #[async_trait]
+pub trait HighEncryptedMemoIntegritySource: Send + Sync {
+    async fn count_encrypted_memos_for_integrity(&self) -> AppResult<u64>;
+
+    /// Stable bounded traversal of the encrypted authoritative collection.
+    /// Callers must hold the shared maintenance window so the cursor cannot
+    /// race inserts/deletes while verifying retirement readiness.
+    async fn page_encrypted_memos_for_integrity(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>>;
+}
+
+#[async_trait]
 pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
     async fn find_envelope_by_id(
         &self,
