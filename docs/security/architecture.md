@@ -338,12 +338,16 @@ The browser integration continues to use the SvelteKit BFF boundary. Long-lived 
 Migration order:
 
 ```text
-RS256
+RS256-only
   ↓
-ES384
+explicit RS256 + ES384 verification overlap
+  ↓
+ES384-only
   ↓
 optional ML-DSA for selected long-lived trust use cases
 ```
+
+The resource server defaults to RS256-only until `AUTH_JWT_SIGNATURE_MODE` explicitly changes. During the overlap it accepts exactly RS256 and ES384; it never treats "migration" as permission to accept arbitrary JWT algorithms. ES384 verification requires EC/P-384 JWKS keys, while RS256 requires RSA keys.
 
 PQC is not an excuse for an immediate algorithm flag day.
 
