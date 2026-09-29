@@ -162,6 +162,7 @@ cargo run --locked --features aws-kms-memo,aws-kms-search --bin verify_high_memo
   --confirm-maintenance-window \
   --confirm-post-cutover-backup-verified \
   --confirm-restore-rehearsed \
+  --confirm-legacy-backup-retention-reviewed \
   --minimum-soak-hours 168 \
   --encrypted-page-size 500 \
   --cache-scan-count 1000 \
@@ -207,7 +208,42 @@ cargo run --locked --features aws-kms-memo,aws-kms-search \
 
 The planner reports `plan.destructive_changes=0` and `plan.plaintext_documents=<count>`. It can also inspect an existing `in_progress` retirement state after break-glass recovery, while keeping all checks non-destructive.
 
-A `readiness.ready=true` result still does **not** delete plaintext data. A future retirement command must be a separate, explicitly destructive operation with its own approval and recovery boundary.
+A `readiness.ready=true` or `plan.ready=true` result still does **not** delete plaintext data.
+
+### Irreversible plaintext retirement
+
+The destructive phase is a separate command and must use the exact plaintext count from a fresh planner run:
+
+```bash
+cargo run --locked --features aws-kms-memo,aws-kms-search \
+  --bin retire_high_memo_plaintext -- \
+  --apply \
+  --confirm-irrevocable-plaintext-delete \
+  --confirm-maintenance-window \
+  --confirm-post-cutover-backup-verified \
+  --confirm-restore-rehearsed \
+  --minimum-soak-hours 168 \
+  --encrypted-page-size 500 \
+  --cache-scan-count 1000 \
+  --expected-memo-route-generation <memo-generation> \
+  --expected-search-route-generation <search-generation> \
+  --expected-plaintext-documents <plan.plaintext_documents>
+```
+
+The operator reacquires the maintenance window and reruns the same encrypted-route, protected-search, soak, KMS/search runtime, encrypted full-decrypt, projection-outbox, legacy-cache, and legacy-search checks. It then requires the plaintext document count to exactly match the planner value **before any retirement-state transition or delete**.
+
+For an initial retirement, the command advances `memo_plaintext_retirement_state` from `available` to `in_progress` before issuing the plaintext delete. That transition permanently fences legacy memo-route rollback. The plaintext delete is intentionally resumable rather than transaction-sized: a network error or partial/ambiguous delete leaves the state `in_progress`. Re-run the non-destructive planner to obtain the remaining exact count, then rerun the destructive command with that new count.
+
+The command advances `in_progress -> retired` only after:
+- the delete result equals the count observed under the same maintenance permit,
+- a post-delete exact count is zero,
+- the maintenance barrier is still enforced.
+
+If deletion reaches zero but the final state transition fails, the next invocation can resume from `in_progress` with expected plaintext count zero. An already-`retired` state is accepted only when the exact plaintext count is zero.
+
+There is no command that moves `in_progress` or `retired` back to `available`.
+
+The live MongoDB deletion is a **logical dataset retirement**, not a secure-media erase. It does not prove removal from historical database backups, snapshots, storage-engine free pages, replicas that are no longer part of the deployment, or external exports. The destructive command therefore requires an explicit confirmation that legacy plaintext backup retention/disposal has been reviewed. Storage/media sanitization and historical-backup lifecycle remain deployment responsibilities outside this application command.
 
 ## Batch traversal
 
@@ -299,6 +335,6 @@ lose post-cutover mutations.
 
 The repository now contains guarded staging, standby encrypted request-path composition, protected-search routing, and an explicit encrypted memo-route cutover operator. None of those code paths automatically change a deployment from legacy to encrypted storage.
 
-Production still requires deployment-specific KMS/IAM approval, rehearsed operator execution, verified backups, and deliberate route cutover. After cutover, plaintext authoritative retirement remains separately gated by the non-destructive readiness verifier above and a future explicitly destructive retirement operation.
+Production still requires deployment-specific KMS/IAM approval, rehearsed operator execution, verified backups, and deliberate route cutover. After cutover, plaintext authoritative retirement remains separately gated by the non-destructive readiness verifier/planner and the explicitly confirmed resumable retirement command above. The command is never invoked automatically.
 
 `MEMO-HIGH-1` remains runtime-ineligible in the crypto inventory until those operational gates are satisfied and the suite status is deliberately advanced.
