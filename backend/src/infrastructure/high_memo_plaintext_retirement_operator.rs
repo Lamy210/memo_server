@@ -11,6 +11,7 @@ use super::{
     high_memo_retirement_operator::{
         validate_high_memo_retirement_config, verify_high_memo_retirement_readiness_under_permit,
         HighMemoRetirementApproval, HighMemoRetirementReadinessReport,
+        HighMemoRetirementReadinessRequest,
     },
     high_search_maintenance_mongodb::MongoHighSearchMaintenanceGuard,
     persistence::{
@@ -93,13 +94,15 @@ pub async fn plan_high_memo_plaintext_retirement(
                     config,
                     &source,
                     permit.as_ref(),
-                    minimum_soak_hours,
-                    encrypted_page_size,
-                    cache_scan_count,
-                    expected_memo_generation,
-                    expected_search_generation,
-                    approval,
-                    retirement_state,
+                    HighMemoRetirementReadinessRequest {
+                        minimum_soak_hours,
+                        encrypted_page_size,
+                        cache_scan_count,
+                        expected_memo_generation,
+                        expected_search_generation,
+                        approval,
+                        expected_plaintext_retirement_state: retirement_state,
+                    },
                 )
                 .await?;
                 let plaintext_documents = source.count_plaintext_memos_for_retirement().await?;
