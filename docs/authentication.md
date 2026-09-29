@@ -59,6 +59,8 @@ The dedicated authentication service issues short-lived JWT access tokens. memo_
 | `rs256-es384` | `RS256` and `ES384` only | bounded issuer migration window |
 | `es384` | `ES384` only | target AUTH-1 resource-server policy |
 
+Access tokens use the JWS Compact Serialization. memo_server rejects malformed compact tokens before JOSE decoding: the token must contain exactly three non-empty base64url segments, the total compact token is capped at 16 KiB, and the protected-header segment is capped at 4 KiB. These are memo_server resource limits, not claims that the JWS standard defines those byte limits.
+
 Each token must have:
 
 | Field | Requirement |
