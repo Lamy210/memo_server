@@ -1909,6 +1909,12 @@ mod tests {
         assert!(store.list_projection_intents().await.unwrap().is_empty());
 
         assert_eq!(store.count_source_memos().await.unwrap(), 2);
+        assert_eq!(
+            LegacyMemoPlaintextRetirementInspector::count_plaintext_memos_for_retirement(&store)
+                .await
+                .unwrap(),
+            2
+        );
         let first_source_page = store.page_source_memos(None, 1).await.unwrap();
         assert_eq!(first_source_page.len(), 1);
         let second_source_page = store
