@@ -171,14 +171,24 @@ assets:
             update: atomic_with_route_generation_change
             unknown_timestamp_retirement_behavior: fail_closed
           plaintext_authoritative_retirement:
-            state: readiness_verifier_irreversible_state_fence_and_dry_run_planner_staged
+            state: readiness_planner_and_resumable_destructive_operator_staged
             verifier_command: verify_high_memo_retirement
             planner_command: plan_high_memo_plaintext_retirement
             planner_destructive_changes: 0
             planner_exact_plaintext_count: true
             planner_same_maintenance_window_readiness_revalidation: true
             planner_resume_inspection_states: [available, in_progress, retired]
-            destructive_delete: not_implemented
+            destructive_command: retire_high_memo_plaintext
+            destructive_command_auto_invoked: false
+            destructive_confirmation: explicit_irrevocable_flag
+            destructive_expected_plaintext_count: exact_planner_value_required
+            destructive_count_mismatch_behavior: reject_before_state_transition_or_delete
+            destructive_delete: mongodb_delete_many_all_plaintext_memos
+            destructive_delete_transaction_scope: intentionally_not_collection_wide_transaction
+            destructive_resume_state: in_progress
+            destructive_ambiguous_or_partial_delete_behavior: remain_in_progress_and_replan
+            retired_transition_requires_remaining_plaintext_count: 0
+            retired_state_plaintext_count_nonzero_behavior: fail_closed
             persisted_state:
               field: memo_plaintext_retirement_state
               values: [available, in_progress, retired]
@@ -190,7 +200,9 @@ assets:
               retired_legacy_rollback: forbidden
               invalid_route_state_behavior: fail_closed
               recovery_snapshot_binding: required
-            readiness_required_state: available
+            readiness_required_state:
+              initial_retirement: available
+              resume_after_partial_or_ambiguous_delete: in_progress
             exact_verification_requires_maintenance_window: true
             minimum_soak_hours: operator_selected_1_to_8760
             required_routes:
