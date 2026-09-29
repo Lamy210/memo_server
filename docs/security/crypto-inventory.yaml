@@ -671,6 +671,11 @@ assets:
       jwt_kid_max_bytes: 128
       jwks_response_max_bytes: 262144
       jwks_max_keys: 64
+      jwks_uri_scheme: https_only
+      jwks_uri_userinfo: forbidden
+      jwks_uri_fragment: forbidden
+      jwks_redirects: forbidden
+      jwks_client_https_only: true
       jwks_empty_set: rejected
       jwks_duplicate_kid: rejected
       jwks_published_kid_empty_or_oversized: rejected
