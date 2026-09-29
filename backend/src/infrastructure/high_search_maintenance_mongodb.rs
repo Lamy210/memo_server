@@ -77,6 +77,7 @@ pub struct HighSearchMaintenanceStatus {
     query_route_generation: i64,
     memo_route: HighMemoDataRoute,
     memo_route_generation: i64,
+    memo_route_changed_at_ms: Option<i64>,
     active_writer_leases: u64,
     active_query_leases: u64,
     active_memo_access_leases: u64,
@@ -109,6 +110,10 @@ impl HighSearchMaintenanceStatus {
 
     pub fn memo_route_generation(&self) -> i64 {
         self.memo_route_generation
+    }
+
+    pub fn memo_route_changed_at_ms(&self) -> Option<i64> {
+        self.memo_route_changed_at_ms
     }
 
     pub fn active_writer_leases(&self) -> u64 {
@@ -151,6 +156,7 @@ struct RecoveryContext {
 #[derive(Clone)]
 pub struct MongoHighSearchMaintenanceRecovery {
     client: Client,
+    database: Database,
     state: Collection<Document>,
     writers: Collection<Document>,
     queries: Collection<Document>,
@@ -179,11 +185,28 @@ impl MongoHighSearchMaintenanceRecovery {
     fn from_database(database: Database) -> Self {
         Self {
             client: database.client().clone(),
+            database: database.clone(),
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
             queries: database.collection(QUERY_LEASES_COLLECTION),
             memo_access: database.collection(MEMO_ACCESS_LEASES_COLLECTION),
         }
+    }
+
+    pub async fn server_time_ms(&self) -> AppResult<i64> {
+        let response = self
+            .database
+            .run_command(doc! { "hello": 1_i32 })
+            .await
+            .map_err(|error| maintenance_db_error("read MongoDB server time", error))?;
+        response
+            .get_datetime("localTime")
+            .map(|value| value.timestamp_millis())
+            .map_err(|_| {
+                AppError::ServiceUnavailable(
+                    "MongoDB hello response is missing a valid localTime".into(),
+                )
+            })
     }
 
     pub async fn inspect(&self) -> AppResult<HighSearchMaintenanceStatus> {
@@ -221,6 +244,15 @@ impl MongoHighSearchMaintenanceRecovery {
 
         let route_snapshot = app_query_route_snapshot(&state)?;
         let memo_route_snapshot = app_memo_route_snapshot(&state)?;
+        let memo_route_changed_at_ms = match state.get("memo_route_changed_at") {
+            None | Some(Bson::Null) => None,
+            Some(Bson::DateTime(value)) => Some(value.timestamp_millis()),
+            Some(_) => {
+                return Err(AppError::ServiceUnavailable(
+                    "HIGH maintenance state has an invalid memo_route_changed_at".into(),
+                ))
+            }
+        };
 
         let holder_token = match state.get("holder_token") {
             None | Some(Bson::Null) => None,
@@ -271,6 +303,7 @@ impl MongoHighSearchMaintenanceRecovery {
             query_route_generation: route_snapshot.generation,
             memo_route: memo_route_snapshot.route,
             memo_route_generation: memo_route_snapshot.generation,
+            memo_route_changed_at_ms,
             active_writer_leases,
             active_query_leases,
             active_memo_access_leases,
@@ -852,6 +885,7 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
                 doc! {
                     "$set": { "memo_route": target.as_persisted_str() },
                     "$inc": { "memo_route_generation": 1_i64 },
+                    "$currentDate": { "memo_route_changed_at": true },
                 },
             )
             .await
@@ -1056,6 +1090,8 @@ mod tests {
         let guard = MongoHighSearchMaintenanceGuard::new(database.clone())
             .await
             .unwrap();
+        let recovery_clock = MongoHighSearchMaintenanceRecovery::from_database(database.clone());
+        assert!(recovery_clock.server_time_ms().await.unwrap() > 0);
         let first_writer = guard.acquire_mutation().await.unwrap();
         let first_query = guard.acquire_query().await.unwrap();
         let first_memo_access = guard.acquire_access().await.unwrap();
@@ -1171,6 +1207,13 @@ mod tests {
                 generation: 1,
             }
         );
+        let route_status = MongoHighSearchMaintenanceRecovery::from_database(database.clone())
+            .inspect()
+            .await
+            .unwrap();
+        assert_eq!(route_status.memo_route(), HighMemoDataRoute::Encrypted);
+        assert_eq!(route_status.memo_route_generation(), 1);
+        assert!(route_status.memo_route_changed_at_ms().is_some());
         assert_eq!(
             maintenance
                 .switch_memo_route(encrypted_memo_route, HighMemoDataRoute::Encrypted)

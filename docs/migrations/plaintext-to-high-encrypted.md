@@ -140,6 +140,52 @@ There is intentionally **no automatic encrypted-to-plaintext rollback**. Once en
 
 This cutover still does **not** delete the plaintext authoritative MongoDB collection. Irreversible plaintext retirement is a separate post-cutover/soak operation.
 
+## Plaintext retirement readiness
+
+Route cutover and plaintext retirement are deliberately separate. A successful encrypted cutover starts a soak period; it does not authorize deletion of the plaintext `memos` collection.
+
+Every actual memo-route transition now records `memo_route_changed_at` using MongoDB server time in the same atomic update that advances `memo_route_generation`. Soak verification reads `hello.localTime` from MongoDB as well, keeping both timestamps in the same clock domain. An older encrypted route with no recorded transition time is not considered retirement-ready.
+
+Non-freezing status inspection:
+
+```bash
+cargo run --locked --features aws-kms-memo,aws-kms-search --bin verify_high_memo_retirement -- --status
+```
+
+Exact readiness verification requires a maintenance window because cache/search/outbox checks must not race active requests or reconcilers:
+
+```bash
+cargo run --locked --features aws-kms-memo,aws-kms-search --bin verify_high_memo_retirement -- \
+  --verify \
+  --confirm-maintenance-window \
+  --confirm-post-cutover-backup-verified \
+  --confirm-restore-rehearsed \
+  --minimum-soak-hours 168 \
+  --encrypted-page-size 500 \
+  --cache-scan-count 1000 \
+  --expected-memo-route-generation <encrypted-generation> \
+  --expected-search-route-generation <protected-generation>
+```
+
+The verifier is non-destructive. Under the maintenance barrier it requires:
+
+1. exact `encrypted` memo route generation,
+2. exact `protected` search route generation,
+3. a recorded memo-route transition timestamp,
+4. the configured minimum soak duration,
+5. AWS KMS historical/current memo key-ring preflight,
+6. protected search runtime preflight,
+7. a bounded full traversal of `memos_encrypted_v1` where every envelope validates structurally, decrypts successfully, and matches its envelope memo/owner/version identity,
+8. exact encrypted traversal count equality before/after the scan,
+9. exact projection outbox count of zero,
+10. zero exact legacy plaintext Redis memo keys,
+11. exact legacy Manticore `memos` document count of zero,
+12. final route/maintenance revalidation before release.
+
+The backup and restore-rehearsal flags are operator attestations. This verifier does not inspect backup media or prove restoration integrity itself.
+
+A `readiness.ready=true` result still does **not** delete plaintext data. A future retirement command must be a separate, explicitly destructive operation with its own approval and recovery boundary.
+
 ## Batch traversal
 
 The application migration source contract traverses plaintext memos in stable ascending
@@ -226,16 +272,10 @@ Once encrypted request-path writes are enabled in a later cutover, rollback requ
 separate data-convergence plan; blindly switching back to stale plaintext storage would
 lose post-cutover mutations.
 
-## Not yet enabled
+## Deployment / retirement boundary
 
-This runbook does not authorize production execution yet. The following remain blockers:
+The repository now contains guarded staging, standby encrypted request-path composition, protected-search routing, and an explicit encrypted memo-route cutover operator. None of those code paths automatically change a deployment from legacy to encrypted storage.
 
-- least-privilege KMS identity and key-policy review for the staged deployment configuration,
-- production approval of the least-privilege KMS identity/key policy and the configured versioned key ring,
-- an operator-reviewed execution/rehearsal of the guarded `migrate_high_memo_staged` command,
-- HIGH Valkey request-path wiring and retirement of the legacy plaintext cache contract,
-- production approval/cutover of the already-staged protected search path,
-- encrypted authoritative-store request-path integration,
-- final encrypted-store cutover/rollback rehearsal.
+Production still requires deployment-specific KMS/IAM approval, rehearsed operator execution, verified backups, and deliberate route cutover. After cutover, plaintext authoritative retirement remains separately gated by the non-destructive readiness verifier above and a future explicitly destructive retirement operation.
 
-The ciphertext-only Valkey adapter is implemented but deliberately not wired into normal CRUD yet. `MEMO-HIGH-1` remains runtime-ineligible until the remaining dependencies are implemented and its inventory status is deliberately changed to DEPLOYED.
+`MEMO-HIGH-1` remains runtime-ineligible in the crypto inventory until those operational gates are satisfied and the suite status is deliberately advanced.

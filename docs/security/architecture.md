@@ -504,3 +504,8 @@ Verified references as of 2026-09-21:
 - IETF RFC 10024, PQ/T hybrid key agreement for TLS 1.3 including X25519MLKEM768: https://www.rfc-editor.org/rfc/rfc10024.html
 - CRYPTREC 2026 update adding ML-KEM to the e-Government Recommended Ciphers List: https://www.cryptrec.go.jp/whatsnew.html
 - Cloudflare post-quantum origin TLS deployment documentation: https://developers.cloudflare.com/ssl/post-quantum-cryptography/pqc-to-origin/
+
+
+## MEMO-HIGH-1 plaintext retirement lifecycle
+
+Encrypted-route activation does not delete the legacy plaintext authoritative collection. Memo route changes record a MongoDB server timestamp atomically with the route generation. A separate maintenance-held readiness verifier requires encrypted/protected routes, minimum soak, KMS/search runtime preflight, empty projection outbox, and zero legacy Redis/Manticore plaintext secondaries. No destructive plaintext-retirement command is implemented yet.

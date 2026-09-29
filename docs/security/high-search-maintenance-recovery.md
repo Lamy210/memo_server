@@ -41,6 +41,7 @@ current.query_route=legacy
 current.query_route_generation=0
 current.memo_route=legacy_plaintext
 current.memo_route_generation=0
+current.memo_route_changed_at_ms=unknown
 current.active_writer_leases=0
 current.active_query_leases=0
 current.active_memo_access_leases=0

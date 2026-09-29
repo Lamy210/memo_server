@@ -257,6 +257,10 @@ fn print_status(
         "{label}.memo_route_generation={}",
         status.memo_route_generation()
     );
+    match status.memo_route_changed_at_ms() {
+        Some(value) => println!("{label}.memo_route_changed_at_ms={value}"),
+        None => println!("{label}.memo_route_changed_at_ms=unknown"),
+    }
     println!(
         "{label}.active_writer_leases={}",
         status.active_writer_leases()
