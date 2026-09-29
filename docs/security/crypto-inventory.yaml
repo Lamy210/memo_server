@@ -664,6 +664,11 @@ assets:
         es384: target_only
       accepted_algorithms_outside_selected_mode: forbidden
       kid_required: true
+      compact_jws_segments: exactly_three_non_empty
+      compact_jws_base64url_characters_only: true
+      access_token_max_bytes: 16384
+      protected_header_segment_max_bytes: 4096
+      token_bounds_enforced_before_jose_decode: true
       jwks_algorithm_match: required_when_declared
       jwks_signature_use: required_when_declared
       jwks_verify_operation: required_when_declared
