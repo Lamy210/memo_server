@@ -3,7 +3,9 @@ use crate::{
         crypto::HighMemoCryptography,
         crypto_migration_batch::validate_page_size,
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
-        high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
+        high_memo_routing::{
+            HighMemoDataRoute, HighMemoDataRouteSnapshot, HighMemoPlaintextRetirementState,
+        },
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
     },
     config::{
@@ -56,6 +58,7 @@ impl HighMemoRetirementApproval {
 pub struct HighMemoRetirementStatus {
     pub memo_route: HighMemoDataRouteSnapshot,
     pub search_route: HighSearchQueryRouteSnapshot,
+    pub plaintext_retirement_state: HighMemoPlaintextRetirementState,
     pub memo_route_changed_at_ms: Option<i64>,
 }
 
@@ -63,6 +66,7 @@ pub struct HighMemoRetirementStatus {
 pub struct HighMemoRetirementReadinessReport {
     pub memo_route: HighMemoDataRouteSnapshot,
     pub search_route: HighSearchQueryRouteSnapshot,
+    pub plaintext_retirement_state: HighMemoPlaintextRetirementState,
     pub memo_route_changed_at_ms: i64,
     pub observed_at_ms: i64,
     pub minimum_soak_hours: u64,
@@ -277,6 +281,13 @@ async fn verify_under_permit(
         ));
     }
 
+    let plaintext_retirement_state = status.memo_plaintext_retirement_state();
+    if plaintext_retirement_state != HighMemoPlaintextRetirementState::Available {
+        return Err(AppError::Conflict(format!(
+            "MEMO-HIGH-1 retirement readiness requires plaintext retirement state available; observed {plaintext_retirement_state}"
+        )));
+    }
+
     let changed_at_ms = status.memo_route_changed_at_ms().ok_or_else(|| {
         AppError::Conflict(
             "MEMO-HIGH-1 encrypted route has no recorded transition timestamp; retirement cannot prove soak duration"
@@ -326,6 +337,7 @@ async fn verify_under_permit(
     Ok(HighMemoRetirementReadinessReport {
         memo_route,
         search_route,
+        plaintext_retirement_state,
         memo_route_changed_at_ms: changed_at_ms,
         observed_at_ms,
         minimum_soak_hours,
@@ -419,6 +431,7 @@ fn status_from_maintenance(status: &HighSearchMaintenanceStatus) -> HighMemoReti
             route: status.query_route(),
             generation: status.query_route_generation(),
         },
+        plaintext_retirement_state: status.memo_plaintext_retirement_state(),
         memo_route_changed_at_ms: status.memo_route_changed_at_ms(),
     }
 }
