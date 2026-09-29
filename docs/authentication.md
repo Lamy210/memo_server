@@ -72,7 +72,7 @@ Each token must have:
 | `exp` | required |
 | `nbf` | optional; validated when present |
 
-JWKS metadata is also fail-closed. When `alg`, `use`, or `key_ops` are published they must agree with verification. RS256 requires an RSA JWK; ES384 requires an EC JWK on P-384. A `kid` must not be reused to change one active key from RSA to EC during migration.
+JWKS metadata is also fail-closed. When `alg`, `use`, or `key_ops` are published they must agree with verification. RS256 requires an RSA JWK; ES384 requires an EC JWK on P-384. Token `kid` values must be non-empty and at most 128 bytes. Published JWKs that carry a `kid` must use a unique non-empty value; duplicate `kid` values invalidate the JWKS rather than relying on document order. A `kid` must not be reused to change one active key from RSA to EC during migration.
 
 memo_server intentionally ignores unrelated custom claims. Authentication-provider-specific fields must not be required for memo ownership.
 
@@ -86,6 +86,8 @@ memo_server reads public verification keys from `AUTH_JWKS_URI`.
 - Refresh work is serialized so concurrent cache misses do not fan out into parallel JWKS requests.
 - Forced refresh attempts are rate-limited per memo_server process by a short cooldown, including failed attempts, so attacker-controlled `kid` values or invalid signatures cannot cause one outbound JWKS request per API request.
 - JWKS requests have a bounded timeout.
+- JWKS response bodies are streamed with a hard 256 KiB limit and accepted sets are limited to 64 keys.
+- Empty JWKS documents, oversized key sets, empty/oversized published `kid` values, and duplicate published `kid` values are rejected before caching.
 - Cached keys may continue to be used when a normal refresh temporarily fails, but only for a bounded stale-if-error window (currently one hour from the successful fetch).
 - Private signing keys remain only in the authentication service.
 
