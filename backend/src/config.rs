@@ -21,6 +21,8 @@ const MAX_HIGH_MEMO_KMS_KEY_VERSIONS: usize = 32;
 const MAX_HIGH_MEMO_KMS_KEYS_JSON_BYTES: usize = 64 * 1024;
 const MAX_HIGH_SEARCH_SHADOW_CONCURRENCY: usize = 256;
 const MAX_HIGH_SEARCH_SHADOW_TIMEOUT_MS: u64 = 60_000;
+const MIN_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS: u64 = 60;
+const MAX_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS: u64 = 3_600;
 
 // MongoDB database names on Unix/Linux must not contain NUL, space, double quote,
 // dollar sign, dot, forward slash, or backslash.
@@ -47,6 +49,7 @@ pub enum AuthConfig {
         audience: String,
         jwks_uri: String,
         signature_mode: JwtSignatureMode,
+        max_access_token_lifetime_seconds: u64,
     },
 }
 
@@ -164,6 +167,10 @@ pub enum ConfigError {
     InvalidJwtJwksUri(String),
     #[error("AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`")]
     InvalidJwtSignatureMode(String),
+    #[error(
+        "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS must be an integer in {MIN_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS}..={MAX_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS}, got `{0}`"
+    )]
+    InvalidJwtAccessTokenMaxLifetime(String),
 }
 
 impl AppConfig {
@@ -262,6 +269,8 @@ impl AppConfig {
                     audience,
                     jwks_uri,
                     signature_mode: parse_jwt_signature_mode(&vars)?,
+                    max_access_token_lifetime_seconds:
+                        parse_jwt_access_token_max_lifetime_seconds(&vars)?,
                 }
             }
             _ => return Err(ConfigError::InvalidAuthMode(auth_mode_value)),
@@ -312,6 +321,24 @@ fn parse_jwt_signature_mode(
         "es384" => Ok(JwtSignatureMode::Es384),
         _ => Err(ConfigError::InvalidJwtSignatureMode(mode)),
     }
+}
+
+fn parse_jwt_access_token_max_lifetime_seconds(
+    vars: &HashMap<String, String>,
+) -> Result<u64, ConfigError> {
+    let value = required_jwt_setting(vars, "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS")?;
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| ConfigError::InvalidJwtAccessTokenMaxLifetime(value.clone()))?;
+
+    if !(MIN_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS
+        ..=MAX_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS)
+        .contains(&parsed)
+    {
+        return Err(ConfigError::InvalidJwtAccessTokenMaxLifetime(value));
+    }
+
+    Ok(parsed)
 }
 
 #[derive(Debug, Deserialize)]
