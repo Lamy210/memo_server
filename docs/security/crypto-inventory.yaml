@@ -669,6 +669,14 @@ assets:
       access_token_max_bytes: 16384
       protected_header_segment_max_bytes: 4096
       token_bounds_enforced_before_jose_decode: true
+      access_token_lifetime_policy:
+        setting: AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS
+        required_in_jwt_mode: true
+        minimum_seconds: 60
+        maximum_seconds: 3600
+        exp_after_iat: required
+        exp_minus_iat_within_policy: required
+        issuer_misconfiguration_behavior: fail_closed
       jwks_algorithm_match: required_when_declared
       jwks_signature_use: required_when_declared
       jwks_verify_operation: required_when_declared
