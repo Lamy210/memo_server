@@ -1659,6 +1659,37 @@ mod tests {
                 .unwrap(),
             2
         );
+        assert_eq!(
+            HighEncryptedMemoIntegritySource::count_encrypted_memos_for_integrity(&store)
+                .await
+                .unwrap(),
+            2
+        );
+        let first_integrity_page =
+            HighEncryptedMemoIntegritySource::page_encrypted_memos_for_integrity(&store, None, 1)
+                .await
+                .unwrap();
+        assert_eq!(first_integrity_page.len(), 1);
+        let second_integrity_page =
+            HighEncryptedMemoIntegritySource::page_encrypted_memos_for_integrity(
+                &store,
+                Some(first_integrity_page[0].memo_id),
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(second_integrity_page.len(), 1);
+        assert!(second_integrity_page[0].memo_id > first_integrity_page[0].memo_id);
+        assert!(
+            HighEncryptedMemoIntegritySource::page_encrypted_memos_for_integrity(
+                &store,
+                Some(second_integrity_page[0].memo_id),
+                1,
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
 
         let mut divergent_encrypted = encrypted.clone();
         divergent_encrypted.ciphertext[0] ^= 0x01;
