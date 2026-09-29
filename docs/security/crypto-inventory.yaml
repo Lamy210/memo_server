@@ -171,8 +171,13 @@ assets:
             update: atomic_with_route_generation_change
             unknown_timestamp_retirement_behavior: fail_closed
           plaintext_authoritative_retirement:
-            state: readiness_verifier_and_irreversible_state_fence_staged
+            state: readiness_verifier_irreversible_state_fence_and_dry_run_planner_staged
             verifier_command: verify_high_memo_retirement
+            planner_command: plan_high_memo_plaintext_retirement
+            planner_destructive_changes: 0
+            planner_exact_plaintext_count: true
+            planner_same_maintenance_window_readiness_revalidation: true
+            planner_resume_inspection_states: [available, in_progress, retired]
             destructive_delete: not_implemented
             persisted_state:
               field: memo_plaintext_retirement_state
