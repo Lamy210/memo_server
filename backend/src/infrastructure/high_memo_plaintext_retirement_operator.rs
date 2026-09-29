@@ -72,56 +72,44 @@ pub async fn plan_high_memo_plaintext_retirement(
 
     let result: AppResult<HighMemoPlaintextRetirementPlan> = async {
         let retirement_state = permit.current_plaintext_retirement_state().await?;
+        let readiness = verify_high_memo_retirement_readiness_under_permit(
+            config,
+            &source,
+            permit.as_ref(),
+            HighMemoRetirementReadinessRequest {
+                minimum_soak_hours,
+                encrypted_page_size,
+                cache_scan_count,
+                expected_memo_generation,
+                expected_search_generation,
+                approval,
+                expected_plaintext_retirement_state: retirement_state,
+            },
+        )
+        .await?;
+        let plaintext_documents = source.count_plaintext_memos_for_retirement().await?;
 
-        match retirement_state {
-            HighMemoPlaintextRetirementState::Retired => {
-                let plaintext_documents = source.count_plaintext_memos_for_retirement().await?;
-                if plaintext_documents != 0 {
-                    Err(AppError::ServiceUnavailable(format!(
-                        "MEMO-HIGH-1 retirement state is retired but {plaintext_documents} plaintext memo document(s) remain"
-                    )))
-                } else {
-                    Ok(HighMemoPlaintextRetirementPlan {
-                        retirement_state,
-                        plaintext_documents,
-                        readiness: None,
-                    })
-                }
-            }
-            HighMemoPlaintextRetirementState::Available
-            | HighMemoPlaintextRetirementState::InProgress => {
-                let readiness = verify_high_memo_retirement_readiness_under_permit(
-                    config,
-                    &source,
-                    permit.as_ref(),
-                    HighMemoRetirementReadinessRequest {
-                        minimum_soak_hours,
-                        encrypted_page_size,
-                        cache_scan_count,
-                        expected_memo_generation,
-                        expected_search_generation,
-                        approval,
-                        expected_plaintext_retirement_state: retirement_state,
-                    },
-                )
-                .await?;
-                let plaintext_documents = source.count_plaintext_memos_for_retirement().await?;
-
-                permit.assert_still_enforced().await?;
-                let final_state = permit.current_plaintext_retirement_state().await?;
-                if final_state != retirement_state {
-                    return Err(AppError::ServiceUnavailable(format!(
-                        "MEMO-HIGH-1 plaintext retirement state changed during planning: expected {retirement_state}, observed {final_state}"
-                    )));
-                }
-
-                Ok(HighMemoPlaintextRetirementPlan {
-                    retirement_state,
-                    plaintext_documents,
-                    readiness: Some(readiness),
-                })
-            }
+        if retirement_state == HighMemoPlaintextRetirementState::Retired
+            && plaintext_documents != 0
+        {
+            return Err(AppError::ServiceUnavailable(format!(
+                "MEMO-HIGH-1 retirement state is retired but {plaintext_documents} plaintext memo document(s) remain"
+            )));
         }
+
+        permit.assert_still_enforced().await?;
+        let final_state = permit.current_plaintext_retirement_state().await?;
+        if final_state != retirement_state {
+            return Err(AppError::ServiceUnavailable(format!(
+                "MEMO-HIGH-1 plaintext retirement state changed during planning: expected {retirement_state}, observed {final_state}"
+            )));
+        }
+
+        Ok(HighMemoPlaintextRetirementPlan {
+            retirement_state,
+            plaintext_documents,
+            readiness: Some(readiness),
+        })
     }
     .await;
 
