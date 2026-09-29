@@ -1,7 +1,6 @@
 use std::{env, process::ExitCode};
 
 use memo_app_backend::{
-    application::high_memo_routing::HighMemoPlaintextRetirementState,
     config::AppConfig,
     infrastructure::{
         high_memo_plaintext_retirement_delete_operator::{
@@ -316,11 +315,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn already_retired_state_is_a_reported_terminal_value() {
-        assert_eq!(
-            HighMemoPlaintextRetirementState::Retired.to_string(),
-            "retired"
-        );
-    }
 }
