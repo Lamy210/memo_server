@@ -26,7 +26,8 @@ use crate::{
 };
 
 use super::ports::{
-    HighEncryptedMemoAuthoritativeStore, MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget,
+    HighEncryptedMemoAuthoritativeStore, HighEncryptedMemoIntegritySource, MemoAuthoritativeStore,
+    ProjectionIntent, ProjectionTarget,
 };
 
 #[cfg(test)]
@@ -972,6 +973,45 @@ impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
 
     async fn count_staged(&self) -> AppResult<u64> {
         self.count_staged_encrypted_memos_for_migration().await
+    }
+}
+
+#[async_trait]
+impl HighEncryptedMemoIntegritySource for MongoDbAuthoritativeStore {
+    async fn count_encrypted_memos_for_integrity(&self) -> AppResult<u64> {
+        self.encrypted_memos
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| mongo_error("count encrypted MongoDB memos for integrity", error))
+    }
+
+    async fn page_encrypted_memos_for_integrity(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+        let limit = i64::try_from(limit).map_err(|_| {
+            AppError::DatabaseError("MongoDB encrypted integrity page size is too large".into())
+        })?;
+        let filter = after
+            .map(|cursor| doc! { "_id": { "$gt": cursor.to_string() } })
+            .unwrap_or_else(|| doc! {});
+
+        let documents: Vec<EncryptedMemoDocument> = self
+            .encrypted_memos
+            .find(filter)
+            .sort(doc! { "_id": 1 })
+            .limit(limit)
+            .await
+            .map_err(|error| mongo_error("page encrypted MongoDB memos for integrity", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read encrypted MongoDB integrity page", error))?;
+
+        documents
+            .into_iter()
+            .map(EncryptedMemoDocument::try_into_envelope)
+            .collect()
     }
 }
 
