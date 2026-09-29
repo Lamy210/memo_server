@@ -187,6 +187,26 @@ The verifier is non-destructive. Under the maintenance barrier it requires:
 
 The backup and restore-rehearsal flags are operator attestations. This verifier does not inspect backup media or prove restoration integrity itself.
 
+### Non-destructive plaintext retirement plan
+
+Before any future destructive retirement implementation, run the repository-owned planner. It reacquires the same maintenance barrier, reruns the readiness/integrity checks against the exact expected memo/search generations, and adds an exact count of remaining plaintext authoritative memo documents. It does **not** transition `memo_plaintext_retirement_state` and performs no deletes.
+
+```bash
+cargo run --locked --features aws-kms-memo,aws-kms-search \
+  --bin plan_high_memo_plaintext_retirement -- \
+  --plan \
+  --confirm-maintenance-window \
+  --confirm-post-cutover-backup-verified \
+  --confirm-restore-rehearsed \
+  --minimum-soak-hours 168 \
+  --encrypted-page-size 500 \
+  --cache-scan-count 1000 \
+  --expected-memo-route-generation <memo-generation> \
+  --expected-search-route-generation <search-generation>
+```
+
+The planner reports `plan.destructive_changes=0` and `plan.plaintext_documents=<count>`. It can also inspect an existing `in_progress` retirement state after break-glass recovery, while keeping all checks non-destructive.
+
 A `readiness.ready=true` result still does **not** delete plaintext data. A future retirement command must be a separate, explicitly destructive operation with its own approval and recovery boundary.
 
 ## Batch traversal
