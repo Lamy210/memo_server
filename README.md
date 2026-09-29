@@ -78,7 +78,7 @@ Health endpoint 以外の memo API は認証が必要です。
 
 ローカル開発では `AUTH_MODE=development` を明示し、SvelteKit server proxy が private env `DEVELOPMENT_USER_ID` から各Backendリクエストへ `X-Development-User-Id: <UUID>` を付与します。ブラウザから送られた `Authorization` / `X-Development-User-Id` / Cookie はそのままBackendへ転送せず、server-sideの認証コンテキストだけを利用します。
 
-本番では `AUTH_MODE=jwt` を使用します。既存互換の既定値は `AUTH_JWT_SIGNATURE_MODE=rs256` で、ES384移行時のみ `rs256-es384` を明示して両方式を受け入れ、移行完了後は `es384` でRS256を拒否できます。Backendは設定したissuer・audience・expiry・issued-at・subjectと署名アルゴリズム/JWKS鍵種別を検証します。署名鍵は `AUTH_JWKS_URI` のJWKSから取得し、key rotation時はJWKSを再取得します。`AUTH_JWKS_URI` はHTTPS絶対URLのみ許可し、JWKS専用clientはredirectを追従しません。JWKSはサイズ・鍵数を上限付きで読み込み、重複 `kid` は曖昧選択せずfail-closedで拒否します。JWT `sub` はmemo_server内のuser UUIDとして扱います。
+本番では `AUTH_MODE=jwt` を使用します。既存互換の既定値は `AUTH_JWT_SIGNATURE_MODE=rs256` で、ES384移行時のみ `rs256-es384` を明示して両方式を受け入れ、移行完了後は `es384` でRS256を拒否できます。Backendはcompact JWTのサイズ/3-segment構造を暗号処理前に上限付きで検証し、設定したissuer・audience・expiry・issued-at・subjectと署名アルゴリズム/JWKS鍵種別を検証します。署名鍵は `AUTH_JWKS_URI` のJWKSから取得し、key rotation時はJWKSを再取得します。`AUTH_JWKS_URI` はHTTPS絶対URLのみ許可し、JWKS専用clientはredirectを追従しません。JWKSはサイズ・鍵数を上限付きで読み込み、重複 `kid` は曖昧選択せずfail-closedで拒否します。JWT `sub` はmemo_server内のuser UUIDとして扱います。
 
 memo_serverは認証サービスと独立して運用します。Oryや共通認証基盤との連携は前提にせず、認証サービス側がユーザー登録・ログイン・セッション/refresh token・パスワード/MFA等を担当し、memo_serverはaccess tokenの検証とuser境界の適用だけを担当します。
 
