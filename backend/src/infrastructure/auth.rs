@@ -29,6 +29,8 @@ const JWKS_FORCED_REFRESH_COOLDOWN: Duration = Duration::from_secs(5);
 const JWKS_MAX_BODY_BYTES: usize = 256 * 1024;
 const JWKS_MAX_KEYS: usize = 64;
 const JWT_KID_MAX_BYTES: usize = 128;
+const JWT_ACCESS_TOKEN_MAX_BYTES: usize = 16 * 1024;
+const JWT_PROTECTED_HEADER_SEGMENT_MAX_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedIdentity {
@@ -142,6 +144,8 @@ impl JwtVerifier {
     }
 
     async fn verify(&self, token: &str) -> AppResult<AuthenticatedIdentity> {
+        validate_compact_access_token(token)?;
+
         let header = decode_header(token)
             .map_err(|_| AppError::Unauthorized("Access token header is invalid".into()))?;
 
@@ -335,6 +339,39 @@ impl JwtVerifier {
         validate_jwks_set(&set)?;
         Ok(set)
     }
+}
+
+fn validate_compact_access_token(token: &str) -> AppResult<()> {
+    if token.is_empty() || token.len() > JWT_ACCESS_TOKEN_MAX_BYTES {
+        return Err(AppError::Unauthorized(
+            "Access token is empty or exceeds the supported size".into(),
+        ));
+    }
+
+    let mut segments = token.split('.');
+    let protected = segments.next().unwrap_or_default();
+    let payload = segments.next().unwrap_or_default();
+    let signature = segments.next().unwrap_or_default();
+
+    if protected.is_empty()
+        || payload.is_empty()
+        || signature.is_empty()
+        || segments.next().is_some()
+        || protected.len() > JWT_PROTECTED_HEADER_SEGMENT_MAX_BYTES
+        || !protected.bytes().all(is_base64url_byte)
+        || !payload.bytes().all(is_base64url_byte)
+        || !signature.bytes().all(is_base64url_byte)
+    {
+        return Err(AppError::Unauthorized(
+            "Access token is not a supported compact JWS".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_base64url_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
 }
 
 fn validate_token_kid(kid: &str) -> AppResult<()> {
@@ -673,6 +710,43 @@ mod tests {
             identity.user_id,
             Uuid::parse_str(TEST_USER_ID).expect("test UUID must parse")
         );
+    }
+
+    #[test]
+    fn compact_access_token_is_bounded_and_structurally_validated() {
+        assert!(validate_compact_access_token("aaa.bbb.ccc").is_ok());
+
+        for invalid in [
+            "",
+            "aaa.bbb",
+            "aaa.bbb.ccc.ddd",
+            ".bbb.ccc",
+            "aaa..ccc",
+            "aaa.bbb.",
+            "aaa=.bbb.ccc",
+            "aaa.b b.ccc",
+        ] {
+            assert!(matches!(
+                validate_compact_access_token(invalid),
+                Err(AppError::Unauthorized(_))
+            ));
+        }
+
+        let oversized = format!(
+            "{}.bbb.ccc",
+            "a".repeat(JWT_PROTECTED_HEADER_SEGMENT_MAX_BYTES + 1)
+        );
+        assert!(matches!(
+            validate_compact_access_token(&oversized),
+            Err(AppError::Unauthorized(_))
+        ));
+
+        let oversized = format!("aaa.{}.ccc", "b".repeat(JWT_ACCESS_TOKEN_MAX_BYTES));
+        assert!(oversized.len() > JWT_ACCESS_TOKEN_MAX_BYTES);
+        assert!(matches!(
+            validate_compact_access_token(&oversized),
+            Err(AppError::Unauthorized(_))
+        ));
     }
 
     #[test]
