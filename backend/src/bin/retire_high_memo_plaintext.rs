@@ -14,7 +14,7 @@ use memo_app_backend::{
 
 const USAGE: &str = "usage:
   retire_high_memo_plaintext [--status]
-  retire_high_memo_plaintext --apply --confirm-irrevocable-plaintext-delete --confirm-maintenance-window --confirm-post-cutover-backup-verified --confirm-restore-rehearsed --minimum-soak-hours <hours> --encrypted-page-size <n> --cache-scan-count <n> --expected-memo-route-generation <generation> --expected-search-route-generation <generation> --expected-plaintext-documents <count>";
+  retire_high_memo_plaintext --apply --confirm-irrevocable-plaintext-delete --confirm-maintenance-window --confirm-post-cutover-backup-verified --confirm-restore-rehearsed --confirm-legacy-backup-retention-reviewed --minimum-soak-hours <hours> --encrypted-page-size <n> --cache-scan-count <n> --expected-memo-route-generation <generation> --expected-search-route-generation <generation> --expected-plaintext-documents <count>";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -115,6 +115,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
     let mut confirm_maintenance = false;
     let mut confirm_backup = false;
     let mut confirm_restore = false;
+    let mut confirm_legacy_backup_retention = false;
     let mut minimum_soak_hours = None;
     let mut encrypted_page_size = None;
     let mut cache_scan_count = None;
@@ -158,6 +159,13 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
                     return Err(USAGE.into());
                 }
                 confirm_restore = true;
+                index += 1;
+            }
+            "--confirm-legacy-backup-retention-reviewed" => {
+                if confirm_legacy_backup_retention {
+                    return Err(USAGE.into());
+                }
+                confirm_legacy_backup_retention = true;
                 index += 1;
             }
             "--minimum-soak-hours" => {
@@ -225,6 +233,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
         || !confirm_maintenance
         || !confirm_backup
         || !confirm_restore
+        || !confirm_legacy_backup_retention
         || minimum_soak_hours.is_none()
         || encrypted_page_size.is_none()
         || cache_scan_count.is_none()
@@ -242,6 +251,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
         expected_memo_generation: expected_memo_generation.unwrap(),
         expected_search_generation: expected_search_generation.unwrap(),
         expected_plaintext_documents: expected_plaintext_documents.unwrap(),
+        legacy_backup_retention_reviewed: true,
         approval: HighMemoRetirementApproval {
             post_cutover_backup_verified: true,
             restore_rehearsed: true,
@@ -260,6 +270,7 @@ mod tests {
             "--confirm-maintenance-window".into(),
             "--confirm-post-cutover-backup-verified".into(),
             "--confirm-restore-rehearsed".into(),
+            "--confirm-legacy-backup-retention-reviewed".into(),
             "--minimum-soak-hours".into(),
             "168".into(),
             "--encrypted-page-size".into(),
@@ -293,6 +304,7 @@ mod tests {
             expected_memo_generation: 5,
             expected_search_generation: 9,
             expected_plaintext_documents: 42,
+            legacy_backup_retention_reviewed: true,
             approval: HighMemoRetirementApproval {
                 post_cutover_backup_verified: true,
                 restore_rehearsed: true,
@@ -305,6 +317,7 @@ mod tests {
             "--confirm-maintenance-window",
             "--confirm-post-cutover-backup-verified",
             "--confirm-restore-rehearsed",
+            "--confirm-legacy-backup-retention-reviewed",
             "--expected-plaintext-documents",
         ] {
             let args = valid_args()
