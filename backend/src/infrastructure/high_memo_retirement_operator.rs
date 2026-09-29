@@ -453,8 +453,16 @@ fn validate_generation(label: &str, generation: i64) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AuthConfig, HighSearchShadowConfig};
+    use crate::{
+        application::crypto::{
+            HighEncryptedMemoEnvelope, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID,
+        },
+        config::{AuthConfig, HighSearchShadowConfig},
+        domain::memo::entity::Memo,
+    };
+    use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
+    use uuid::Uuid;
 
     fn approved() -> HighMemoRetirementApproval {
         HighMemoRetirementApproval {
@@ -531,6 +539,119 @@ mod tests {
         assert!(
             validate_high_memo_retirement_config(&configured(), 24, 500, 0, 1, 1, approved(),).is_err()
         );
+    }
+
+    struct FakeIntegritySource {
+        envelopes: Vec<HighEncryptedMemoEnvelope>,
+        reported_count: u64,
+    }
+
+    #[async_trait::async_trait]
+    impl HighEncryptedMemoIntegritySource for FakeIntegritySource {
+        async fn count_encrypted_memos_for_integrity(&self) -> AppResult<u64> {
+            Ok(self.reported_count)
+        }
+
+        async fn page_encrypted_memos_for_integrity(
+            &self,
+            after: Option<Uuid>,
+            limit: usize,
+        ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+            let mut envelopes = self.envelopes.clone();
+            envelopes.sort_by_key(|envelope| envelope.memo_id);
+            Ok(envelopes
+                .into_iter()
+                .filter(|envelope| after.is_none_or(|cursor| envelope.memo_id > cursor))
+                .take(limit)
+                .collect())
+        }
+    }
+
+    struct FakeIntegrityCrypto;
+
+    #[async_trait::async_trait]
+    impl HighMemoCryptography for FakeIntegrityCrypto {
+        async fn encrypt_memo(&self, _memo: &Memo) -> AppResult<HighEncryptedMemoEnvelope> {
+            Err(AppError::InternalServerError(
+                "integrity test does not encrypt".into(),
+            ))
+        }
+
+        async fn decrypt_memo(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo> {
+            serde_json::from_slice(&envelope.ciphertext).map_err(|error| {
+                AppError::DatabaseError(format!("integrity test decrypt failed: {error}"))
+            })
+        }
+    }
+
+    fn integrity_memo(id: u128) -> Memo {
+        Memo {
+            id: Uuid::from_u128(id),
+            title: format!("memo-{id}"),
+            content: "content".into(),
+            tags: vec!["integrity".into()],
+            user_id: Uuid::from_u128(10_000 + id),
+            created_at: Utc.timestamp_millis_opt(1_700_000_000_000).unwrap(),
+            updated_at: Utc.timestamp_millis_opt(1_700_000_001_000).unwrap(),
+            version: 1,
+        }
+    }
+
+    fn integrity_envelope(memo: &Memo) -> HighEncryptedMemoEnvelope {
+        HighEncryptedMemoEnvelope {
+            memo_id: memo.id,
+            owner_partition: memo.user_id,
+            ciphertext: serde_json::to_vec(memo).unwrap(),
+            nonce: vec![0x11; 12],
+            wrapped_dek: vec![0x22; 48],
+            version: memo.version,
+            crypto_suite_id: MEMO_HIGH_SUITE_ID.into(),
+            key_version: "memo-key-v1".into(),
+            schema_version: MEMO_HIGH_SCHEMA_VERSION,
+        }
+    }
+
+    #[tokio::test]
+    async fn encrypted_integrity_scan_decrypts_every_envelope_with_bounded_pages() {
+        let first = integrity_memo(1);
+        let second = integrity_memo(2);
+        let source = FakeIntegritySource {
+            envelopes: vec![integrity_envelope(&second), integrity_envelope(&first)],
+            reported_count: 2,
+        };
+
+        assert_eq!(
+            verify_encrypted_authoritative_integrity(&source, &FakeIntegrityCrypto, 1)
+                .await
+                .unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn encrypted_integrity_scan_rejects_identity_or_count_mismatch() {
+        let first = integrity_memo(1);
+        let second = integrity_memo(2);
+        let mut wrong_identity = integrity_envelope(&first);
+        wrong_identity.ciphertext = serde_json::to_vec(&second).unwrap();
+
+        let source = FakeIntegritySource {
+            envelopes: vec![wrong_identity],
+            reported_count: 1,
+        };
+        assert!(matches!(
+            verify_encrypted_authoritative_integrity(&source, &FakeIntegrityCrypto, 1).await,
+            Err(AppError::DatabaseError(_))
+        ));
+
+        let source = FakeIntegritySource {
+            envelopes: vec![integrity_envelope(&first)],
+            reported_count: 2,
+        };
+        assert!(matches!(
+            verify_encrypted_authoritative_integrity(&source, &FakeIntegrityCrypto, 1).await,
+            Err(AppError::Conflict(_))
+        ));
     }
 
     #[test]
