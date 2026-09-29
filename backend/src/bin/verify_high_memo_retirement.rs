@@ -10,13 +10,14 @@ use memo_app_backend::{
 
 const USAGE: &str = "usage:
   verify_high_memo_retirement [--status]
-  verify_high_memo_retirement --verify --confirm-maintenance-window --confirm-post-cutover-backup-verified --confirm-restore-rehearsed --minimum-soak-hours <hours> --cache-scan-count <n> --expected-memo-route-generation <generation> --expected-search-route-generation <generation>";
+  verify_high_memo_retirement --verify --confirm-maintenance-window --confirm-post-cutover-backup-verified --confirm-restore-rehearsed --minimum-soak-hours <hours> --encrypted-page-size <n> --cache-scan-count <n> --expected-memo-route-generation <generation> --expected-search-route-generation <generation>";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Status,
     Verify {
         minimum_soak_hours: u64,
+        encrypted_page_size: usize,
         cache_scan_count: usize,
         expected_memo_generation: i64,
         expected_search_generation: i64,
@@ -58,6 +59,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Verify {
             minimum_soak_hours,
+            encrypted_page_size,
             cache_scan_count,
             expected_memo_generation,
             expected_search_generation,
@@ -65,6 +67,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let report = verify_high_memo_retirement_readiness(
                 &config,
                 minimum_soak_hours,
+                encrypted_page_size,
                 cache_scan_count,
                 expected_memo_generation,
                 expected_search_generation,
@@ -97,6 +100,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 report.observed_soak_hours
             );
             println!(
+                "readiness.encrypted_memos_verified={}",
+                report.encrypted_memos_verified
+            );
+            println!(
                 "readiness.pending_projection_intents={}",
                 report.pending_projection_intents
             );
@@ -121,6 +128,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
     let mut confirm_backup = false;
     let mut confirm_restore = false;
     let mut minimum_soak_hours = None;
+    let mut encrypted_page_size = None;
     let mut cache_scan_count = None;
     let mut expected_memo_generation = None;
     let mut expected_search_generation = None;
@@ -150,6 +158,14 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
                     return Err(USAGE.into());
                 }
                 minimum_soak_hours = Some(value.parse::<u64>()?);
+                index += 2;
+            }
+            "--encrypted-page-size" => {
+                let value = args.get(index + 1).ok_or(USAGE)?;
+                if encrypted_page_size.is_some() {
+                    return Err(USAGE.into());
+                }
+                encrypted_page_size = Some(value.parse::<usize>()?);
                 index += 2;
             }
             "--cache-scan-count" => {
@@ -193,6 +209,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
         || !confirm_backup
         || !confirm_restore
         || minimum_soak_hours.is_none()
+        || encrypted_page_size.is_none()
         || cache_scan_count.is_none()
         || expected_memo_generation.is_none()
         || expected_search_generation.is_none()
@@ -202,6 +219,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, Box<dyn std::error::Error>> 
 
     Ok(Command::Verify {
         minimum_soak_hours: minimum_soak_hours.unwrap(),
+        encrypted_page_size: encrypted_page_size.unwrap(),
         cache_scan_count: cache_scan_count.unwrap(),
         expected_memo_generation: expected_memo_generation.unwrap(),
         expected_search_generation: expected_search_generation.unwrap(),
@@ -230,6 +248,8 @@ mod tests {
             "--confirm-restore-rehearsed".into(),
             "--minimum-soak-hours".into(),
             "168".into(),
+            "--encrypted-page-size".into(),
+            "500".into(),
             "--cache-scan-count".into(),
             "1000".into(),
             "--expected-memo-route-generation".into(),
@@ -242,6 +262,7 @@ mod tests {
             parse_args(valid.clone()).unwrap(),
             Command::Verify {
                 minimum_soak_hours: 168,
+                encrypted_page_size: 500,
                 cache_scan_count: 1000,
                 expected_memo_generation: 5,
                 expected_search_generation: 9,
