@@ -80,6 +80,8 @@ memo_server intentionally ignores unrelated custom claims. Authentication-provid
 
 memo_server reads public verification keys from `AUTH_JWKS_URI`.
 
+`AUTH_JWKS_URI` is treated as trusted deployment configuration but still has an explicit transport boundary: it must be an absolute HTTPS URL, must not contain URL userinfo/password data, and must not contain a fragment. The dedicated JWKS HTTP client is HTTPS-only and does not follow redirects. A 3xx response therefore fails closed instead of allowing the configured authentication service to redirect memo_server to a different origin or scheme.
+
 - JWKS is cached for five minutes.
 - An unknown `kid` can trigger a forced refresh.
 - An invalid signature can trigger one forced JWKS refresh before the token is rejected.
