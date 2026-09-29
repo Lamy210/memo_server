@@ -16,9 +16,7 @@ use super::{
     high_search_maintenance_mongodb::MongoHighSearchMaintenanceGuard,
     persistence::{
         mongodb::MongoDbAuthoritativeStore,
-        ports::{
-            LegacyMemoPlaintextRetirementAdmin, LegacyMemoPlaintextRetirementInspector,
-        },
+        ports::{LegacyMemoPlaintextRetirementAdmin, LegacyMemoPlaintextRetirementInspector},
     },
 };
 
