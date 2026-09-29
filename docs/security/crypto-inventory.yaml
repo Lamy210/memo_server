@@ -667,6 +667,14 @@ assets:
       jwks_algorithm_match: required_when_declared
       jwks_signature_use: required_when_declared
       jwks_verify_operation: required_when_declared
+      jwt_kid_required: true
+      jwt_kid_max_bytes: 128
+      jwks_response_max_bytes: 262144
+      jwks_max_keys: 64
+      jwks_empty_set: rejected
+      jwks_duplicate_kid: rejected
+      jwks_published_kid_empty_or_oversized: rejected
+      jwks_key_selection: unique_kid_only
       rs256_jwk_type: RSA
       es384_jwk_type: EC_P384
       issuer_es384_rollout: external_auth_service_pending
