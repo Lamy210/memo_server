@@ -526,8 +526,71 @@ fn format_search_observation(result: AppResult<HighSearchQueryRouteSnapshot>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use crate::config::{AuthConfig, HighSearchShadowConfig};
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+    };
+
+    #[derive(Debug, Clone, Copy)]
+    enum FakeSwitchOutcome {
+        Ok(HighMemoDataRouteSnapshot),
+        Err,
+    }
+
+    struct FakeOfflinePermit {
+        memo_observed: HighMemoDataRouteSnapshot,
+        search_observed: HighSearchQueryRouteSnapshot,
+        switch_outcome: FakeSwitchOutcome,
+        released: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl HighSearchOfflineWindowPermit for FakeOfflinePermit {
+        async fn assert_still_enforced(&self) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn current_query_route(&self) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Ok(self.search_observed)
+        }
+
+        async fn switch_query_route(
+            &self,
+            _expected: HighSearchQueryRouteSnapshot,
+            _target: HighSearchQueryRoute,
+        ) -> AppResult<HighSearchQueryRouteSnapshot> {
+            Err(AppError::InternalServerError(
+                "unexpected query-route switch in memo cutover test".into(),
+            ))
+        }
+
+        async fn current_memo_route(&self) -> AppResult<HighMemoDataRouteSnapshot> {
+            Ok(self.memo_observed)
+        }
+
+        async fn switch_memo_route(
+            &self,
+            _expected: HighMemoDataRouteSnapshot,
+            _target: HighMemoDataRoute,
+        ) -> AppResult<HighMemoDataRouteSnapshot> {
+            match self.switch_outcome {
+                FakeSwitchOutcome::Ok(snapshot) => Ok(snapshot),
+                FakeSwitchOutcome::Err => Err(AppError::ServiceUnavailable(
+                    "simulated memo route switch failure".into(),
+                )),
+            }
+        }
+
+        async fn release(self: Box<Self>) -> AppResult<()> {
+            self.released.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+    }
 
     fn approved() -> HighMemoRouteCutoverApproval {
         HighMemoRouteCutoverApproval {
@@ -571,6 +634,125 @@ mod tests {
             port: 8080,
             auth: AuthConfig::Development,
         }
+    }
+
+    fn route_snapshots() -> (
+        HighMemoDataRouteSnapshot,
+        HighMemoDataRouteSnapshot,
+        HighSearchQueryRouteSnapshot,
+    ) {
+        (
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::LegacyPlaintext,
+                generation: 4,
+            },
+            HighMemoDataRouteSnapshot {
+                route: HighMemoDataRoute::Encrypted,
+                generation: 5,
+            },
+            HighSearchQueryRouteSnapshot {
+                route: HighSearchQueryRoute::Protected,
+                generation: 8,
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn memo_route_switch_releases_only_after_exact_target_is_observed() {
+        let (expected, target, search) = route_snapshots();
+        let released = Arc::new(AtomicBool::new(false));
+        let permit: Box<dyn HighSearchOfflineWindowPermit> = Box::new(FakeOfflinePermit {
+            memo_observed: target,
+            search_observed: search,
+            switch_outcome: FakeSwitchOutcome::Ok(target),
+            released: released.clone(),
+        });
+
+        assert_eq!(
+            switch_memo_route_fail_closed(
+                permit,
+                expected,
+                search,
+                HighMemoDataRoute::Encrypted,
+            )
+            .await
+            .unwrap(),
+            target
+        );
+        assert!(released.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn switch_error_is_accepted_only_when_exact_target_is_persisted() {
+        let (expected, target, search) = route_snapshots();
+        let released = Arc::new(AtomicBool::new(false));
+        let permit: Box<dyn HighSearchOfflineWindowPermit> = Box::new(FakeOfflinePermit {
+            memo_observed: target,
+            search_observed: search,
+            switch_outcome: FakeSwitchOutcome::Err,
+            released: released.clone(),
+        });
+
+        assert_eq!(
+            switch_memo_route_fail_closed(
+                permit,
+                expected,
+                search,
+                HighMemoDataRoute::Encrypted,
+            )
+            .await
+            .unwrap(),
+            target
+        );
+        assert!(released.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn proven_uncommitted_switch_releases_maintenance_and_returns_failure() {
+        let (expected, _target, search) = route_snapshots();
+        let released = Arc::new(AtomicBool::new(false));
+        let permit: Box<dyn HighSearchOfflineWindowPermit> = Box::new(FakeOfflinePermit {
+            memo_observed: expected,
+            search_observed: search,
+            switch_outcome: FakeSwitchOutcome::Err,
+            released: released.clone(),
+        });
+
+        assert!(switch_memo_route_fail_closed(
+            permit,
+            expected,
+            search,
+            HighMemoDataRoute::Encrypted,
+        )
+        .await
+        .is_err());
+        assert!(released.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_switch_outcome_keeps_maintenance_fail_closed() {
+        let (expected, target, search) = route_snapshots();
+        let released = Arc::new(AtomicBool::new(false));
+        let changed_search = HighSearchQueryRouteSnapshot {
+            route: HighSearchQueryRoute::Protected,
+            generation: search.generation + 1,
+        };
+        let permit: Box<dyn HighSearchOfflineWindowPermit> = Box::new(FakeOfflinePermit {
+            memo_observed: target,
+            search_observed: changed_search,
+            switch_outcome: FakeSwitchOutcome::Ok(target),
+            released: released.clone(),
+        });
+
+        assert!(switch_memo_route_fail_closed(
+            permit,
+            expected,
+            search,
+            HighMemoDataRoute::Encrypted,
+        )
+        .await
+        .is_err());
+        assert!(!released.load(Ordering::Relaxed));
     }
 
     #[test]
