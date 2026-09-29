@@ -91,11 +91,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 report.memo_route_changed_at_ms
             );
             println!("readiness.observed_at_ms={}", report.observed_at_ms);
+            println!("readiness.minimum_soak_hours={}", report.minimum_soak_hours);
             println!(
-                "readiness.minimum_soak_hours={}",
-                report.minimum_soak_hours
+                "readiness.observed_soak_hours={}",
+                report.observed_soak_hours
             );
-            println!("readiness.observed_soak_hours={}", report.observed_soak_hours);
             println!(
                 "readiness.pending_projection_intents={}",
                 report.pending_projection_intents
