@@ -626,6 +626,7 @@ assets:
         query_request_path_protected_fallback_to_legacy: forbidden
         query_request_path_shadow_on_protected_route: disabled
       legacy_plaintext_projection_active: true
+      legacy_plaintext_projection_runtime_lifecycle: legacy_read_write_then_no_new_writes_on_protected_search_then_purged_on_encrypted_memo_cutover
       legacy_plaintext_projection_new_writes_on_protected_route: false
       legacy_plaintext_projection_retirement: purge_and_zero_verify_integrated_into_encrypted_memo_cutover
       legacy_plaintext_projection_post_retirement_audit: retirement_planner_rechecks_zero_under_maintenance
