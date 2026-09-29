@@ -303,7 +303,7 @@ fn jwt_algorithm_allowed(mode: JwtSignatureMode, algorithm: Algorithm) -> bool {
 }
 
 fn validate_jwk_for_algorithm(jwk: &Jwk, algorithm: Algorithm) -> AppResult<()> {
-    if let Some(declared) = jwk.common.key_algorithm.clone() {
+    if let Some(declared) = jwk.common.key_algorithm {
         let declared = Algorithm::try_from(declared).map_err(|_| {
             AppError::ServiceUnavailable(
                 "Authentication JWKS contains an unsupported key algorithm".into(),
