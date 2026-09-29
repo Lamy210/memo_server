@@ -13,6 +13,7 @@ pub(crate) mod high_memo_authoritative;
 pub(crate) mod high_memo_aws_runtime;
 pub(crate) mod high_memo_cache;
 pub mod high_memo_migration_operator;
+pub mod high_memo_plaintext_retirement_delete_operator;
 pub mod high_memo_plaintext_retirement_operator;
 pub mod high_memo_retirement_operator;
 pub mod high_memo_route_operator;
