@@ -144,7 +144,7 @@ This cutover still does **not** delete the plaintext authoritative MongoDB colle
 
 Route cutover and plaintext retirement are deliberately separate. A successful encrypted cutover starts a soak period; it does not authorize deletion of the plaintext `memos` collection.
 
-Every actual memo-route transition now records `memo_route_changed_at` using MongoDB server time in the same atomic update that advances `memo_route_generation`. An older encrypted route with no recorded transition time is not considered retirement-ready.
+Every actual memo-route transition now records `memo_route_changed_at` using MongoDB server time in the same atomic update that advances `memo_route_generation`. Soak verification reads `hello.localTime` from MongoDB as well, keeping both timestamps in the same clock domain. An older encrypted route with no recorded transition time is not considered retirement-ready.
 
 Non-freezing status inspection:
 
