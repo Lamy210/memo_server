@@ -150,6 +150,7 @@ struct RetirementVerificationRequest {
     cache_scan_count: usize,
     expected_memo_generation: i64,
     expected_search_generation: i64,
+    expected_plaintext_retirement_state: HighMemoPlaintextRetirementState,
 }
 
 pub async fn verify_high_memo_retirement_readiness(
@@ -171,9 +172,52 @@ pub async fn verify_high_memo_retirement_readiness(
         approval,
     )?;
 
-    // Preflight the entire configured historical/current KMS key ring before
-    // freezing traffic. Readiness must not be reported for an encrypted route
-    // whose data keys cannot be resolved anymore.
+    let source =
+        MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?;
+    let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
+    let permit = guard.acquire_offline_window().await?;
+
+    let result = verify_high_memo_retirement_readiness_under_permit(
+        config,
+        &source,
+        permit.as_ref(),
+        minimum_soak_hours,
+        encrypted_page_size,
+        cache_scan_count,
+        expected_memo_generation,
+        expected_search_generation,
+        approval,
+        HighMemoPlaintextRetirementState::Available,
+    )
+    .await;
+
+    finish_readiness_verification(result, permit).await
+}
+
+pub(crate) async fn verify_high_memo_retirement_readiness_under_permit(
+    config: &AppConfig,
+    source: &MongoDbAuthoritativeStore,
+    permit: &dyn HighSearchOfflineWindowPermit,
+    minimum_soak_hours: u64,
+    encrypted_page_size: usize,
+    cache_scan_count: usize,
+    expected_memo_generation: i64,
+    expected_search_generation: i64,
+    approval: HighMemoRetirementApproval,
+    expected_plaintext_retirement_state: HighMemoPlaintextRetirementState,
+) -> AppResult<HighMemoRetirementReadinessReport> {
+    validate_high_memo_retirement_config(
+        config,
+        minimum_soak_hours,
+        encrypted_page_size,
+        cache_scan_count,
+        expected_memo_generation,
+        expected_search_generation,
+        approval,
+    )?;
+
+    // Preflight the entire configured historical/current KMS key ring and
+    // protected search runtime before destructive plaintext work.
     let runtime = HighMemoStagingRuntimeHandle::build(&config.high_memo_crypto).await?;
     let cryptography = runtime.request_cryptography().ok_or_else(|| {
         AppError::ServiceUnavailable(
@@ -189,9 +233,6 @@ pub async fn verify_high_memo_retirement_readiness(
         ));
     }
 
-    let source =
-        MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?;
-    let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
     let cache = RedisCache::new(&config.redis_uri)?;
     let legacy_search = ManticoreClient::new(&config.search_uri)?;
     let recovery = MongoHighSearchMaintenanceRecovery::connect(
@@ -200,28 +241,25 @@ pub async fn verify_high_memo_retirement_readiness(
     )
     .await?;
 
-    let permit = guard.acquire_offline_window().await?;
-
-    let result = verify_under_permit(
+    verify_under_permit(
         RetirementVerificationResources {
-            source: &source,
+            source,
             cache: &cache,
             legacy_search: &legacy_search,
             recovery: &recovery,
             cryptography: cryptography.as_ref(),
         },
-        permit.as_ref(),
+        permit,
         RetirementVerificationRequest {
             minimum_soak_hours,
             encrypted_page_size,
             cache_scan_count,
             expected_memo_generation,
             expected_search_generation,
+            expected_plaintext_retirement_state,
         },
     )
-    .await;
-
-    finish_readiness_verification(result, permit).await
+    .await
 }
 
 async fn verify_under_permit(
@@ -242,6 +280,7 @@ async fn verify_under_permit(
         cache_scan_count,
         expected_memo_generation,
         expected_search_generation,
+        expected_plaintext_retirement_state,
     } = request;
 
     permit.assert_still_enforced().await?;
@@ -282,9 +321,9 @@ async fn verify_under_permit(
     }
 
     let plaintext_retirement_state = status.memo_plaintext_retirement_state();
-    if plaintext_retirement_state != HighMemoPlaintextRetirementState::Available {
+    if plaintext_retirement_state != expected_plaintext_retirement_state {
         return Err(AppError::Conflict(format!(
-            "MEMO-HIGH-1 retirement readiness requires plaintext retirement state available; observed {plaintext_retirement_state}"
+            "MEMO-HIGH-1 retirement readiness requires plaintext retirement state {expected_plaintext_retirement_state}; observed {plaintext_retirement_state}"
         )));
     }
 
