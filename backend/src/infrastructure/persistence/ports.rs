@@ -42,6 +42,20 @@ pub trait LegacyMemoPlaintextRetirementInspector: Send + Sync {
 }
 
 #[async_trait]
+pub trait LegacyMemoPlaintextRetirementAdmin:
+    LegacyMemoPlaintextRetirementInspector + Send + Sync
+{
+    /// Irreversibly delete every plaintext authoritative memo document.
+    ///
+    /// Callers must first advance the shared retirement state to
+    /// `in_progress` while holding the maintenance window. The operation is
+    /// intentionally resumable: a partial/ambiguous delete leaves retirement
+    /// fenced and a later operator invocation can continue from the remaining
+    /// document count.
+    async fn delete_all_plaintext_memos_for_retirement(&self) -> AppResult<u64>;
+}
+
+#[async_trait]
 pub trait HighEncryptedMemoIntegritySource: Send + Sync {
     async fn count_encrypted_memos_for_integrity(&self) -> AppResult<u64>;
 
