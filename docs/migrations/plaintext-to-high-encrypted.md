@@ -205,7 +205,11 @@ cargo run --locked --features aws-kms-memo,aws-kms-search \
   --expected-search-route-generation <search-generation>
 ```
 
-The planner reports `plan.destructive_changes=0` and `plan.plaintext_documents=<count>`. It can also inspect an existing `in_progress` retirement state after break-glass recovery, while keeping all checks non-destructive.
+The planner reports `plan.destructive_changes=0` and `plan.plaintext_documents=<count>`. It can inspect an existing `in_progress` retirement state after break-glass recovery while keeping all checks non-destructive.
+
+After retirement reaches `retired`, the same planner becomes a repeatable post-retirement audit rather than dropping down to a plaintext-count-only check. Under the maintenance barrier it reruns the exact encrypted-route/protected-search generation checks, KMS/search runtime preflight, full encrypted decrypt/integrity traversal, projection-outbox zero check, legacy plaintext Redis-key zero check, and legacy Manticore-document zero check, then separately requires the plaintext authoritative MongoDB document count to remain zero. The CLI reports `plan.post_retirement_audit=true` in this state.
+
+This catches regression from an accidentally reintroduced old replica or secondary write path without re-enabling any plaintext route or performing destructive work.
 
 A `readiness.ready=true` or `plan.ready=true` result still does **not** delete plaintext data.
 
@@ -239,7 +243,7 @@ The command advances `in_progress -> retired` only after:
 - a post-delete exact count is zero,
 - the maintenance barrier is still enforced.
 
-If deletion reaches zero but the final state transition fails, the next invocation can resume from `in_progress` with expected plaintext count zero. An already-`retired` state is accepted only when the exact plaintext count is zero.
+If deletion reaches zero but the final state transition fails, the next invocation can resume from `in_progress` with expected plaintext count zero. An already-`retired` state is accepted only when the exact plaintext count is zero; subsequent planner runs also re-audit encrypted integrity, outbox emptiness, and both retired legacy secondaries.
 
 There is no command that moves `in_progress` or `retired` back to `available`.
 
