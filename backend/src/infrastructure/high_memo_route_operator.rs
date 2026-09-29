@@ -586,6 +586,28 @@ mod tests {
             }
         }
 
+        async fn current_plaintext_retirement_state(
+            &self,
+        ) -> AppResult<crate::application::high_memo_routing::HighMemoPlaintextRetirementState> {
+            Ok(
+                crate::application::high_memo_routing::HighMemoPlaintextRetirementState::Available,
+            )
+        }
+
+        async fn begin_plaintext_retirement(
+            &self,
+        ) -> AppResult<crate::application::high_memo_routing::HighMemoPlaintextRetirementState> {
+            Ok(
+                crate::application::high_memo_routing::HighMemoPlaintextRetirementState::InProgress,
+            )
+        }
+
+        async fn finish_plaintext_retirement(
+            &self,
+        ) -> AppResult<crate::application::high_memo_routing::HighMemoPlaintextRetirementState> {
+            Ok(crate::application::high_memo_routing::HighMemoPlaintextRetirementState::Retired)
+        }
+
         async fn release(self: Box<Self>) -> AppResult<()> {
             self.released.store(true, Ordering::Relaxed);
             Ok(())
