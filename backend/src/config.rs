@@ -25,6 +25,19 @@ const MAX_HIGH_SEARCH_SHADOW_TIMEOUT_MS: u64 = 60_000;
 // dollar sign, dot, forward slash, or backslash.
 const INVALID_MONGODB_DATABASE_BYTES: [u8; 7] = [0, 32, 34, 36, 46, 47, 92];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JwtSignatureMode {
+    /// Existing production contract. This remains the default when the
+    /// migration setting is absent so current deployments do not widen their
+    /// accepted algorithm set implicitly.
+    Rs256,
+    /// Explicit migration window in which the independent auth service may
+    /// rotate issuers from RSA to P-384 while memo_server accepts both.
+    Rs256Es384,
+    /// Target AUTH-1 contract. Legacy RSA access tokens are rejected.
+    Es384,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthConfig {
     Development,
@@ -32,6 +45,7 @@ pub enum AuthConfig {
         issuer: String,
         audience: String,
         jwks_uri: String,
+        signature_mode: JwtSignatureMode,
     },
 }
 
@@ -145,6 +159,8 @@ pub enum ConfigError {
     InvalidAuthMode(String),
     #[error("{0} is required when AUTH_MODE=jwt")]
     MissingJwtSetting(&'static str),
+    #[error("AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`")]
+    InvalidJwtSignatureMode(String),
 }
 
 impl AppConfig {
@@ -236,6 +252,7 @@ impl AppConfig {
                 issuer: required_jwt_setting(&vars, "AUTH_ISSUER")?,
                 audience: required_jwt_setting(&vars, "AUTH_AUDIENCE")?,
                 jwks_uri: required_jwt_setting(&vars, "AUTH_JWKS_URI")?,
+                signature_mode: parse_jwt_signature_mode(&vars)?,
             },
             _ => return Err(ConfigError::InvalidAuthMode(auth_mode_value)),
         };
@@ -253,6 +270,22 @@ impl AppConfig {
             port,
             auth,
         })
+    }
+}
+
+fn parse_jwt_signature_mode(
+    vars: &HashMap<String, String>,
+) -> Result<JwtSignatureMode, ConfigError> {
+    let mode = vars
+        .get("AUTH_JWT_SIGNATURE_MODE")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "rs256".to_string());
+
+    match mode.as_str() {
+        "rs256" => Ok(JwtSignatureMode::Rs256),
+        "rs256-es384" => Ok(JwtSignatureMode::Rs256Es384),
+        "es384" => Ok(JwtSignatureMode::Es384),
+        _ => Err(ConfigError::InvalidJwtSignatureMode(mode)),
     }
 }
 

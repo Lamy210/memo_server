@@ -1,6 +1,6 @@
 use memo_app_backend::config::{
     AppConfig, AuthConfig, AuthoritativeBackend, ConfigError, HighMemoCryptoConfig,
-    HighSearchConfig, HighSearchShadowConfig, SearchBackend,
+    HighSearchConfig, HighSearchShadowConfig, JwtSignatureMode, SearchBackend,
 };
 
 fn development_vars() -> Vec<(String, String)> {
@@ -749,6 +749,59 @@ fn accepts_complete_jwt_resource_server_configuration() {
             issuer: "https://auth.memo.example.com".to_string(),
             audience: "memo-api".to_string(),
             jwks_uri: "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+            signature_mode: JwtSignatureMode::Rs256,
         }
+    );
+}
+
+#[test]
+fn jwt_signature_mode_supports_explicit_migration_and_es384_target() {
+    for (value, expected) in [
+        ("rs256-es384", JwtSignatureMode::Rs256Es384),
+        ("es384", JwtSignatureMode::Es384),
+        ("RS256-ES384", JwtSignatureMode::Rs256Es384),
+    ] {
+        let config = AppConfig::from_vars([
+            ("AUTH_MODE".to_string(), "jwt".to_string()),
+            (
+                "AUTH_ISSUER".to_string(),
+                "https://auth.memo.example.com".to_string(),
+            ),
+            ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+            (
+                "AUTH_JWKS_URI".to_string(),
+                "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+            ),
+            ("AUTH_JWT_SIGNATURE_MODE".to_string(), value.to_string()),
+        ])
+        .expect("supported JWT signature migration modes should parse");
+
+        let AuthConfig::Jwt { signature_mode, .. } = config.auth else {
+            panic!("JWT auth configuration expected");
+        };
+        assert_eq!(signature_mode, expected);
+    }
+}
+
+#[test]
+fn jwt_signature_mode_rejects_algorithm_sets_outside_the_migration_contract() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "jwt".to_string()),
+        (
+            "AUTH_ISSUER".to_string(),
+            "https://auth.memo.example.com".to_string(),
+        ),
+        ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+        (
+            "AUTH_JWKS_URI".to_string(),
+            "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+        ),
+        ("AUTH_JWT_SIGNATURE_MODE".to_string(), "any".to_string()),
+    ])
+    .expect_err("unsupported JWT algorithm policies must fail closed");
+
+    assert_eq!(
+        error,
+        ConfigError::InvalidJwtSignatureMode("any".to_string())
     );
 }

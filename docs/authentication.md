@@ -49,18 +49,30 @@ memo_server does not store passwords or refresh tokens and does not call an auth
 
 Production uses `AUTH_MODE=jwt`.
 
-The dedicated authentication service issues short-lived RS256 JWT access tokens. Each token must have:
+The dedicated authentication service issues short-lived JWT access tokens. memo_server uses an explicit signature-policy setting so the RS256 -> ES384 migration does not widen accepted algorithms implicitly.
+
+`AUTH_JWT_SIGNATURE_MODE` supports exactly:
+
+| Value | Accepted JWT `alg` | Intended use |
+| --- | --- | --- |
+| omitted / `rs256` | `RS256` only | existing production default |
+| `rs256-es384` | `RS256` and `ES384` only | bounded issuer migration window |
+| `es384` | `ES384` only | target AUTH-1 resource-server policy |
+
+Each token must have:
 
 | Field | Requirement |
 | --- | --- |
-| JWT header `alg` | `RS256` |
-| JWT header `kid` | required; identifies a published JWKS key |
+| JWT header `alg` | allowed by `AUTH_JWT_SIGNATURE_MODE`; no other algorithm is accepted |
+| JWT header `kid` | required; identifies one published JWKS verification key |
 | `iss` | must equal `AUTH_ISSUER` |
 | `aud` | must include `AUTH_AUDIENCE` |
 | `sub` | UUID used as memo_server's user ID |
 | `iat` | required |
 | `exp` | required |
 | `nbf` | optional; validated when present |
+
+JWKS metadata is also fail-closed. When `alg`, `use`, or `key_ops` are published they must agree with verification. RS256 requires an RSA JWK; ES384 requires an EC JWK on P-384. A `kid` must not be reused to change one active key from RSA to EC during migration.
 
 memo_server intentionally ignores unrelated custom claims. Authentication-provider-specific fields must not be required for memo ownership.
 
@@ -78,6 +90,20 @@ memo_server reads public verification keys from `AUTH_JWKS_URI`.
 - Private signing keys remain only in the authentication service.
 
 This allows the authentication service and memo_server to be deployed and released independently.
+
+### RS256 -> ES384 migration
+
+Use an overlap rather than an algorithm flag day:
+
+1. deploy resource servers with ES384 support while leaving `AUTH_JWT_SIGNATURE_MODE=rs256`,
+2. publish a new P-384 JWKS key under a new `kid`,
+3. switch resource servers to `rs256-es384`,
+4. start issuing ES384 access tokens from the authentication service,
+5. wait at least the maximum RS256 access-token lifetime plus clock-skew/rollout margin while monitoring verification failures,
+6. switch every memo_server replica to `AUTH_JWT_SIGNATURE_MODE=es384`,
+7. retire the old RSA verification key from JWKS only after no valid RS256 tokens can remain.
+
+Do not move an issuer to ES384 before every resource-server replica that may receive its tokens is in the explicit dual-accept phase. Rollback during the overlap is performed by making the issuer issue RS256 again while resource servers remain dual; after ES384-only cutover, re-enabling RS256 acceptance is a deliberate security-policy rollback and should be separately reviewed.
 
 ## Deployment
 
