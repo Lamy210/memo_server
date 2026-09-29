@@ -27,8 +27,8 @@ use crate::{
 
 use super::ports::{
     HighEncryptedMemoAuthoritativeStore, HighEncryptedMemoIntegritySource,
-    LegacyMemoPlaintextRetirementInspector, MemoAuthoritativeStore, ProjectionIntent,
-    ProjectionTarget,
+    LegacyMemoPlaintextRetirementAdmin, LegacyMemoPlaintextRetirementInspector,
+    MemoAuthoritativeStore, ProjectionIntent, ProjectionTarget,
 };
 
 #[cfg(test)]
@@ -988,6 +988,17 @@ impl LegacyMemoPlaintextRetirementInspector for MongoDbAuthoritativeStore {
 }
 
 #[async_trait]
+impl LegacyMemoPlaintextRetirementAdmin for MongoDbAuthoritativeStore {
+    async fn delete_all_plaintext_memos_for_retirement(&self) -> AppResult<u64> {
+        self.memos
+            .delete_many(doc! {})
+            .await
+            .map(|result| result.deleted_count)
+            .map_err(|error| mongo_error("delete plaintext MongoDB memos for retirement", error))
+    }
+}
+
+#[async_trait]
 impl HighEncryptedMemoIntegritySource for MongoDbAuthoritativeStore {
     async fn count_encrypted_memos_for_integrity(&self) -> AppResult<u64> {
         self.encrypted_memos
@@ -1934,6 +1945,25 @@ mod tests {
         paged_ids.sort();
         expected_ids.sort();
         assert_eq!(paged_ids, expected_ids);
+
+        assert_eq!(
+            LegacyMemoPlaintextRetirementAdmin::delete_all_plaintext_memos_for_retirement(&store)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            LegacyMemoPlaintextRetirementInspector::count_plaintext_memos_for_retirement(&store)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            LegacyMemoPlaintextRetirementAdmin::delete_all_plaintext_memos_for_retirement(&store)
+                .await
+                .unwrap(),
+            0
+        );
 
         cleanup_client
             .database(TEST_DATABASE_NAME)
