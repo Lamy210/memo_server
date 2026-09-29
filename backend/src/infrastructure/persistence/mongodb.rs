@@ -1946,6 +1946,25 @@ mod tests {
         expected_ids.sort();
         assert_eq!(paged_ids, expected_ids);
 
+        assert_eq!(
+            LegacyMemoPlaintextRetirementAdmin::delete_all_plaintext_memos_for_retirement(&store)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            LegacyMemoPlaintextRetirementInspector::count_plaintext_memos_for_retirement(&store)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            LegacyMemoPlaintextRetirementAdmin::delete_all_plaintext_memos_for_retirement(&store)
+                .await
+                .unwrap(),
+            0
+        );
+
         cleanup_client
             .database(TEST_DATABASE_NAME)
             .drop()
