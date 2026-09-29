@@ -755,6 +755,29 @@ fn accepts_complete_jwt_resource_server_configuration() {
 }
 
 #[test]
+fn jwt_jwks_uri_requires_https_without_userinfo_or_fragment() {
+    for invalid in [
+        "http://auth.memo.example.com/.well-known/jwks.json",
+        "https://user:secret@auth.memo.example.com/.well-known/jwks.json",
+        "https://auth.memo.example.com/.well-known/jwks.json#keys",
+        "/.well-known/jwks.json",
+    ] {
+        let error = AppConfig::from_vars([
+            ("AUTH_MODE".to_string(), "jwt".to_string()),
+            (
+                "AUTH_ISSUER".to_string(),
+                "https://auth.memo.example.com".to_string(),
+            ),
+            ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+            ("AUTH_JWKS_URI".to_string(), invalid.to_string()),
+        ])
+        .expect_err("unsafe JWKS endpoints must fail closed");
+
+        assert_eq!(error, ConfigError::InvalidJwtJwksUri(invalid.to_string()));
+    }
+}
+
+#[test]
 fn jwt_signature_mode_supports_explicit_migration_and_es384_target() {
     for (value, expected) in [
         ("rs256-es384", JwtSignatureMode::Rs256Es384),
