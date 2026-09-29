@@ -26,8 +26,9 @@ use crate::{
 };
 
 use super::ports::{
-    HighEncryptedMemoAuthoritativeStore, HighEncryptedMemoIntegritySource, MemoAuthoritativeStore,
-    ProjectionIntent, ProjectionTarget,
+    HighEncryptedMemoAuthoritativeStore, HighEncryptedMemoIntegritySource,
+    LegacyMemoPlaintextRetirementInspector, MemoAuthoritativeStore, ProjectionIntent,
+    ProjectionTarget,
 };
 
 #[cfg(test)]
@@ -977,6 +978,16 @@ impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
 }
 
 #[async_trait]
+impl LegacyMemoPlaintextRetirementInspector for MongoDbAuthoritativeStore {
+    async fn count_plaintext_memos_for_retirement(&self) -> AppResult<u64> {
+        self.memos
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| mongo_error("count plaintext MongoDB memos for retirement", error))
+    }
+}
+
+#[async_trait]
 impl HighEncryptedMemoIntegritySource for MongoDbAuthoritativeStore {
     async fn count_encrypted_memos_for_integrity(&self) -> AppResult<u64> {
         self.encrypted_memos
@@ -1898,6 +1909,12 @@ mod tests {
         assert!(store.list_projection_intents().await.unwrap().is_empty());
 
         assert_eq!(store.count_source_memos().await.unwrap(), 2);
+        assert_eq!(
+            LegacyMemoPlaintextRetirementInspector::count_plaintext_memos_for_retirement(&store)
+                .await
+                .unwrap(),
+            2
+        );
         let first_source_page = store.page_source_memos(None, 1).await.unwrap();
         assert_eq!(first_source_page.len(), 1);
         let second_source_page = store
