@@ -12,6 +12,7 @@ use crate::{
 
 use super::{
     high_memo_aws_runtime::HighMemoStagingRuntimeHandle,
+    high_search_aws_runtime::HighSearchRuntimeHandle,
     high_search_maintenance_mongodb::{
         HighSearchMaintenanceStatus, MongoHighSearchMaintenanceGuard,
         MongoHighSearchMaintenanceRecovery,
@@ -148,6 +149,12 @@ pub async fn verify_high_memo_retirement_readiness(
         return Err(AppError::ServiceUnavailable(
             "MEMO-HIGH-1 retirement readiness could not obtain the configured cryptography runtime"
                 .into(),
+        ));
+    }
+    let search_runtime = HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri).await?;
+    if search_runtime.reader().is_none() {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness could not obtain the protected search runtime".into(),
         ));
     }
 
