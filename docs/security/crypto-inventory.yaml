@@ -182,6 +182,9 @@ assets:
             required_exact_generations: true
             kms_key_ring_preflight: true
             protected_search_runtime_preflight: true
+            encrypted_authoritative_full_decrypt_verification: true
+            encrypted_authoritative_bounded_pagination: required
+            encrypted_authoritative_count_stability: exact_before_after
             projection_outbox_empty: true
             legacy_plaintext_cache_keys_zero: true
             legacy_plaintext_search_documents_zero: true
