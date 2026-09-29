@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 
+use reqwest::Url;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -159,6 +160,8 @@ pub enum ConfigError {
     InvalidAuthMode(String),
     #[error("{0} is required when AUTH_MODE=jwt")]
     MissingJwtSetting(&'static str),
+    #[error("AUTH_JWKS_URI must be an absolute HTTPS URL without userinfo or fragment, got `{0}`")]
+    InvalidJwtJwksUri(String),
     #[error("AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`")]
     InvalidJwtSignatureMode(String),
 }
@@ -248,12 +251,17 @@ impl AppConfig {
 
         let auth = match auth_mode_value.as_str() {
             "development" => AuthConfig::Development,
-            "jwt" => AuthConfig::Jwt {
-                issuer: required_jwt_setting(&vars, "AUTH_ISSUER")?,
-                audience: required_jwt_setting(&vars, "AUTH_AUDIENCE")?,
-                jwks_uri: required_jwt_setting(&vars, "AUTH_JWKS_URI")?,
-                signature_mode: parse_jwt_signature_mode(&vars)?,
-            },
+            "jwt" => {
+                let jwks_uri = required_jwt_setting(&vars, "AUTH_JWKS_URI")?;
+                validate_jwt_jwks_uri(&jwks_uri)?;
+
+                AuthConfig::Jwt {
+                    issuer: required_jwt_setting(&vars, "AUTH_ISSUER")?,
+                    audience: required_jwt_setting(&vars, "AUTH_AUDIENCE")?,
+                    jwks_uri,
+                    signature_mode: parse_jwt_signature_mode(&vars)?,
+                }
+            }
             _ => return Err(ConfigError::InvalidAuthMode(auth_mode_value)),
         };
 
@@ -270,6 +278,21 @@ impl AppConfig {
             port,
             auth,
         })
+    }
+}
+
+fn validate_jwt_jwks_uri(value: &str) -> Result<(), ConfigError> {
+    let url = Url::parse(value).map_err(|_| ConfigError::InvalidJwtJwksUri(value.to_string()))?;
+    let valid = url.scheme() == "https"
+        && url.has_host()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.fragment().is_none();
+
+    if valid {
+        Ok(())
+    } else {
+        Err(ConfigError::InvalidJwtJwksUri(value.to_string()))
     }
 }
 
