@@ -218,9 +218,7 @@ impl RedisCache {
     }
 
     fn parse_high_cache_key(key: &str) -> Option<(uuid::Uuid, uuid::Uuid)> {
-        let suffix = key
-            .strip_prefix(HIGH_CACHE_NAMESPACE)?
-            .strip_prefix(':')?;
+        let suffix = key.strip_prefix(HIGH_CACHE_NAMESPACE)?.strip_prefix(':')?;
         let mut parts = suffix.split(':');
         let owner_partition = uuid::Uuid::parse_str(parts.next()?).ok()?;
         let memo_id = uuid::Uuid::parse_str(parts.next()?).ok()?;
@@ -265,7 +263,9 @@ impl RedisCache {
                 .into_iter()
                 .filter(|key| Self::parse_high_cache_key(key).is_some())
                 .collect::<Vec<_>>();
-            stats.encrypted_keys = stats.encrypted_keys.saturating_add(encrypted_keys.len() as u64);
+            stats.encrypted_keys = stats
+                .encrypted_keys
+                .saturating_add(encrypted_keys.len() as u64);
 
             if matches!(mode, HighMemoCacheSweepMode::Purge) && !encrypted_keys.is_empty() {
                 let deleted: u64 = redis::cmd("UNLINK")
@@ -561,7 +561,11 @@ mod tests {
             "memo:high:v1:not-a-uuid:not-a-uuid".to_string(),
             "memo:high:v2:other".to_string(),
         ] {
-            assert_eq!(RedisCache::parse_high_cache_key(&invalid), None, "{invalid}");
+            assert_eq!(
+                RedisCache::parse_high_cache_key(&invalid),
+                None,
+                "{invalid}"
+            );
         }
     }
 
