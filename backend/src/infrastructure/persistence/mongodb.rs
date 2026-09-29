@@ -978,7 +978,7 @@ impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
 }
 
 #[async_trait]
-impl LegacyMemoPlaintextRetirementAdmin for MongoDbAuthoritativeStore {
+impl LegacyMemoPlaintextRetirementInspector for MongoDbAuthoritativeStore {
     async fn count_plaintext_memos_for_retirement(&self) -> AppResult<u64> {
         self.memos
             .count_documents(doc! {})
