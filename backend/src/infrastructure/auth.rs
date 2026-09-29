@@ -11,7 +11,7 @@ use jsonwebtoken::{
     jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyOperations, PublicKeyUse},
     Algorithm, DecodingKey, Validation,
 };
-use reqwest::Client;
+use reqwest::{redirect::Policy, Client};
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
@@ -45,7 +45,7 @@ enum AuthBackend {
 }
 
 impl AuthService {
-    pub fn new(config: AuthConfig) -> Self {
+    pub fn new(config: AuthConfig) -> AppResult<Self> {
         let backend = match config {
             AuthConfig::Development => AuthBackend::Development,
             AuthConfig::Jwt {
@@ -58,10 +58,10 @@ impl AuthService {
                 audience,
                 jwks_uri,
                 signature_mode,
-            ))),
+            )?)),
         };
 
-        Self { backend }
+        Ok(Self { backend })
     }
 
     pub async fn authenticate(
@@ -118,16 +118,27 @@ impl JwtVerifier {
         audience: String,
         jwks_uri: String,
         signature_mode: JwtSignatureMode,
-    ) -> Self {
-        Self {
-            client: Client::new(),
+    ) -> AppResult<Self> {
+        let client = Client::builder()
+            .https_only(true)
+            .redirect(Policy::none())
+            .build()
+            .map_err(|error| {
+                log::error!("Failed to build authentication JWKS HTTP client: {error}");
+                AppError::ServiceUnavailable(
+                    "Authentication key client could not be initialized".into(),
+                )
+            })?;
+
+        Ok(Self {
+            client,
             issuer,
             audience,
             jwks_uri,
             signature_mode,
             jwks: RwLock::new(None),
             refresh_state: Mutex::new(RefreshState::default()),
-        }
+        })
     }
 
     async fn verify(&self, token: &str) -> AppResult<AuthenticatedIdentity> {
@@ -283,12 +294,17 @@ impl JwtVerifier {
             .map_err(|error| {
                 log::warn!("Failed to fetch authentication JWKS: {error}");
                 AppError::ServiceUnavailable("Authentication key service is unavailable".into())
-            })?
-            .error_for_status()
-            .map_err(|error| {
-                log::warn!("Authentication JWKS endpoint returned an error: {error}");
-                AppError::ServiceUnavailable("Authentication key service is unavailable".into())
             })?;
+
+        if !response.status().is_success() {
+            log::warn!(
+                "Authentication JWKS endpoint returned non-success status {}",
+                response.status()
+            );
+            return Err(AppError::ServiceUnavailable(
+                "Authentication key service is unavailable".into(),
+            ));
+        }
 
         if response
             .content_length()
@@ -504,7 +520,7 @@ mod tests {
     const INVALID_SUBJECT_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJub3QtYS11dWlkIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLm1lbW8udGVzdCIsImF1ZCI6Im1lbW8tYXBpIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjQxMDI0NDQ4MDAsIm5iZiI6MTcwMDAwMDAwMH0.i9Zp4kqvf4A90JiUoSSm3SqJ6TG0jfAua2zGivdvHyUOzOjoCRDO3uqQXHJmQnlxYBfGbghWxykFdm10gZw-bUFLQtPqSFRqwNw4vxwQUCmhsbiZiKpMkO80LVz2GiXn-_hm1WPUcBr5qJk--wGwO58zRHoXk-AF1j0tH4QvZ-1tCcua8bmbR8FdxcCPcdpfpYVcIUnunQvcnRKyHKyeENIrPF8yre7ArhziQcqyZtDjJGataBodvdvNek6Le27I9sRngopTeRzCU687L_awKDvTD4bEYpMilzh2pItJ4WpJizUrQbtF4PXoXAZqbdVabOXkikoZkolx6DEVy0x4uw";
 
     fn development_service() -> AuthService {
-        AuthService::new(AuthConfig::Development)
+        AuthService::new(AuthConfig::Development).expect("development auth must initialize")
     }
 
     fn verifier_with_mode(signature_mode: JwtSignatureMode) -> JwtVerifier {
@@ -514,6 +530,7 @@ mod tests {
             "https://unused.test/.well-known/jwks.json".to_string(),
             signature_mode,
         )
+        .expect("test JWT verifier must initialize")
     }
 
     fn verifier() -> JwtVerifier {
