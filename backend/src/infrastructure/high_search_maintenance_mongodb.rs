@@ -16,6 +16,7 @@ use crate::{
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
         high_memo_routing::{
             HighMemoDataRoute, HighMemoDataRouteReader, HighMemoDataRouteSnapshot,
+            HighMemoPlaintextRetirementState,
         },
         high_search_routing::{
             HighSearchQueryRoute, HighSearchQueryRouteReader, HighSearchQueryRouteSnapshot,
@@ -39,6 +40,7 @@ const QUERY_ROUTE_FIELD: &str = "query_route";
 const QUERY_ROUTE_GENERATION_FIELD: &str = "query_route_generation";
 const MEMO_ROUTE_FIELD: &str = "memo_route";
 const MEMO_ROUTE_GENERATION_FIELD: &str = "memo_route_generation";
+const MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD: &str = "memo_plaintext_retirement_state";
 const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
@@ -52,6 +54,9 @@ struct InvalidQueryRouteState;
 
 #[derive(Debug)]
 struct InvalidMemoRouteState;
+
+#[derive(Debug)]
+struct InvalidMemoPlaintextRetirementState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighSearchMaintenanceMode {
@@ -77,6 +82,7 @@ pub struct HighSearchMaintenanceStatus {
     query_route_generation: i64,
     memo_route: HighMemoDataRoute,
     memo_route_generation: i64,
+    memo_plaintext_retirement_state: HighMemoPlaintextRetirementState,
     memo_route_changed_at_ms: Option<i64>,
     active_writer_leases: u64,
     active_query_leases: u64,
@@ -110,6 +116,10 @@ impl HighSearchMaintenanceStatus {
 
     pub fn memo_route_generation(&self) -> i64 {
         self.memo_route_generation
+    }
+
+    pub fn memo_plaintext_retirement_state(&self) -> HighMemoPlaintextRetirementState {
+        self.memo_plaintext_retirement_state
     }
 
     pub fn memo_route_changed_at_ms(&self) -> Option<i64> {
@@ -244,6 +254,11 @@ impl MongoHighSearchMaintenanceRecovery {
 
         let route_snapshot = app_query_route_snapshot(&state)?;
         let memo_route_snapshot = app_memo_route_snapshot(&state)?;
+        let memo_plaintext_retirement_state = app_plaintext_retirement_state(&state)?;
+        validate_app_retirement_route_consistency(
+            memo_route_snapshot.route,
+            memo_plaintext_retirement_state,
+        )?;
         let memo_route_changed_at_ms = match state.get("memo_route_changed_at") {
             None | Some(Bson::Null) => None,
             Some(Bson::DateTime(value)) => Some(value.timestamp_millis()),
@@ -303,6 +318,7 @@ impl MongoHighSearchMaintenanceRecovery {
             query_route_generation: route_snapshot.generation,
             memo_route: memo_route_snapshot.route,
             memo_route_generation: memo_route_snapshot.generation,
+            memo_plaintext_retirement_state,
             memo_route_changed_at_ms,
             active_writer_leases,
             active_query_leases,
@@ -314,9 +330,10 @@ impl MongoHighSearchMaintenanceRecovery {
     /// one exact operator-observed snapshot.
     ///
     /// The transaction matches mode, activity epoch, search route/generation,
-    /// memo route/generation, and maintenance holder token (when present).
-    /// Any intervening activity admission, route change, or barrier ownership
-    /// change aborts recovery instead of clearing state from a newer generation.
+    /// memo route/generation, plaintext-retirement state, and maintenance
+    /// holder token (when present). Any intervening activity admission, route
+    /// change, retirement transition, or barrier ownership change aborts
+    /// recovery instead of clearing state from a newer generation.
     pub async fn recover_stale_state(
         &self,
         expected: &HighSearchMaintenanceStatus,
@@ -362,6 +379,10 @@ impl MongoHighSearchMaintenanceRecovery {
                         "query_route_generation": context.expected.query_route_generation,
                         "memo_route": context.expected.memo_route.as_persisted_str(),
                         "memo_route_generation": context.expected.memo_route_generation,
+                        "memo_plaintext_retirement_state": context
+                            .expected
+                            .memo_plaintext_retirement_state
+                            .as_persisted_str(),
                     };
                     match context.expected.holder_token.as_deref() {
                         Some(holder_token) => {
@@ -447,6 +468,8 @@ impl MongoHighSearchMaintenanceGuard {
                         "query_route_generation": 0_i64,
                         "memo_route": HighMemoDataRoute::LegacyPlaintext.as_persisted_str(),
                         "memo_route_generation": 0_i64,
+                        "memo_plaintext_retirement_state":
+                            HighMemoPlaintextRetirementState::Available.as_persisted_str(),
                     }
                 },
             )
@@ -505,6 +528,23 @@ impl MongoHighSearchMaintenanceGuard {
             .map_err(|error| {
                 maintenance_db_error("backfill HIGH memo data route generation", error)
             })?;
+        self.state
+            .update_one(
+                doc! {
+                    "_id": STATE_ID,
+                    "memo_plaintext_retirement_state": { "$exists": false }
+                },
+                doc! {
+                    "$set": {
+                        "memo_plaintext_retirement_state":
+                            HighMemoPlaintextRetirementState::Available.as_persisted_str()
+                    }
+                },
+            )
+            .await
+            .map_err(|error| {
+                maintenance_db_error("backfill HIGH memo plaintext retirement state", error)
+            })?;
 
         let state = self
             .state
@@ -517,7 +557,9 @@ impl MongoHighSearchMaintenanceGuard {
                 )
             })?;
         app_query_route_snapshot(&state)?;
-        app_memo_route_snapshot(&state)?;
+        let memo_route = app_memo_route_snapshot(&state)?;
+        let retirement = app_plaintext_retirement_state(&state)?;
+        validate_app_retirement_route_consistency(memo_route.route, retirement)?;
         Ok(())
     }
 
@@ -557,6 +599,11 @@ impl MongoHighSearchMaintenanceGuard {
                         .ok_or_else(|| MongoError::custom(MaintenanceActive))?;
                     let query_route_snapshot = mongo_query_route_snapshot(&gate)?;
                     let memo_route_snapshot = mongo_memo_route_snapshot(&gate)?;
+                    let retirement_state = mongo_plaintext_retirement_state(&gate)?;
+                    validate_mongo_retirement_route_consistency(
+                        memo_route_snapshot.route,
+                        retirement_state,
+                    )?;
 
                     context
                         .leases
@@ -588,6 +635,15 @@ impl MongoHighSearchMaintenanceGuard {
             Err(error) if error.get_custom::<InvalidMemoRouteState>().is_some() => Err(
                 AppError::ServiceUnavailable("HIGH memo data route state is invalid".into()),
             ),
+            Err(error)
+                if error
+                    .get_custom::<InvalidMemoPlaintextRetirementState>()
+                    .is_some() =>
+            {
+                Err(AppError::ServiceUnavailable(
+                    "HIGH memo plaintext retirement state is invalid".into(),
+                ))
+            }
             Err(error) => Err(maintenance_db_error(
                 "acquire HIGH search maintenance activity lease",
                 error,
@@ -864,24 +920,43 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
 
         if target == expected.route {
             let current = self.current_memo_route().await?;
-            if current == expected {
-                return Ok(current);
+            if current != expected {
+                return Err(AppError::Conflict(
+                    "HIGH memo data route changed before idempotent cutover validation".into(),
+                ));
             }
-            return Err(AppError::Conflict(
-                "HIGH memo data route changed before idempotent cutover validation".into(),
-            ));
+            if target == HighMemoDataRoute::LegacyPlaintext
+                && !self
+                    .current_plaintext_retirement_state()
+                    .await?
+                    .legacy_rollback_allowed()
+            {
+                return Err(AppError::Conflict(
+                    "MEMO-HIGH-1 plaintext retirement has started; legacy rollback is permanently fenced"
+                        .into(),
+                ));
+            }
+            return Ok(current);
+        }
+
+        let mut filter = doc! {
+            "_id": STATE_ID,
+            "mode": MODE_MAINTENANCE,
+            "holder_token": self.holder_token.clone(),
+            "memo_route": expected.route.as_persisted_str(),
+            "memo_route_generation": expected.generation,
+        };
+        if target == HighMemoDataRoute::LegacyPlaintext {
+            filter.insert(
+                MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD,
+                HighMemoPlaintextRetirementState::Available.as_persisted_str(),
+            );
         }
 
         let update = self
             .state
             .update_one(
-                doc! {
-                    "_id": STATE_ID,
-                    "mode": MODE_MAINTENANCE,
-                    "holder_token": self.holder_token.clone(),
-                    "memo_route": expected.route.as_persisted_str(),
-                    "memo_route_generation": expected.generation,
-                },
+                filter,
                 doc! {
                     "$set": { "memo_route": target.as_persisted_str() },
                     "$inc": { "memo_route_generation": 1_i64 },
@@ -893,11 +968,122 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
 
         if update.matched_count != 1 {
             return Err(AppError::Conflict(
-                "HIGH memo data route changed before cutover".into(),
+                "HIGH memo data route changed or plaintext retirement forbids legacy rollback"
+                    .into(),
             ));
         }
 
         self.current_memo_route().await
+    }
+
+    async fn current_plaintext_retirement_state(
+        &self,
+    ) -> AppResult<HighMemoPlaintextRetirementState> {
+        let state = self
+            .state
+            .find_one(doc! {
+                "_id": STATE_ID,
+                "mode": MODE_MAINTENANCE,
+                "holder_token": self.holder_token.clone(),
+            })
+            .await
+            .map_err(|error| {
+                maintenance_db_error("read HIGH memo plaintext retirement state", error)
+            })?
+            .ok_or_else(|| {
+                AppError::Conflict("HIGH maintenance barrier ownership was lost".into())
+            })?;
+        let retirement = app_plaintext_retirement_state(&state)?;
+        let memo_route = app_memo_route_snapshot(&state)?;
+        validate_app_retirement_route_consistency(memo_route.route, retirement)?;
+        Ok(retirement)
+    }
+
+    async fn begin_plaintext_retirement(&self) -> AppResult<HighMemoPlaintextRetirementState> {
+        let current = self.current_plaintext_retirement_state().await?;
+        match current {
+            HighMemoPlaintextRetirementState::InProgress => return Ok(current),
+            HighMemoPlaintextRetirementState::Retired => {
+                return Err(AppError::Conflict(
+                    "MEMO-HIGH-1 plaintext retirement is already complete".into(),
+                ))
+            }
+            HighMemoPlaintextRetirementState::Available => {}
+        }
+
+        let update = self
+            .state
+            .update_one(
+                doc! {
+                    "_id": STATE_ID,
+                    "mode": MODE_MAINTENANCE,
+                    "holder_token": self.holder_token.clone(),
+                    "memo_route": HighMemoDataRoute::Encrypted.as_persisted_str(),
+                    "memo_plaintext_retirement_state":
+                        HighMemoPlaintextRetirementState::Available.as_persisted_str(),
+                },
+                doc! {
+                    "$set": {
+                        "memo_plaintext_retirement_state":
+                            HighMemoPlaintextRetirementState::InProgress.as_persisted_str()
+                    }
+                },
+            )
+            .await
+            .map_err(|error| maintenance_db_error("begin HIGH memo plaintext retirement", error))?;
+
+        if update.matched_count != 1 {
+            return Err(AppError::Conflict(
+                "MEMO-HIGH-1 plaintext retirement requires the encrypted route and available retirement state"
+                    .into(),
+            ));
+        }
+
+        self.current_plaintext_retirement_state().await
+    }
+
+    async fn finish_plaintext_retirement(&self) -> AppResult<HighMemoPlaintextRetirementState> {
+        let current = self.current_plaintext_retirement_state().await?;
+        match current {
+            HighMemoPlaintextRetirementState::Retired => return Ok(current),
+            HighMemoPlaintextRetirementState::Available => {
+                return Err(AppError::Conflict(
+                    "MEMO-HIGH-1 plaintext retirement has not started".into(),
+                ))
+            }
+            HighMemoPlaintextRetirementState::InProgress => {}
+        }
+
+        let update = self
+            .state
+            .update_one(
+                doc! {
+                    "_id": STATE_ID,
+                    "mode": MODE_MAINTENANCE,
+                    "holder_token": self.holder_token.clone(),
+                    "memo_route": HighMemoDataRoute::Encrypted.as_persisted_str(),
+                    "memo_plaintext_retirement_state":
+                        HighMemoPlaintextRetirementState::InProgress.as_persisted_str(),
+                },
+                doc! {
+                    "$set": {
+                        "memo_plaintext_retirement_state":
+                            HighMemoPlaintextRetirementState::Retired.as_persisted_str()
+                    }
+                },
+            )
+            .await
+            .map_err(|error| {
+                maintenance_db_error("finish HIGH memo plaintext retirement", error)
+            })?;
+
+        if update.matched_count != 1 {
+            return Err(AppError::Conflict(
+                "MEMO-HIGH-1 plaintext retirement state changed before completion".into(),
+            ));
+        }
+
+        self.current_plaintext_retirement_state().await
     }
 
     async fn release(self: Box<Self>) -> AppResult<()> {
@@ -1068,6 +1254,50 @@ fn app_memo_route_snapshot(state: &Document) -> AppResult<HighMemoDataRouteSnaps
     Ok(HighMemoDataRouteSnapshot { route, generation })
 }
 
+fn mongo_plaintext_retirement_state(
+    state: &Document,
+) -> Result<HighMemoPlaintextRetirementState, MongoError> {
+    state
+        .get_str(MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD)
+        .ok()
+        .and_then(HighMemoPlaintextRetirementState::from_persisted_str)
+        .ok_or_else(|| MongoError::custom(InvalidMemoPlaintextRetirementState))
+}
+
+fn app_plaintext_retirement_state(state: &Document) -> AppResult<HighMemoPlaintextRetirementState> {
+    state
+        .get_str(MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD)
+        .ok()
+        .and_then(HighMemoPlaintextRetirementState::from_persisted_str)
+        .ok_or_else(|| {
+            AppError::ServiceUnavailable("HIGH memo plaintext retirement state is invalid".into())
+        })
+}
+
+fn validate_mongo_retirement_route_consistency(
+    memo_route: HighMemoDataRoute,
+    retirement: HighMemoPlaintextRetirementState,
+) -> Result<(), MongoError> {
+    if retirement.legacy_rollback_allowed() || memo_route == HighMemoDataRoute::Encrypted {
+        Ok(())
+    } else {
+        Err(MongoError::custom(InvalidMemoPlaintextRetirementState))
+    }
+}
+
+fn validate_app_retirement_route_consistency(
+    memo_route: HighMemoDataRoute,
+    retirement: HighMemoPlaintextRetirementState,
+) -> AppResult<()> {
+    if retirement.legacy_rollback_allowed() || memo_route == HighMemoDataRoute::Encrypted {
+        Ok(())
+    } else {
+        Err(AppError::ServiceUnavailable(
+            "HIGH memo plaintext retirement state requires the encrypted memo route".into(),
+        ))
+    }
+}
+
 fn maintenance_db_error(operation: &str, error: MongoError) -> AppError {
     AppError::DatabaseError(format!("{operation} failed: {error}"))
 }
@@ -1213,6 +1443,10 @@ mod tests {
             .unwrap();
         assert_eq!(route_status.memo_route(), HighMemoDataRoute::Encrypted);
         assert_eq!(route_status.memo_route_generation(), 1);
+        assert_eq!(
+            route_status.memo_plaintext_retirement_state(),
+            HighMemoPlaintextRetirementState::Available
+        );
         assert!(route_status.memo_route_changed_at_ms().is_some());
         assert_eq!(
             maintenance
@@ -1221,6 +1455,26 @@ mod tests {
                 .unwrap(),
             encrypted_memo_route
         );
+        assert_eq!(
+            maintenance.begin_plaintext_retirement().await.unwrap(),
+            HighMemoPlaintextRetirementState::InProgress
+        );
+        assert!(matches!(
+            maintenance
+                .switch_memo_route(encrypted_memo_route, HighMemoDataRoute::LegacyPlaintext)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(
+            maintenance.finish_plaintext_retirement().await.unwrap(),
+            HighMemoPlaintextRetirementState::Retired
+        );
+        assert!(matches!(
+            maintenance
+                .switch_memo_route(encrypted_memo_route, HighMemoDataRoute::LegacyPlaintext)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
         assert!(matches!(
             maintenance
                 .switch_memo_route(legacy_memo_route, HighMemoDataRoute::LegacyPlaintext)
@@ -1298,6 +1552,10 @@ mod tests {
             HighMemoDataRoute::LegacyPlaintext
         );
         assert_eq!(open_snapshot.memo_route_generation(), 0);
+        assert_eq!(
+            open_snapshot.memo_plaintext_retirement_state(),
+            HighMemoPlaintextRetirementState::Available
+        );
         assert_eq!(open_snapshot.active_writer_leases(), 1);
         assert_eq!(open_snapshot.active_query_leases(), 1);
         assert_eq!(open_snapshot.active_memo_access_leases(), 1);
@@ -1337,6 +1595,24 @@ mod tests {
         assert_eq!(after_stale_memo_route.active_query_leases(), 1);
         assert_eq!(after_stale_memo_route.active_memo_access_leases(), 1);
 
+        let mut stale_retirement_snapshot = open_snapshot.clone();
+        stale_retirement_snapshot.memo_plaintext_retirement_state =
+            HighMemoPlaintextRetirementState::InProgress;
+        assert!(matches!(
+            recovery
+                .recover_stale_state(&stale_retirement_snapshot)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+        let after_stale_retirement = recovery.inspect().await.unwrap();
+        assert_eq!(
+            after_stale_retirement.memo_plaintext_retirement_state(),
+            HighMemoPlaintextRetirementState::Available
+        );
+        assert_eq!(after_stale_retirement.active_writer_leases(), 1);
+        assert_eq!(after_stale_retirement.active_query_leases(), 1);
+        assert_eq!(after_stale_retirement.active_memo_access_leases(), 1);
+
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(recovered.query_route(), HighSearchQueryRoute::Legacy);
@@ -1346,6 +1622,10 @@ mod tests {
         assert_eq!(recovered.active_memo_access_leases(), 0);
         assert_eq!(recovered.memo_route(), HighMemoDataRoute::LegacyPlaintext);
         assert_eq!(recovered.memo_route_generation(), 0);
+        assert_eq!(
+            recovered.memo_plaintext_retirement_state(),
+            HighMemoPlaintextRetirementState::Available
+        );
         assert_eq!(recovered.writer_epoch(), open_snapshot.writer_epoch() + 1);
 
         // Simulate cancellation while maintenance owns the barrier. The task

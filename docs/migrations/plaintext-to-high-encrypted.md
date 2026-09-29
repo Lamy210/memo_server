@@ -144,6 +144,8 @@ This cutover still does **not** delete the plaintext authoritative MongoDB colle
 
 Route cutover and plaintext retirement are deliberately separate. A successful encrypted cutover starts a soak period; it does not authorize deletion of the plaintext `memos` collection.
 
+The shared MongoDB maintenance singleton now also carries `memo_plaintext_retirement_state` with the monotonic lifecycle `available -> in_progress -> retired`. Only a live maintenance permit can advance that state. The moment retirement reaches `in_progress`, every future attempt to switch the memo route back to `legacy_plaintext` is rejected at the MongoDB CAS boundary. This is intentional: once destructive plaintext deletion can begin, rollback to a partially stale/deleted plaintext source is no longer safe.
+
 Every actual memo-route transition now records `memo_route_changed_at` using MongoDB server time in the same atomic update that advances `memo_route_generation`. Soak verification reads `hello.localTime` from MongoDB as well, keeping both timestamps in the same clock domain. An older encrypted route with no recorded transition time is not considered retirement-ready.
 
 Non-freezing status inspection:
@@ -169,18 +171,19 @@ cargo run --locked --features aws-kms-memo,aws-kms-search --bin verify_high_memo
 
 The verifier is non-destructive. Under the maintenance barrier it requires:
 
-1. exact `encrypted` memo route generation,
-2. exact `protected` search route generation,
-3. a recorded memo-route transition timestamp,
-4. the configured minimum soak duration,
-5. AWS KMS historical/current memo key-ring preflight,
-6. protected search runtime preflight,
-7. a bounded full traversal of `memos_encrypted_v1` where every envelope validates structurally, decrypts successfully, and matches its envelope memo/owner/version identity,
-8. exact encrypted traversal count equality before/after the scan,
-9. exact projection outbox count of zero,
-10. zero exact legacy plaintext Redis memo keys,
-11. exact legacy Manticore `memos` document count of zero,
-12. final route/maintenance revalidation before release.
+1. plaintext retirement state exactly `available`,
+2. exact `encrypted` memo route generation,
+3. exact `protected` search route generation,
+4. a recorded memo-route transition timestamp,
+5. the configured minimum soak duration,
+6. AWS KMS historical/current memo key-ring preflight,
+7. protected search runtime preflight,
+8. a bounded full traversal of `memos_encrypted_v1` where every envelope validates structurally, decrypts successfully, and matches its envelope memo/owner/version identity,
+9. exact encrypted traversal count equality before/after the scan,
+10. exact projection outbox count of zero,
+11. zero exact legacy plaintext Redis memo keys,
+12. exact legacy Manticore `memos` document count of zero,
+13. final route/maintenance revalidation before release.
 
 The backup and restore-rehearsal flags are operator attestations. This verifier does not inspect backup media or prove restoration integrity itself.
 

@@ -15,7 +15,7 @@ Before any `--apply` recovery:
 1. Stop every memo_server application replica and any operator job that can acquire memo mutation, protected-query, or memo-access leases.
 2. Verify those processes are no longer running.
 3. Keep MongoDB available as the authoritative recovery source.
-4. Run status inspection and record the reported mode, writer epoch (the legacy-named shared activity generation), search query route/generation, memo data route/generation, active writer/query/memo-access lease counts, and holder token.
+4. Run status inspection and record the reported mode, writer epoch (the legacy-named shared activity generation), search query route/generation, memo data route/generation, plaintext retirement state, active writer/query/memo-access lease counts, and holder token.
 5. Do not reuse an older snapshot after any application process has restarted.
 
 Recovery never relies on lease age or a timeout. If the operator cannot establish that all writers, protected-query workers, and memo data-path users are stopped, leave the state fail-closed.
@@ -41,6 +41,7 @@ current.query_route=legacy
 current.query_route_generation=0
 current.memo_route=legacy_plaintext
 current.memo_route_generation=0
+current.memo_plaintext_retirement_state=available
 current.memo_route_changed_at_ms=unknown
 current.active_writer_leases=0
 current.active_query_leases=0
@@ -52,7 +53,7 @@ The holder token is a compare-and-swap recovery value, not an authentication cre
 
 ## Recover an abandoned maintenance barrier
 
-If status reports `mode=maintenance`, recovery requires the exact writer epoch, search query route/generation, memo data route/generation, and holder token observed immediately before recovery:
+If status reports `mode=maintenance`, recovery requires the exact writer epoch, search query route/generation, memo data route/generation, plaintext retirement state, and holder token observed immediately before recovery:
 
 ```bash
 MONGODB_URI='mongodb://...' \
@@ -65,10 +66,12 @@ cargo run --locked --bin recover_high_search_maintenance -- \
   --expected-query-route-generation 0 \
   --expected-memo-route legacy_plaintext \
   --expected-memo-route-generation 0 \
+  --expected-plaintext-retirement-state available \
   --expected-query-route legacy \
   --expected-query-route-generation 0 \
   --expected-memo-route legacy_plaintext \
   --expected-memo-route-generation 0 \
+  --expected-plaintext-retirement-state available \
   --expected-holder-token '<observed-holder-token>'
 ```
 
@@ -76,7 +79,7 @@ The command transactionally clears stale writer, protected-query, and memo-acces
 
 ## Recover abandoned activity leases while the gate is open
 
-If status reports `mode=open` with any non-zero writer, protected-query, or memo-access lease count, still supply both exact observed route snapshots but omit the holder token:
+If status reports `mode=open` with any non-zero writer, protected-query, or memo-access lease count, still supply both exact observed route snapshots and the exact plaintext retirement state, but omit the holder token:
 
 ```bash
 MONGODB_URI='mongodb://...' \
@@ -91,9 +94,9 @@ Recovery is rejected when the gate is already open and writer, protected-query, 
 
 ## Compare-and-swap behavior
 
-Recovery is executed in a majority-write MongoDB transaction. The transaction is accepted only when the current maintenance mode, writer epoch, search query route/generation, memo data route/generation, and holder token still match the inspected snapshot. Any intervening writer/query/memo-access acquisition, search-route change, memo-route change, or maintenance ownership change causes a conflict and leaves the newer state untouched.
+Recovery is executed in a majority-write MongoDB transaction. The transaction is accepted only when the current maintenance mode, writer epoch, search query route/generation, memo data route/generation, plaintext retirement state, and holder token still match the inspected snapshot. Any intervening writer/query/memo-access acquisition, search-route change, memo-route change, plaintext-retirement transition, or maintenance ownership change causes a conflict and leaves the newer state untouched.
 
-After a conflict, run status inspection again. Never substitute a newly observed token, epoch, search route/generation, or memo route/generation without re-establishing the safety prerequisites.
+After a conflict, run status inspection again. Never substitute a newly observed token, epoch, search route/generation, memo route/generation, or plaintext retirement state without re-establishing the safety prerequisites.
 
 ## Restart
 

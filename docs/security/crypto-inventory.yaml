@@ -171,9 +171,21 @@ assets:
             update: atomic_with_route_generation_change
             unknown_timestamp_retirement_behavior: fail_closed
           plaintext_authoritative_retirement:
-            state: readiness_verifier_staged
+            state: readiness_verifier_and_irreversible_state_fence_staged
             verifier_command: verify_high_memo_retirement
             destructive_delete: not_implemented
+            persisted_state:
+              field: memo_plaintext_retirement_state
+              values: [available, in_progress, retired]
+              default_and_backfill: available
+              transition: available_to_in_progress_to_retired_only
+              transition_scope: live_maintenance_permit_only
+              legacy_route_allowed_states: [available]
+              in_progress_legacy_rollback: forbidden
+              retired_legacy_rollback: forbidden
+              invalid_route_state_behavior: fail_closed
+              recovery_snapshot_binding: required
+            readiness_required_state: available
             exact_verification_requires_maintenance_window: true
             minimum_soak_hours: operator_selected_1_to_8760
             required_routes:
@@ -497,7 +509,7 @@ assets:
         maintenance_release: explicit_async
         operator_recovery: explicit_cas_guarded
         recovery_requires_application_stop_confirmation: true
-        recovery_snapshot_guard: mode_holder_token_writer_epoch_query_route_generation_memo_route_and_generation
+        recovery_snapshot_guard: mode_holder_token_writer_epoch_query_route_generation_memo_route_generation_and_plaintext_retirement_state
         recovery_clears_stale_writer_leases: explicit_only
         recovery_clears_stale_query_leases: explicit_only
         recovery_writer_epoch_advance: required
