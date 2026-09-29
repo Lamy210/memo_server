@@ -992,6 +992,7 @@ impl LegacyMemoPlaintextRetirementAdmin for MongoDbAuthoritativeStore {
     async fn delete_all_plaintext_memos_for_retirement(&self) -> AppResult<u64> {
         self.memos
             .delete_many(doc! {})
+            .write_concern(WriteConcern::majority())
             .await
             .map(|result| result.deleted_count)
             .map_err(|error| mongo_error("delete plaintext MongoDB memos for retirement", error))
