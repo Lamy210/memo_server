@@ -179,8 +179,7 @@ impl Application {
             high_search_shadow,
         ));
         let auth_service = Data::new(
-            AuthService::new(config.auth)
-                .map_err(|error| io::Error::other(error.to_string()))?,
+            AuthService::new(config.auth).map_err(|error| io::Error::other(error.to_string()))?,
         );
         let port = config.port;
 
