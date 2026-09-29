@@ -151,6 +151,17 @@ pub async fn retire_high_memo_plaintext(
         }
 
         permit.assert_still_enforced().await?;
+        let memo_route_before_finish = permit.current_memo_route().await?;
+        let search_route_before_finish = permit.current_query_route().await?;
+        if memo_route_before_finish != readiness.memo_route
+            || search_route_before_finish != readiness.search_route
+        {
+            return Err(AppError::ServiceUnavailable(
+                "MEMO-HIGH-1 memo/search route changed after plaintext deletion; retirement remains in_progress"
+                    .into(),
+            ));
+        }
+
         let state_before_finish = permit.current_plaintext_retirement_state().await?;
         if state_before_finish != HighMemoPlaintextRetirementState::InProgress {
             return Err(AppError::ServiceUnavailable(format!(
@@ -172,6 +183,13 @@ pub async fn retire_high_memo_plaintext(
             )));
         }
         permit.assert_still_enforced().await?;
+        if permit.current_memo_route().await? != readiness.memo_route
+            || permit.current_query_route().await? != readiness.search_route
+        {
+            return Err(AppError::ServiceUnavailable(
+                "MEMO-HIGH-1 route changed before retirement maintenance release".into(),
+            ));
+        }
 
         Ok(HighMemoPlaintextRetirementReport {
             initial_retirement_state,
