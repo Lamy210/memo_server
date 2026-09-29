@@ -1,5 +1,7 @@
 use crate::{
     application::{
+        crypto::HighMemoCryptography,
+        crypto_migration_batch::validate_page_size,
         crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
         high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
@@ -19,7 +21,8 @@ use super::{
     },
     persistence::{
         manticore::ManticoreClient, mongodb::MongoDbAuthoritativeStore,
-        ports::LegacyMemoPlaintextCacheMaintenance, redis::RedisCache,
+        ports::{HighEncryptedMemoIntegritySource, LegacyMemoPlaintextCacheMaintenance},
+        redis::RedisCache,
     },
 };
 
@@ -63,6 +66,7 @@ pub struct HighMemoRetirementReadinessReport {
     pub observed_at_ms: i64,
     pub minimum_soak_hours: u64,
     pub observed_soak_hours: u64,
+    pub encrypted_memos_verified: u64,
     pub pending_projection_intents: u64,
     pub legacy_cache_keys: u64,
     pub legacy_search_documents: u64,
@@ -71,6 +75,7 @@ pub struct HighMemoRetirementReadinessReport {
 pub fn validate_high_memo_retirement_config(
     config: &AppConfig,
     minimum_soak_hours: u64,
+    encrypted_page_size: usize,
     cache_scan_count: usize,
     expected_memo_generation: i64,
     expected_search_generation: i64,
@@ -78,6 +83,7 @@ pub fn validate_high_memo_retirement_config(
 ) -> AppResult<()> {
     approval.validate()?;
     validate_soak_hours(minimum_soak_hours)?;
+    validate_page_size(encrypted_page_size)?;
     validate_cache_scan_count(cache_scan_count)?;
     validate_generation("memo", expected_memo_generation)?;
     validate_generation("search", expected_search_generation)?;
@@ -127,6 +133,7 @@ pub async fn inspect_high_memo_retirement_status(
 pub async fn verify_high_memo_retirement_readiness(
     config: &AppConfig,
     minimum_soak_hours: u64,
+    encrypted_page_size: usize,
     cache_scan_count: usize,
     expected_memo_generation: i64,
     expected_search_generation: i64,
@@ -135,6 +142,7 @@ pub async fn verify_high_memo_retirement_readiness(
     validate_high_memo_retirement_config(
         config,
         minimum_soak_hours,
+        encrypted_page_size,
         cache_scan_count,
         expected_memo_generation,
         expected_search_generation,
@@ -145,12 +153,12 @@ pub async fn verify_high_memo_retirement_readiness(
     // freezing traffic. Readiness must not be reported for an encrypted route
     // whose data keys cannot be resolved anymore.
     let runtime = HighMemoStagingRuntimeHandle::build(&config.high_memo_crypto).await?;
-    if runtime.cryptography().is_none() {
-        return Err(AppError::ServiceUnavailable(
-            "MEMO-HIGH-1 retirement readiness could not obtain the configured cryptography runtime"
+    let cryptography = runtime.request_cryptography().ok_or_else(|| {
+        AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness could not obtain the configured request cryptography runtime"
                 .into(),
-        ));
-    }
+        )
+    })?;
     let search_runtime =
         HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri).await?;
     if search_runtime.reader().is_none() {
@@ -177,8 +185,10 @@ pub async fn verify_high_memo_retirement_readiness(
         &cache,
         &legacy_search,
         &recovery,
+        cryptography.as_ref(),
         permit.as_ref(),
         minimum_soak_hours,
+        encrypted_page_size,
         cache_scan_count,
         expected_memo_generation,
         expected_search_generation,
@@ -193,8 +203,10 @@ async fn verify_under_permit(
     cache: &RedisCache,
     legacy_search: &ManticoreClient,
     recovery: &MongoHighSearchMaintenanceRecovery,
+    cryptography: &dyn HighMemoCryptography,
     permit: &dyn HighSearchOfflineWindowPermit,
     minimum_soak_hours: u64,
+    encrypted_page_size: usize,
     cache_scan_count: usize,
     expected_memo_generation: i64,
     expected_search_generation: i64,
@@ -246,6 +258,9 @@ async fn verify_under_permit(
     let observed_soak_hours =
         validate_and_measure_soak(changed_at_ms, observed_at_ms, minimum_soak_hours)?;
 
+    let encrypted_memos_verified =
+        verify_encrypted_authoritative_integrity(source, cryptography, encrypted_page_size).await?;
+
     let pending_projection_intents = source.count_projection_intents_for_cutover().await?;
     if pending_projection_intents != 0 {
         return Err(AppError::Conflict(format!(
@@ -286,10 +301,69 @@ async fn verify_under_permit(
         observed_at_ms,
         minimum_soak_hours,
         observed_soak_hours,
+        encrypted_memos_verified,
         pending_projection_intents,
         legacy_cache_keys: legacy_cache.legacy_keys,
         legacy_search_documents,
     })
+}
+
+async fn verify_encrypted_authoritative_integrity(
+    source: &dyn HighEncryptedMemoIntegritySource,
+    cryptography: &dyn HighMemoCryptography,
+    page_size: usize,
+) -> AppResult<u64> {
+    validate_page_size(page_size)?;
+
+    let expected_count = source.count_encrypted_memos_for_integrity().await?;
+    let mut cursor = None;
+    let mut verified = 0_u64;
+
+    loop {
+        let page = source
+            .page_encrypted_memos_for_integrity(cursor, page_size)
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+
+        let mut previous = cursor;
+        for envelope in page {
+            if previous.is_some_and(|value| envelope.memo_id <= value) {
+                return Err(AppError::DatabaseError(
+                    "Encrypted memo integrity traversal did not advance monotonically".into(),
+                ));
+            }
+
+            envelope.validate_structure()?;
+            let memo = cryptography.decrypt_memo(&envelope).await?;
+            if memo.id != envelope.memo_id
+                || memo.user_id != envelope.owner_partition
+                || memo.version != envelope.version
+                || !memo.validate()
+            {
+                return Err(AppError::DatabaseError(
+                    "Encrypted memo integrity verification found inconsistent decrypted identity/version"
+                        .into(),
+                ));
+            }
+
+            previous = Some(envelope.memo_id);
+            cursor = previous;
+            verified = verified.checked_add(1).ok_or_else(|| {
+                AppError::DatabaseError("Encrypted memo integrity count overflow".into())
+            })?;
+        }
+    }
+
+    let final_count = source.count_encrypted_memos_for_integrity().await?;
+    if verified != expected_count || final_count != expected_count {
+        return Err(AppError::Conflict(format!(
+            "Encrypted memo integrity traversal count mismatch: expected {expected_count}, verified {verified}, final {final_count}"
+        )));
+    }
+
+    Ok(verified)
 }
 
 async fn finish_readiness_verification<T>(
@@ -428,14 +502,14 @@ mod tests {
     #[test]
     fn retirement_requires_operator_attestations_and_valid_bounds() {
         assert!(
-            validate_high_memo_retirement_config(&configured(), 24, 1000, 1, 1, approved(),)
+            validate_high_memo_retirement_config(&configured(), 24, 500, 1000, 1, 1, approved(),)
                 .is_ok()
         );
 
         let mut approval = approved();
         approval.post_cutover_backup_verified = false;
         assert!(
-            validate_high_memo_retirement_config(&configured(), 24, 1000, 1, 1, approval,).is_err()
+            validate_high_memo_retirement_config(&configured(), 24, 500, 1000, 1, 1, approval,).is_err()
         );
 
         let mut approval = approved();
@@ -451,11 +525,11 @@ mod tests {
         .is_err());
 
         assert!(
-            validate_high_memo_retirement_config(&configured(), 0, 1000, 1, 1, approved(),)
+            validate_high_memo_retirement_config(&configured(), 0, 500, 1000, 1, 1, approved(),)
                 .is_err()
         );
         assert!(
-            validate_high_memo_retirement_config(&configured(), 24, 0, 1, 1, approved(),).is_err()
+            validate_high_memo_retirement_config(&configured(), 24, 500, 0, 1, 1, approved(),).is_err()
         );
     }
 
