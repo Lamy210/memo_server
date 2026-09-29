@@ -1019,12 +1019,12 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
                     "mode": MODE_MAINTENANCE,
                     "holder_token": self.holder_token.clone(),
                     "memo_route": HighMemoDataRoute::Encrypted.as_persisted_str(),
-                    MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD:
+                    "memo_plaintext_retirement_state":
                         HighMemoPlaintextRetirementState::Available.as_persisted_str(),
                 },
                 doc! {
                     "$set": {
-                        MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD:
+                        "memo_plaintext_retirement_state":
                             HighMemoPlaintextRetirementState::InProgress.as_persisted_str()
                     }
                 },
@@ -1062,12 +1062,12 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
                     "mode": MODE_MAINTENANCE,
                     "holder_token": self.holder_token.clone(),
                     "memo_route": HighMemoDataRoute::Encrypted.as_persisted_str(),
-                    MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD:
+                    "memo_plaintext_retirement_state":
                         HighMemoPlaintextRetirementState::InProgress.as_persisted_str(),
                 },
                 doc! {
                     "$set": {
-                        MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD:
+                        "memo_plaintext_retirement_state":
                             HighMemoPlaintextRetirementState::Retired.as_persisted_str()
                     }
                 },
