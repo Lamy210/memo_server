@@ -689,14 +689,9 @@ mod tests {
         });
 
         assert_eq!(
-            switch_memo_route_fail_closed(
-                permit,
-                expected,
-                search,
-                HighMemoDataRoute::Encrypted,
-            )
-            .await
-            .unwrap(),
+            switch_memo_route_fail_closed(permit, expected, search, HighMemoDataRoute::Encrypted,)
+                .await
+                .unwrap(),
             target
         );
         assert!(released.load(Ordering::Relaxed));
