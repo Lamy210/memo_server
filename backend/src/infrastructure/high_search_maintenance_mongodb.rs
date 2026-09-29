@@ -1445,6 +1445,10 @@ mod tests {
             .unwrap();
         assert_eq!(route_status.memo_route(), HighMemoDataRoute::Encrypted);
         assert_eq!(route_status.memo_route_generation(), 1);
+        assert_eq!(
+            route_status.memo_plaintext_retirement_state(),
+            HighMemoPlaintextRetirementState::Available
+        );
         assert!(route_status.memo_route_changed_at_ms().is_some());
         assert_eq!(
             maintenance
@@ -1453,6 +1457,32 @@ mod tests {
                 .unwrap(),
             encrypted_memo_route
         );
+        assert_eq!(
+            maintenance
+                .begin_plaintext_retirement()
+                .await
+                .unwrap(),
+            HighMemoPlaintextRetirementState::InProgress
+        );
+        assert!(matches!(
+            maintenance
+                .switch_memo_route(encrypted_memo_route, HighMemoDataRoute::LegacyPlaintext)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(
+            maintenance
+                .finish_plaintext_retirement()
+                .await
+                .unwrap(),
+            HighMemoPlaintextRetirementState::Retired
+        );
+        assert!(matches!(
+            maintenance
+                .switch_memo_route(encrypted_memo_route, HighMemoDataRoute::LegacyPlaintext)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
         assert!(matches!(
             maintenance
                 .switch_memo_route(legacy_memo_route, HighMemoDataRoute::LegacyPlaintext)
@@ -1530,6 +1560,10 @@ mod tests {
             HighMemoDataRoute::LegacyPlaintext
         );
         assert_eq!(open_snapshot.memo_route_generation(), 0);
+        assert_eq!(
+            open_snapshot.memo_plaintext_retirement_state(),
+            HighMemoPlaintextRetirementState::Available
+        );
         assert_eq!(open_snapshot.active_writer_leases(), 1);
         assert_eq!(open_snapshot.active_query_leases(), 1);
         assert_eq!(open_snapshot.active_memo_access_leases(), 1);
@@ -1569,6 +1603,24 @@ mod tests {
         assert_eq!(after_stale_memo_route.active_query_leases(), 1);
         assert_eq!(after_stale_memo_route.active_memo_access_leases(), 1);
 
+        let mut stale_retirement_snapshot = open_snapshot.clone();
+        stale_retirement_snapshot.memo_plaintext_retirement_state =
+            HighMemoPlaintextRetirementState::InProgress;
+        assert!(matches!(
+            recovery
+                .recover_stale_state(&stale_retirement_snapshot)
+                .await,
+            Err(AppError::Conflict(_))
+        ));
+        let after_stale_retirement = recovery.inspect().await.unwrap();
+        assert_eq!(
+            after_stale_retirement.memo_plaintext_retirement_state(),
+            HighMemoPlaintextRetirementState::Available
+        );
+        assert_eq!(after_stale_retirement.active_writer_leases(), 1);
+        assert_eq!(after_stale_retirement.active_query_leases(), 1);
+        assert_eq!(after_stale_retirement.active_memo_access_leases(), 1);
+
         let recovered = recovery.recover_stale_state(&open_snapshot).await.unwrap();
         assert_eq!(recovered.mode(), HighSearchMaintenanceMode::Open);
         assert_eq!(recovered.query_route(), HighSearchQueryRoute::Legacy);
@@ -1578,6 +1630,10 @@ mod tests {
         assert_eq!(recovered.active_memo_access_leases(), 0);
         assert_eq!(recovered.memo_route(), HighMemoDataRoute::LegacyPlaintext);
         assert_eq!(recovered.memo_route_generation(), 0);
+        assert_eq!(
+            recovered.memo_plaintext_retirement_state(),
+            HighMemoPlaintextRetirementState::Available
+        );
         assert_eq!(recovered.writer_epoch(), open_snapshot.writer_epoch() + 1);
 
         // Simulate cancellation while maintenance owns the barrier. The task
