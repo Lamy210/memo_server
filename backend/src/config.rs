@@ -168,7 +168,7 @@ pub enum ConfigError {
     #[error("AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`")]
     InvalidJwtSignatureMode(String),
     #[error(
-        "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS must be an integer in {MIN_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS}..={MAX_AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS}, got `{0}`"
+        "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS must be an integer in 60..=3600, got `{0}`"
     )]
     InvalidJwtAccessTokenMaxLifetime(String),
 }
