@@ -646,10 +646,24 @@ assets:
       algorithm: ES384
       suite_id: AUTH-1
     current:
-      algorithm: RS256
-      suite_id: AUTH-RS256-LEGACY
-      state: active_legacy
-    migration_status: planned
+      default_algorithm: RS256
+      default_suite_id: AUTH-RS256-LEGACY
+      state: active_legacy_with_es384_verifier_staged
+      resource_server_signature_modes:
+        rs256: legacy_default
+        rs256-es384: explicit_dual_accept_migration
+        es384: target_only
+      accepted_algorithms_outside_selected_mode: forbidden
+      kid_required: true
+      jwks_algorithm_match: required_when_declared
+      jwks_signature_use: required_when_declared
+      jwks_verify_operation: required_when_declared
+      rs256_jwk_type: RSA
+      es384_jwk_type: EC_P384
+      issuer_es384_rollout: external_auth_service_pending
+      request_path_wired: true
+      default_changed_to_es384: false
+    migration_status: in_progress
     owner: memo-auth
 
   - asset: passkey_authentication
