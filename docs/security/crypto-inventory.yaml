@@ -181,6 +181,9 @@ assets:
             destructive_command: retire_high_memo_plaintext
             destructive_command_auto_invoked: false
             destructive_confirmation: explicit_irrevocable_flag
+            legacy_backup_retention_review_confirmation: required
+            live_dataset_delete_is_secure_media_erase: false
+            historical_backup_deletion: external_deployment_responsibility
             destructive_expected_plaintext_count: exact_planner_value_required
             destructive_count_mismatch_behavior: reject_before_state_transition_or_delete
             destructive_delete: mongodb_delete_many_all_plaintext_memos
