@@ -403,6 +403,11 @@ mod tests {
 
     const TEST_RSA_MODULUS: &str = "tlnUM_RW7JKMCCHvVHJMiBP8EXJvvSiNVHgFUzBhNlubzwDDjOYo7MY6L1KZbfLnDVZAR_J5KpSwtChtROUyG0dLBuxHCb5GqC0wBQgl4meYQBAHavGUqh_eRKM6F7xugJcYDRTaEL7XvPK8LMYpx_NhImq39KQiPfF-BkB8GIinJE0rTJbPKzQa-Gao4jTd7sq3HKFdw6Inigq6NA1NbpPx-7wF-9L0mjLL-a_apkyhuIOrPn12LeROE-8mWPpOji0qMNg1fNOVrGlEzWUIOZmuvIiigM0y15IJU2LOl6NJ5U61QYjBEgW-nx8yHEIwjKzaeR_aSH2F7Zd1upoWoQ";
     const TEST_RSA_EXPONENT: &str = "AQAB";
+    const TEST_EC_X: &str =
+        "yaoQu-f0gTaWyBTD0BZ0r28LndWqh0Xn-rQOynEOkZrPkqxCLHf7Qnbv9K0TOAag";
+    const TEST_EC_Y: &str =
+        "0MIBkNuwwFXm0CqxaGYxjuGIwD_wKX9DqE16TFVnNcyHha9QVqZ8lhosVwKRKTt4";
+    const VALID_ES384_TOKEN: &str = "eyJhbGciOiJFUzM4NCIsInR5cCI6IkpXVCIsImtpZCI6ImVjLXRlc3QifQ.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoibWVtby1hcGkiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxNzAwMDAwMDAwfQ.Hkju4wPXh0OU3FPNMJgIti1Gp08Ek1VD_ur1f9os7yc5N73q-KUZFg-PV-zipv0mJf9FBxTn1eEo-ofKxlDwf538cRYCnbC0MBodRfKm1skaA68uVf0hfgBt8axnHNjK";
 
     const VALID_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoibWVtby1hcGkiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxNzAwMDAwMDAwfQ.PH4lN-zA2kKRaSPA2aWmt8lFiw8Wok3r2NKnXVwtQ2mNl4uOEQs3FcwhAsoaFyYsLwoqJOdvshtetqZIrUQFUzHI72Jilc1DDfnDkDG4RQOfcgs-T3wvrQpy8UjuWx1x70fwHaBLbhXhUrlCKa51jFTGN3Q5d57fMRFQzAQu1Y47QefykfgV0BUd1WNmeh9QKxKp0SDu53v6nV3S2EmHaARXjspOlyrCj4V0nju2niCQMDywdJS2kNYaTcZOQdvbac6aO1B-IPliaXAZ6_V4tjstmcUnSDBp2yszOqTNLpNC3vmHl25IZQUbb-ekSdbuZcvgqwweFbVB8wUZsG4HBw";
     const WRONG_AUDIENCE_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoib3RoZXItYXBpIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjQxMDI0NDQ4MDAsIm5iZiI6MTcwMDAwMDAwMH0.HHCNOau4DlsdRy4ZRCZ8ukNvJXAoJGyHlgkBb0EKUlvieHPauVNsDk8T0Wf6L0EDvS_G0gdylxd6UoD20HH68eX8xyLKrNk03y9p5F40wP-Ofir3mX-1Kufy-DSoKhu4RkBC2V3Qs7-lvNRkHRwWF1x1Ms7zE_O42sGDccqe6PIJnzoRMohNFllScrnYAzusgGgRfnLZM9j2ElmMiR0xJJsO48Lt-SjBPEWJUdFHZZ3zM5Jfx-HpmQBnQbfzZwPubDYhGN4zlrcpsIWI3tf3SZlbROqGnklYtAQVodTcV5awiBSXlTep1_duetc7MW2CPBrxgAtc2DWTUs_5fy6drg";
@@ -415,17 +420,31 @@ mod tests {
         AuthService::new(AuthConfig::Development)
     }
 
-    fn verifier() -> JwtVerifier {
+    fn verifier_with_mode(signature_mode: JwtSignatureMode) -> JwtVerifier {
         JwtVerifier::new(
             TEST_ISSUER.to_string(),
             TEST_AUDIENCE.to_string(),
             "https://unused.test/.well-known/jwks.json".to_string(),
+            signature_mode,
         )
     }
 
-    fn key() -> DecodingKey {
+    fn verifier() -> JwtVerifier {
+        verifier_with_mode(JwtSignatureMode::Rs256)
+    }
+
+    fn rsa_key() -> DecodingKey {
         DecodingKey::from_rsa_components(TEST_RSA_MODULUS, TEST_RSA_EXPONENT)
             .expect("test RSA components must parse")
+    }
+
+    fn es384_key() -> DecodingKey {
+        DecodingKey::from_ec_components(TEST_EC_X, TEST_EC_Y)
+            .expect("test P-384 components must parse")
+    }
+
+    fn jwk(value: serde_json::Value) -> Jwk {
+        serde_json::from_value(value).expect("test JWK must deserialize")
     }
 
     #[tokio::test]
@@ -453,7 +472,7 @@ mod tests {
     #[test]
     fn valid_signed_access_token_is_accepted() {
         let identity = verifier()
-            .decode_claims(VALID_TOKEN, &key())
+            .decode_claims(VALID_TOKEN, &rsa_key(), Algorithm::RS256)
             .expect("valid token must verify");
 
         assert_eq!(
@@ -465,7 +484,7 @@ mod tests {
     #[test]
     fn wrong_audience_is_rejected() {
         assert!(matches!(
-            verifier().decode_claims(WRONG_AUDIENCE_TOKEN, &key()),
+            verifier().decode_claims(WRONG_AUDIENCE_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::Jwt(_))
         ));
     }
@@ -473,7 +492,7 @@ mod tests {
     #[test]
     fn expired_token_is_rejected() {
         assert!(matches!(
-            verifier().decode_claims(EXPIRED_TOKEN, &key()),
+            verifier().decode_claims(EXPIRED_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::Jwt(_))
         ));
     }
@@ -481,7 +500,7 @@ mod tests {
     #[test]
     fn future_not_before_is_rejected() {
         assert!(matches!(
-            verifier().decode_claims(FUTURE_NBF_TOKEN, &key()),
+            verifier().decode_claims(FUTURE_NBF_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::Jwt(_))
         ));
     }
@@ -489,7 +508,7 @@ mod tests {
     #[test]
     fn future_issued_at_is_rejected() {
         assert!(matches!(
-            verifier().decode_claims(FUTURE_IAT_TOKEN, &key()),
+            verifier().decode_claims(FUTURE_IAT_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::InvalidIdentity)
         ));
     }
@@ -497,9 +516,122 @@ mod tests {
     #[test]
     fn access_token_subject_must_be_uuid() {
         assert!(matches!(
-            verifier().decode_claims(INVALID_SUBJECT_TOKEN, &key()),
+            verifier().decode_claims(INVALID_SUBJECT_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::InvalidIdentity)
         ));
+    }
+
+    #[test]
+    fn signature_modes_accept_only_the_declared_migration_algorithms() {
+        assert!(jwt_algorithm_allowed(
+            JwtSignatureMode::Rs256,
+            Algorithm::RS256
+        ));
+        assert!(!jwt_algorithm_allowed(
+            JwtSignatureMode::Rs256,
+            Algorithm::ES384
+        ));
+
+        assert!(jwt_algorithm_allowed(
+            JwtSignatureMode::Rs256Es384,
+            Algorithm::RS256
+        ));
+        assert!(jwt_algorithm_allowed(
+            JwtSignatureMode::Rs256Es384,
+            Algorithm::ES384
+        ));
+        assert!(!jwt_algorithm_allowed(
+            JwtSignatureMode::Rs256Es384,
+            Algorithm::ES256
+        ));
+        assert!(!jwt_algorithm_allowed(
+            JwtSignatureMode::Rs256Es384,
+            Algorithm::RS384
+        ));
+
+        assert!(jwt_algorithm_allowed(
+            JwtSignatureMode::Es384,
+            Algorithm::ES384
+        ));
+        assert!(!jwt_algorithm_allowed(
+            JwtSignatureMode::Es384,
+            Algorithm::RS256
+        ));
+    }
+
+    #[test]
+    fn valid_es384_access_token_is_accepted() {
+        let identity = verifier_with_mode(JwtSignatureMode::Es384)
+            .decode_claims(VALID_ES384_TOKEN, &es384_key(), Algorithm::ES384)
+            .expect("valid ES384 token must verify");
+
+        assert_eq!(
+            identity.user_id,
+            Uuid::parse_str(TEST_USER_ID).expect("test UUID must parse")
+        );
+    }
+
+    #[test]
+    fn jwk_metadata_must_match_rs256_or_es384_verification_contract() {
+        let rsa = jwk(serde_json::json!({
+            "kty": "RSA",
+            "use": "sig",
+            "key_ops": ["verify"],
+            "alg": "RS256",
+            "kid": "rsa",
+            "n": TEST_RSA_MODULUS,
+            "e": TEST_RSA_EXPONENT
+        }));
+        assert!(validate_jwk_for_algorithm(&rsa, Algorithm::RS256).is_ok());
+        assert!(validate_jwk_for_algorithm(&rsa, Algorithm::ES384).is_err());
+
+        let p384 = jwk(serde_json::json!({
+            "kty": "EC",
+            "use": "sig",
+            "key_ops": ["verify"],
+            "alg": "ES384",
+            "kid": "ec",
+            "crv": "P-384",
+            "x": TEST_EC_X,
+            "y": TEST_EC_Y
+        }));
+        assert!(validate_jwk_for_algorithm(&p384, Algorithm::ES384).is_ok());
+        assert!(validate_jwk_for_algorithm(&p384, Algorithm::RS256).is_err());
+
+        let wrong_curve = jwk(serde_json::json!({
+            "kty": "EC",
+            "use": "sig",
+            "key_ops": ["verify"],
+            "alg": "ES384",
+            "kid": "wrong-curve",
+            "crv": "P-256",
+            "x": TEST_EC_X,
+            "y": TEST_EC_Y
+        }));
+        assert!(validate_jwk_for_algorithm(&wrong_curve, Algorithm::ES384).is_err());
+    }
+
+    #[test]
+    fn jwk_encryption_use_or_non_verify_operations_are_rejected() {
+        let encryption_use = jwk(serde_json::json!({
+            "kty": "RSA",
+            "use": "enc",
+            "alg": "RS256",
+            "kid": "enc",
+            "n": TEST_RSA_MODULUS,
+            "e": TEST_RSA_EXPONENT
+        }));
+        assert!(validate_jwk_for_algorithm(&encryption_use, Algorithm::RS256).is_err());
+
+        let signing_only = jwk(serde_json::json!({
+            "kty": "RSA",
+            "key_ops": ["sign"],
+            "alg": "RS256",
+            "kid": "sign-only",
+            "n": TEST_RSA_MODULUS,
+            "e": TEST_RSA_EXPONENT
+        }));
+        assert!(validate_jwk_for_algorithm(&signing_only, Algorithm::RS256).is_err());
     }
 
     #[test]
