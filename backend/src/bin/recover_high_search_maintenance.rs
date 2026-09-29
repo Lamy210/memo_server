@@ -388,8 +388,7 @@ mod tests {
                 expected_query_route_generation: 3,
                 expected_memo_route: HighMemoDataRoute::Encrypted,
                 expected_memo_route_generation: 5,
-                expected_plaintext_retirement_state:
-                    HighMemoPlaintextRetirementState::InProgress,
+                expected_plaintext_retirement_state: HighMemoPlaintextRetirementState::InProgress,
                 expected_holder_token: Some("holder".to_string()),
             }
         );
