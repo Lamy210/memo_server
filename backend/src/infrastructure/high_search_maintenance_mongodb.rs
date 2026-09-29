@@ -1073,7 +1073,9 @@ impl HighSearchOfflineWindowPermit for MongoHighSearchOfflineWindowPermit {
                 },
             )
             .await
-            .map_err(|error| maintenance_db_error("finish HIGH memo plaintext retirement", error))?;
+            .map_err(|error| {
+                maintenance_db_error("finish HIGH memo plaintext retirement", error)
+            })?;
 
         if update.matched_count != 1 {
             return Err(AppError::Conflict(
@@ -1262,17 +1264,13 @@ fn mongo_plaintext_retirement_state(
         .ok_or_else(|| MongoError::custom(InvalidMemoPlaintextRetirementState))
 }
 
-fn app_plaintext_retirement_state(
-    state: &Document,
-) -> AppResult<HighMemoPlaintextRetirementState> {
+fn app_plaintext_retirement_state(state: &Document) -> AppResult<HighMemoPlaintextRetirementState> {
     state
         .get_str(MEMO_PLAINTEXT_RETIREMENT_STATE_FIELD)
         .ok()
         .and_then(HighMemoPlaintextRetirementState::from_persisted_str)
         .ok_or_else(|| {
-            AppError::ServiceUnavailable(
-                "HIGH memo plaintext retirement state is invalid".into(),
-            )
+            AppError::ServiceUnavailable("HIGH memo plaintext retirement state is invalid".into())
         })
 }
 
@@ -1458,10 +1456,7 @@ mod tests {
             encrypted_memo_route
         );
         assert_eq!(
-            maintenance
-                .begin_plaintext_retirement()
-                .await
-                .unwrap(),
+            maintenance.begin_plaintext_retirement().await.unwrap(),
             HighMemoPlaintextRetirementState::InProgress
         );
         assert!(matches!(
@@ -1471,10 +1466,7 @@ mod tests {
             Err(AppError::Conflict(_))
         ));
         assert_eq!(
-            maintenance
-                .finish_plaintext_retirement()
-                .await
-                .unwrap(),
+            maintenance.finish_plaintext_retirement().await.unwrap(),
             HighMemoPlaintextRetirementState::Retired
         );
         assert!(matches!(
