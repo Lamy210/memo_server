@@ -9,14 +9,12 @@ use crate::{
 
 use super::{
     high_memo_retirement_operator::{
-        validate_high_memo_retirement_config,
-        verify_high_memo_retirement_readiness_under_permit,
+        validate_high_memo_retirement_config, verify_high_memo_retirement_readiness_under_permit,
         HighMemoRetirementApproval, HighMemoRetirementReadinessReport,
     },
     high_search_maintenance_mongodb::MongoHighSearchMaintenanceGuard,
     persistence::{
-        mongodb::MongoDbAuthoritativeStore,
-        ports::LegacyMemoPlaintextRetirementInspector,
+        mongodb::MongoDbAuthoritativeStore, ports::LegacyMemoPlaintextRetirementInspector,
     },
 };
 
