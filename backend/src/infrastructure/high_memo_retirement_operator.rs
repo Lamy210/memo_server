@@ -1,0 +1,490 @@
+use chrono::Utc;
+
+use crate::{
+    application::{
+        crypto_search_rotation::{HighSearchOfflineWindowGuard, HighSearchOfflineWindowPermit},
+        high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
+        high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
+    },
+    config::{AppConfig, AuthoritativeBackend, HighMemoCryptoConfig, HighSearchConfig, SearchBackend},
+    error::{AppError, AppResult},
+};
+
+use super::{
+    high_memo_aws_runtime::HighMemoStagingRuntimeHandle,
+    high_search_maintenance_mongodb::{
+        HighSearchMaintenanceStatus, MongoHighSearchMaintenanceGuard,
+        MongoHighSearchMaintenanceRecovery,
+    },
+    persistence::{
+        manticore::ManticoreClient,
+        mongodb::MongoDbAuthoritativeStore,
+        ports::LegacyMemoPlaintextCacheMaintenance,
+        redis::RedisCache,
+    },
+};
+
+const MILLIS_PER_HOUR: i64 = 60 * 60 * 1000;
+const MAX_SOAK_HOURS: u64 = 24 * 365;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighMemoRetirementApproval {
+    pub post_cutover_backup_verified: bool,
+    pub restore_rehearsed: bool,
+}
+
+impl HighMemoRetirementApproval {
+    fn validate(self) -> AppResult<()> {
+        if !self.post_cutover_backup_verified {
+            return Err(AppError::ValidationError(
+                "MEMO-HIGH-1 retirement readiness requires a verified post-cutover backup".into(),
+            ));
+        }
+        if !self.restore_rehearsed {
+            return Err(AppError::ValidationError(
+                "MEMO-HIGH-1 retirement readiness requires a restore rehearsal".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighMemoRetirementStatus {
+    pub memo_route: HighMemoDataRouteSnapshot,
+    pub search_route: HighSearchQueryRouteSnapshot,
+    pub memo_route_changed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighMemoRetirementReadinessReport {
+    pub memo_route: HighMemoDataRouteSnapshot,
+    pub search_route: HighSearchQueryRouteSnapshot,
+    pub memo_route_changed_at_ms: i64,
+    pub observed_at_ms: i64,
+    pub minimum_soak_hours: u64,
+    pub observed_soak_hours: u64,
+    pub pending_projection_intents: u64,
+    pub legacy_cache_keys: u64,
+    pub legacy_search_documents: u64,
+}
+
+pub fn validate_high_memo_retirement_config(
+    config: &AppConfig,
+    minimum_soak_hours: u64,
+    cache_scan_count: usize,
+    expected_memo_generation: i64,
+    expected_search_generation: i64,
+    approval: HighMemoRetirementApproval,
+) -> AppResult<()> {
+    approval.validate()?;
+    validate_soak_hours(minimum_soak_hours)?;
+    validate_cache_scan_count(cache_scan_count)?;
+    validate_generation("memo", expected_memo_generation)?;
+    validate_generation("search", expected_search_generation)?;
+
+    if config.authoritative_backend != AuthoritativeBackend::MongoDb {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness requires MongoDB authoritative storage".into(),
+        ));
+    }
+    if config.search_backend != SearchBackend::Manticore {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness requires Manticore Search".into(),
+        ));
+    }
+    if !matches!(config.high_memo_crypto, HighMemoCryptoConfig::AwsKms { .. }) {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness requires HIGH_MEMO_CRYPTO_MODE=aws-kms".into(),
+        ));
+    }
+    if !matches!(config.high_search, HighSearchConfig::AwsKms { .. }) {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness requires protected HIGH search runtime".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+pub async fn inspect_high_memo_retirement_status(
+    config: &AppConfig,
+) -> AppResult<HighMemoRetirementStatus> {
+    if config.authoritative_backend != AuthoritativeBackend::MongoDb {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement inspection requires MongoDB authoritative storage".into(),
+        ));
+    }
+
+    let recovery =
+        MongoHighSearchMaintenanceRecovery::connect(&config.authoritative_uri, &config.mongodb_database)
+            .await?;
+    let status = recovery.inspect().await?;
+    Ok(status_from_maintenance(&status))
+}
+
+pub async fn verify_high_memo_retirement_readiness(
+    config: &AppConfig,
+    minimum_soak_hours: u64,
+    cache_scan_count: usize,
+    expected_memo_generation: i64,
+    expected_search_generation: i64,
+    approval: HighMemoRetirementApproval,
+) -> AppResult<HighMemoRetirementReadinessReport> {
+    validate_high_memo_retirement_config(
+        config,
+        minimum_soak_hours,
+        cache_scan_count,
+        expected_memo_generation,
+        expected_search_generation,
+        approval,
+    )?;
+
+    // Preflight the entire configured historical/current KMS key ring before
+    // freezing traffic. Readiness must not be reported for an encrypted route
+    // whose data keys cannot be resolved anymore.
+    let runtime = HighMemoStagingRuntimeHandle::build(&config.high_memo_crypto).await?;
+    if runtime.cryptography().is_none() {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness could not obtain the configured cryptography runtime"
+                .into(),
+        ));
+    }
+
+    let source =
+        MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?;
+    let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
+    let cache = RedisCache::new(&config.redis_uri)?;
+    let legacy_search = ManticoreClient::new(&config.search_uri)?;
+    let recovery =
+        MongoHighSearchMaintenanceRecovery::connect(&config.authoritative_uri, &config.mongodb_database)
+            .await?;
+
+    let permit = guard.acquire_offline_window().await?;
+
+    let result = verify_under_permit(
+        &source,
+        &cache,
+        &legacy_search,
+        &recovery,
+        permit.as_ref(),
+        minimum_soak_hours,
+        cache_scan_count,
+        expected_memo_generation,
+        expected_search_generation,
+    )
+    .await;
+
+    finish_readiness_verification(result, permit).await
+}
+
+async fn verify_under_permit(
+    source: &MongoDbAuthoritativeStore,
+    cache: &RedisCache,
+    legacy_search: &ManticoreClient,
+    recovery: &MongoHighSearchMaintenanceRecovery,
+    permit: &dyn HighSearchOfflineWindowPermit,
+    minimum_soak_hours: u64,
+    cache_scan_count: usize,
+    expected_memo_generation: i64,
+    expected_search_generation: i64,
+) -> AppResult<HighMemoRetirementReadinessReport> {
+    permit.assert_still_enforced().await?;
+
+    let memo_route = permit.current_memo_route().await?;
+    let expected_memo = HighMemoDataRouteSnapshot {
+        route: HighMemoDataRoute::Encrypted,
+        generation: expected_memo_generation,
+    };
+    if memo_route != expected_memo {
+        return Err(AppError::Conflict(format!(
+            "MEMO-HIGH-1 retirement requires memo route encrypted generation {expected_memo_generation}; observed {} generation {}",
+            memo_route.route, memo_route.generation
+        )));
+    }
+
+    let search_route = permit.current_query_route().await?;
+    let expected_search = HighSearchQueryRouteSnapshot {
+        route: HighSearchQueryRoute::Protected,
+        generation: expected_search_generation,
+    };
+    if search_route != expected_search {
+        return Err(AppError::Conflict(format!(
+            "MEMO-HIGH-1 retirement requires protected search generation {expected_search_generation}; observed {} generation {}",
+            search_route.route, search_route.generation
+        )));
+    }
+
+    let status = recovery.inspect().await?;
+    if status.memo_route() != memo_route.route
+        || status.memo_route_generation() != memo_route.generation
+        || status.query_route() != search_route.route
+        || status.query_route_generation() != search_route.generation
+    {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement route status changed during maintenance verification".into(),
+        ));
+    }
+
+    let changed_at_ms = status.memo_route_changed_at_ms().ok_or_else(|| {
+        AppError::Conflict(
+            "MEMO-HIGH-1 encrypted route has no recorded transition timestamp; retirement cannot prove soak duration"
+                .into(),
+        )
+    })?;
+    let observed_at_ms = Utc::now().timestamp_millis();
+    let observed_soak_hours =
+        validate_and_measure_soak(changed_at_ms, observed_at_ms, minimum_soak_hours)?;
+
+    let pending_projection_intents = source.count_projection_intents_for_cutover().await?;
+    if pending_projection_intents != 0 {
+        return Err(AppError::Conflict(format!(
+            "MEMO-HIGH-1 retirement requires an empty projection outbox; {pending_projection_intents} intent(s) remain"
+        )));
+    }
+
+    let legacy_cache = cache
+        .inspect_legacy_plaintext_memo_cache(cache_scan_count)
+        .await?;
+    if legacy_cache.legacy_keys != 0 {
+        return Err(AppError::Conflict(format!(
+            "MEMO-HIGH-1 retirement found {} legacy plaintext memo cache key(s)",
+            legacy_cache.legacy_keys
+        )));
+    }
+
+    let legacy_search_documents = legacy_search.count_legacy_documents().await?;
+    if legacy_search_documents != 0 {
+        return Err(AppError::Conflict(format!(
+            "MEMO-HIGH-1 retirement found {legacy_search_documents} legacy plaintext search document(s)"
+        )));
+    }
+
+    permit.assert_still_enforced().await?;
+    let final_memo = permit.current_memo_route().await?;
+    let final_search = permit.current_query_route().await?;
+    if final_memo != memo_route || final_search != search_route {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement route changed during final readiness revalidation".into(),
+        ));
+    }
+
+    Ok(HighMemoRetirementReadinessReport {
+        memo_route,
+        search_route,
+        memo_route_changed_at_ms: changed_at_ms,
+        observed_at_ms,
+        minimum_soak_hours,
+        observed_soak_hours,
+        pending_projection_intents,
+        legacy_cache_keys: legacy_cache.legacy_keys,
+        legacy_search_documents,
+    })
+}
+
+async fn finish_readiness_verification<T>(
+    result: AppResult<T>,
+    permit: Box<dyn HighSearchOfflineWindowPermit>,
+) -> AppResult<T> {
+    match (result, permit.release().await) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(primary), Ok(())) => Err(primary),
+        (Ok(_), Err(release)) => Err(release),
+        (Err(primary), Err(release)) => Err(AppError::ServiceUnavailable(format!(
+            "MEMO-HIGH-1 retirement readiness failed and maintenance release also failed; primary={primary}; release={release}"
+        ))),
+    }
+}
+
+fn status_from_maintenance(status: &HighSearchMaintenanceStatus) -> HighMemoRetirementStatus {
+    HighMemoRetirementStatus {
+        memo_route: HighMemoDataRouteSnapshot {
+            route: status.memo_route(),
+            generation: status.memo_route_generation(),
+        },
+        search_route: HighSearchQueryRouteSnapshot {
+            route: status.query_route(),
+            generation: status.query_route_generation(),
+        },
+        memo_route_changed_at_ms: status.memo_route_changed_at_ms(),
+    }
+}
+
+fn validate_and_measure_soak(
+    changed_at_ms: i64,
+    observed_at_ms: i64,
+    minimum_soak_hours: u64,
+) -> AppResult<u64> {
+    let minimum_ms = i64::try_from(minimum_soak_hours)
+        .ok()
+        .and_then(|hours| hours.checked_mul(MILLIS_PER_HOUR))
+        .ok_or_else(|| AppError::ValidationError("MEMO-HIGH-1 soak duration overflow".into()))?;
+    let elapsed_ms = observed_at_ms.checked_sub(changed_at_ms).ok_or_else(|| {
+        AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 route transition time is later than the verifier clock".into(),
+        )
+    })?;
+    if elapsed_ms < 0 {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 route transition time is later than the verifier clock".into(),
+        ));
+    }
+    if elapsed_ms < minimum_ms {
+        return Err(AppError::Conflict(format!(
+            "MEMO-HIGH-1 retirement soak is incomplete: observed {} hour(s), required {minimum_soak_hours}",
+            elapsed_ms / MILLIS_PER_HOUR
+        )));
+    }
+
+    Ok((elapsed_ms / MILLIS_PER_HOUR) as u64)
+}
+
+fn validate_soak_hours(hours: u64) -> AppResult<()> {
+    if !(1..=MAX_SOAK_HOURS).contains(&hours) {
+        return Err(AppError::ValidationError(format!(
+            "MEMO-HIGH-1 minimum soak hours must be in 1..={MAX_SOAK_HOURS}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_cache_scan_count(scan_count: usize) -> AppResult<()> {
+    if !(1..=10_000).contains(&scan_count) {
+        return Err(AppError::ValidationError(
+            "legacy memo cache scan_count must be in 1..=10000".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_generation(label: &str, generation: i64) -> AppResult<()> {
+    if generation < 0 {
+        return Err(AppError::ValidationError(format!(
+            "MEMO-HIGH-1 expected {label} route generation must be non-negative"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AuthConfig, HighSearchShadowConfig};
+    use std::collections::BTreeMap;
+
+    fn approved() -> HighMemoRetirementApproval {
+        HighMemoRetirementApproval {
+            post_cutover_backup_verified: true,
+            restore_rehearsed: true,
+        }
+    }
+
+    fn configured() -> AppConfig {
+        AppConfig {
+            authoritative_backend: AuthoritativeBackend::MongoDb,
+            authoritative_uri: "not-a-mongodb-uri".into(),
+            mongodb_database: "memo_app".into(),
+            redis_uri: "redis://unused".into(),
+            search_backend: SearchBackend::Manticore,
+            search_uri: "not-a-manticore-uri".into(),
+            high_memo_crypto: HighMemoCryptoConfig::AwsKms {
+                region: "ap-northeast-1".into(),
+                active_key_version: "memo-key-v1".into(),
+                key_versions: BTreeMap::from([(
+                    "memo-key-v1".into(),
+                    "arn:aws:kms:ap-northeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+                        .into(),
+                )]),
+            },
+            high_search: HighSearchConfig::AwsKms {
+                key_arn:
+                    "arn:aws:kms:ap-northeast-1:111122223333:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+                        .into(),
+                region: "ap-northeast-1".into(),
+                provider_seed_version: "seed-v1".into(),
+                cache_ttl_seconds: 60,
+                cache_max_entries: 64,
+                cache_sweep_seconds: 30,
+                max_document_content_terms: 128,
+                max_query_content_terms: 32,
+                max_normalized_term_bytes: 128,
+            },
+            high_search_shadow: HighSearchShadowConfig::Disabled,
+            port: 8080,
+            auth: AuthConfig::Development,
+        }
+    }
+
+    #[test]
+    fn retirement_requires_operator_attestations_and_valid_bounds() {
+        assert!(validate_high_memo_retirement_config(
+            &configured(),
+            24,
+            1000,
+            1,
+            1,
+            approved(),
+        )
+        .is_ok());
+
+        let mut approval = approved();
+        approval.post_cutover_backup_verified = false;
+        assert!(validate_high_memo_retirement_config(
+            &configured(),
+            24,
+            1000,
+            1,
+            1,
+            approval,
+        )
+        .is_err());
+
+        let mut approval = approved();
+        approval.restore_rehearsed = false;
+        assert!(validate_high_memo_retirement_config(
+            &configured(),
+            24,
+            1000,
+            1,
+            1,
+            approval,
+        )
+        .is_err());
+
+        assert!(validate_high_memo_retirement_config(
+            &configured(),
+            0,
+            1000,
+            1,
+            1,
+            approved(),
+        )
+        .is_err());
+        assert!(validate_high_memo_retirement_config(
+            &configured(),
+            24,
+            0,
+            1,
+            1,
+            approved(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn soak_measurement_is_fail_closed_for_short_or_future_transition() {
+        let changed = 1_700_000_000_000_i64;
+        assert_eq!(
+            validate_and_measure_soak(changed, changed + 48 * MILLIS_PER_HOUR, 24).unwrap(),
+            48
+        );
+        assert!(matches!(
+            validate_and_measure_soak(changed, changed + 23 * MILLIS_PER_HOUR, 24),
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            validate_and_measure_soak(changed + 1, changed, 24),
+            Err(AppError::ServiceUnavailable(_))
+        ));
+    }
+}
