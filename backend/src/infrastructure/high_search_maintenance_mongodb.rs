@@ -156,6 +156,7 @@ struct RecoveryContext {
 #[derive(Clone)]
 pub struct MongoHighSearchMaintenanceRecovery {
     client: Client,
+    database: Database,
     state: Collection<Document>,
     writers: Collection<Document>,
     queries: Collection<Document>,
@@ -184,11 +185,28 @@ impl MongoHighSearchMaintenanceRecovery {
     fn from_database(database: Database) -> Self {
         Self {
             client: database.client().clone(),
+            database: database.clone(),
             state: database.collection(STATE_COLLECTION),
             writers: database.collection(WRITER_LEASES_COLLECTION),
             queries: database.collection(QUERY_LEASES_COLLECTION),
             memo_access: database.collection(MEMO_ACCESS_LEASES_COLLECTION),
         }
+    }
+
+    pub async fn server_time_ms(&self) -> AppResult<i64> {
+        let response = self
+            .database
+            .run_command(doc! { "hello": 1_i32 })
+            .await
+            .map_err(|error| maintenance_db_error("read MongoDB server time", error))?;
+        response
+            .get_datetime("localTime")
+            .map(|value| value.timestamp_millis())
+            .map_err(|_| {
+                AppError::ServiceUnavailable(
+                    "MongoDB hello response is missing a valid localTime".into(),
+                )
+            })
     }
 
     pub async fn inspect(&self) -> AppResult<HighSearchMaintenanceStatus> {
@@ -1072,6 +1090,8 @@ mod tests {
         let guard = MongoHighSearchMaintenanceGuard::new(database.clone())
             .await
             .unwrap();
+        let recovery_clock = MongoHighSearchMaintenanceRecovery::from_database(database.clone());
+        assert!(recovery_clock.server_time_ms().await.unwrap() > 0);
         let first_writer = guard.acquire_mutation().await.unwrap();
         let first_query = guard.acquire_query().await.unwrap();
         let first_memo_access = guard.acquire_access().await.unwrap();
