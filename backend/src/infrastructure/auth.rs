@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -25,6 +26,9 @@ const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
 const JWKS_STALE_IF_ERROR_TTL: Duration = Duration::from_secs(3600);
 const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const JWKS_FORCED_REFRESH_COOLDOWN: Duration = Duration::from_secs(5);
+const JWKS_MAX_BODY_BYTES: usize = 256 * 1024;
+const JWKS_MAX_KEYS: usize = 64;
+const JWT_KID_MAX_BYTES: usize = 128;
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedIdentity {
@@ -141,6 +145,7 @@ impl JwtVerifier {
             .kid
             .as_deref()
             .ok_or_else(|| AppError::Unauthorized("Access token is missing kid".into()))?;
+        validate_token_kid(kid)?;
 
         let key = self.decoding_key(kid, algorithm, false).await?;
         match self.decode_claims(token, &key, algorithm) {
@@ -181,11 +186,11 @@ impl JwtVerifier {
     ) -> AppResult<DecodingKey> {
         let mut set = self.jwks(force_refresh).await?;
 
-        if set.find(kid).is_none() && !force_refresh {
+        if select_unique_jwk(&set, kid)?.is_none() && !force_refresh {
             set = self.jwks(true).await?;
         }
 
-        let jwk = set.find(kid).ok_or_else(|| {
+        let jwk = select_unique_jwk(&set, kid)?.ok_or_else(|| {
             AppError::Unauthorized("Access token signing key is not recognized".into())
         })?;
         validate_jwk_for_algorithm(jwk, algorithm)?;
@@ -269,7 +274,7 @@ impl JwtVerifier {
     }
 
     async fn fetch_jwks(&self) -> AppResult<JwkSet> {
-        let response = self
+        let mut response = self
             .client
             .get(&self.jwks_uri)
             .timeout(JWKS_REQUEST_TIMEOUT)
@@ -285,11 +290,95 @@ impl JwtVerifier {
                 AppError::ServiceUnavailable("Authentication key service is unavailable".into())
             })?;
 
-        response.json::<JwkSet>().await.map_err(|error| {
+        if response
+            .content_length()
+            .is_some_and(|length| length > JWKS_MAX_BODY_BYTES as u64)
+        {
+            return Err(AppError::ServiceUnavailable(
+                "Authentication JWKS response exceeds the configured safety limit".into(),
+            ));
+        }
+
+        let mut body = Vec::with_capacity(
+            response
+                .content_length()
+                .unwrap_or(0)
+                .min(JWKS_MAX_BODY_BYTES as u64) as usize,
+        );
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            log::warn!("Authentication JWKS body read failed: {error}");
+            AppError::ServiceUnavailable("Authentication key service is unavailable".into())
+        })? {
+            append_bounded_jwks_chunk(&mut body, &chunk)?;
+        }
+
+        let set = serde_json::from_slice::<JwkSet>(&body).map_err(|error| {
             log::error!("Authentication JWKS response could not be decoded: {error}");
             AppError::ServiceUnavailable("Authentication key service returned invalid data".into())
-        })
+        })?;
+        validate_jwks_set(&set)?;
+        Ok(set)
     }
+}
+
+fn validate_token_kid(kid: &str) -> AppResult<()> {
+    if kid.is_empty() || kid.len() > JWT_KID_MAX_BYTES {
+        return Err(AppError::Unauthorized(
+            "Access token kid is empty or exceeds the supported size".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn append_bounded_jwks_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> AppResult<()> {
+    if chunk.len() > JWKS_MAX_BODY_BYTES.saturating_sub(body.len()) {
+        return Err(AppError::ServiceUnavailable(
+            "Authentication JWKS response exceeds the configured safety limit".into(),
+        ));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn validate_jwks_set(set: &JwkSet) -> AppResult<()> {
+    if set.keys.is_empty() || set.keys.len() > JWKS_MAX_KEYS {
+        return Err(AppError::ServiceUnavailable(format!(
+            "Authentication JWKS must contain 1..={JWKS_MAX_KEYS} keys"
+        )));
+    }
+
+    let mut key_ids = HashSet::with_capacity(set.keys.len());
+    for jwk in &set.keys {
+        let Some(kid) = jwk.common.key_id.as_deref() else {
+            continue;
+        };
+        if kid.is_empty() || kid.len() > JWT_KID_MAX_BYTES {
+            return Err(AppError::ServiceUnavailable(
+                "Authentication JWKS contains an empty or oversized kid".into(),
+            ));
+        }
+        if !key_ids.insert(kid) {
+            return Err(AppError::ServiceUnavailable(
+                "Authentication JWKS contains duplicate kid values".into(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn select_unique_jwk<'a>(set: &'a JwkSet, kid: &str) -> AppResult<Option<&'a Jwk>> {
+    let mut matches = set
+        .keys
+        .iter()
+        .filter(|jwk| jwk.common.key_id.as_deref() == Some(kid));
+    let first = matches.next();
+    if matches.next().is_some() {
+        return Err(AppError::ServiceUnavailable(
+            "Authentication JWKS contains duplicate kid values".into(),
+        ));
+    }
+    Ok(first)
 }
 
 fn jwt_algorithm_allowed(mode: JwtSignatureMode, algorithm: Algorithm) -> bool {
@@ -567,6 +656,87 @@ mod tests {
             identity.user_id,
             Uuid::parse_str(TEST_USER_ID).expect("test UUID must parse")
         );
+    }
+
+    #[test]
+    fn token_kid_must_be_non_empty_and_bounded() {
+        assert!(validate_token_kid("rsa-key-1").is_ok());
+        assert!(matches!(
+            validate_token_kid(""),
+            Err(AppError::Unauthorized(_))
+        ));
+        assert!(matches!(
+            validate_token_kid(&"k".repeat(JWT_KID_MAX_BYTES + 1)),
+            Err(AppError::Unauthorized(_))
+        ));
+    }
+
+    #[test]
+    fn jwks_shape_rejects_duplicate_kids_and_excessive_key_counts() {
+        let first = jwk(serde_json::json!({
+            "kty": "RSA",
+            "alg": "RS256",
+            "kid": "shared",
+            "n": TEST_RSA_MODULUS,
+            "e": TEST_RSA_EXPONENT
+        }));
+        let second = jwk(serde_json::json!({
+            "kty": "EC",
+            "alg": "ES384",
+            "kid": "shared",
+            "crv": "P-384",
+            "x": TEST_EC_X,
+            "y": TEST_EC_Y
+        }));
+        let duplicate = JwkSet {
+            keys: vec![first.clone(), second],
+        };
+        assert!(matches!(
+            validate_jwks_set(&duplicate),
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        assert!(matches!(
+            select_unique_jwk(&duplicate, "shared"),
+            Err(AppError::ServiceUnavailable(_))
+        ));
+
+        let valid = JwkSet {
+            keys: vec![first.clone()],
+        };
+        assert_eq!(
+            select_unique_jwk(&valid, "shared")
+                .unwrap()
+                .and_then(|key| key.common.key_id.as_deref()),
+            Some("shared")
+        );
+        assert!(select_unique_jwk(&valid, "missing").unwrap().is_none());
+
+        let too_many = JwkSet {
+            keys: (0..=JWKS_MAX_KEYS)
+                .map(|index| {
+                    let mut key = first.clone();
+                    key.common.key_id = Some(format!("key-{index}"));
+                    key
+                })
+                .collect(),
+        };
+        assert!(matches!(
+            validate_jwks_set(&too_many),
+            Err(AppError::ServiceUnavailable(_))
+        ));
+    }
+
+    #[test]
+    fn jwks_body_accumulator_enforces_hard_byte_limit() {
+        let mut body = Vec::new();
+        append_bounded_jwks_chunk(&mut body, &[0x7B; 32]).unwrap();
+        assert_eq!(body.len(), 32);
+
+        body.resize(JWKS_MAX_BODY_BYTES, 0);
+        assert!(matches!(
+            append_bounded_jwks_chunk(&mut body, &[0x01]),
+            Err(AppError::ServiceUnavailable(_))
+        ));
     }
 
     #[test]
