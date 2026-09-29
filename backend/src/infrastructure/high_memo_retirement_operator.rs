@@ -20,7 +20,8 @@ use super::{
         MongoHighSearchMaintenanceRecovery,
     },
     persistence::{
-        manticore::ManticoreClient, mongodb::MongoDbAuthoritativeStore,
+        manticore::ManticoreClient,
+        mongodb::MongoDbAuthoritativeStore,
         ports::{HighEncryptedMemoIntegritySource, LegacyMemoPlaintextCacheMaintenance},
         redis::RedisCache,
     },
@@ -509,19 +510,6 @@ mod tests {
 
     #[test]
     fn retirement_requires_operator_attestations_and_valid_bounds() {
-        assert!(
-            validate_high_memo_retirement_config(&configured(), 24, 500, 1000, 1, 1, approved(),)
-                .is_ok()
-        );
-
-        let mut approval = approved();
-        approval.post_cutover_backup_verified = false;
-        assert!(
-            validate_high_memo_retirement_config(&configured(), 24, 500, 1000, 1, 1, approval,).is_err()
-        );
-
-        let mut approval = approved();
-        approval.restore_rehearsed = false;
         assert!(validate_high_memo_retirement_config(
             &configured(),
             24,
@@ -529,16 +517,37 @@ mod tests {
             1000,
             1,
             1,
-            approval,
+            approved(),
         )
-        .is_err());
+        .is_ok());
 
+        let mut approval = approved();
+        approval.post_cutover_backup_verified = false;
         assert!(
-            validate_high_memo_retirement_config(&configured(), 0, 500, 1000, 1, 1, approved(),)
+            validate_high_memo_retirement_config(&configured(), 24, 500, 1000, 1, 1, approval,)
                 .is_err()
         );
+
+        let mut approval = approved();
+        approval.restore_rehearsed = false;
         assert!(
-            validate_high_memo_retirement_config(&configured(), 24, 500, 0, 1, 1, approved(),).is_err()
+            validate_high_memo_retirement_config(&configured(), 24, 500, 1000, 1, 1, approval,)
+                .is_err()
+        );
+
+        assert!(validate_high_memo_retirement_config(
+            &configured(),
+            0,
+            500,
+            1000,
+            1,
+            1,
+            approved(),
+        )
+        .is_err());
+        assert!(
+            validate_high_memo_retirement_config(&configured(), 24, 500, 0, 1, 1, approved(),)
+                .is_err()
         );
         assert!(
             validate_high_memo_retirement_config(&configured(), 24, 0, 1000, 1, 1, approved(),)
