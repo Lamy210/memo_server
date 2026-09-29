@@ -273,17 +273,16 @@ pub async fn run_encrypted_high_memo_cutover(
         return release_pre_switch(permit, error).await;
     }
 
-    let (legacy_cache_purge, encrypted_cache_purge) =
-        match purge_cutover_cache_and_legacy_search(
-            legacy_cache.as_ref(),
-            legacy_search.as_ref(),
-            cache_scan_count,
-        )
-        .await
-        {
-            Ok(stats) => stats,
-            Err(error) => return release_pre_switch(permit, error).await,
-        };
+    let (legacy_cache_purge, encrypted_cache_purge) = match purge_cutover_cache_and_legacy_search(
+        legacy_cache.as_ref(),
+        legacy_search.as_ref(),
+        cache_scan_count,
+    )
+    .await
+    {
+        Ok(stats) => stats,
+        Err(error) => return release_pre_switch(permit, error).await,
+    };
 
     if let Err(error) = permit.assert_still_enforced().await {
         return Err(fail_closed_after_destructive_pre_switch(
