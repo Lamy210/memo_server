@@ -159,9 +159,7 @@ pub enum ConfigError {
     InvalidAuthMode(String),
     #[error("{0} is required when AUTH_MODE=jwt")]
     MissingJwtSetting(&'static str),
-    #[error(
-        "AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`"
-    )]
+    #[error("AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`")]
     InvalidJwtSignatureMode(String),
 }
 
