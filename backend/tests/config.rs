@@ -754,7 +754,6 @@ fn accepts_complete_jwt_resource_server_configuration() {
     );
 }
 
-
 #[test]
 fn jwt_signature_mode_supports_explicit_migration_and_es384_target() {
     for (value, expected) in [
