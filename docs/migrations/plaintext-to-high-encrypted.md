@@ -161,6 +161,7 @@ cargo run --locked --features aws-kms-memo,aws-kms-search --bin verify_high_memo
   --confirm-post-cutover-backup-verified \
   --confirm-restore-rehearsed \
   --minimum-soak-hours 168 \
+  --encrypted-page-size 500 \
   --cache-scan-count 1000 \
   --expected-memo-route-generation <encrypted-generation> \
   --expected-search-route-generation <protected-generation>
@@ -174,10 +175,12 @@ The verifier is non-destructive. Under the maintenance barrier it requires:
 4. the configured minimum soak duration,
 5. AWS KMS historical/current memo key-ring preflight,
 6. protected search runtime preflight,
-7. exact projection outbox count of zero,
-8. zero exact legacy plaintext Redis memo keys,
-9. exact legacy Manticore `memos` document count of zero,
-10. final route/maintenance revalidation before release.
+7. a bounded full traversal of `memos_encrypted_v1` where every envelope validates structurally, decrypts successfully, and matches its envelope memo/owner/version identity,
+8. exact encrypted traversal count equality before/after the scan,
+9. exact projection outbox count of zero,
+10. zero exact legacy plaintext Redis memo keys,
+11. exact legacy Manticore `memos` document count of zero,
+12. final route/maintenance revalidation before release.
 
 The backup and restore-rehearsal flags are operator attestations. This verifier does not inspect backup media or prove restoration integrity itself.
 
