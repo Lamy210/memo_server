@@ -6,7 +6,9 @@ use crate::{
     application::{
         crypto_migration_batch::validate_page_size,
         crypto_search_reindex::{HighSearchReindexRunner, HighSearchReindexStats},
-        high_memo_routing::{HighMemoDataRoute, HighMemoDataRouteSnapshot},
+        high_memo_routing::{
+            HighMemoDataRoute, HighMemoDataRouteSnapshot, HighMemoPlaintextRetirementState,
+        },
         high_search_routing::{HighSearchQueryRoute, HighSearchQueryRouteSnapshot},
     },
     error::{AppError, AppResult},
@@ -32,6 +34,11 @@ pub trait HighSearchOfflineWindowPermit: Send + Sync {
         expected: HighMemoDataRouteSnapshot,
         target: HighMemoDataRoute,
     ) -> AppResult<HighMemoDataRouteSnapshot>;
+    async fn current_plaintext_retirement_state(
+        &self,
+    ) -> AppResult<HighMemoPlaintextRetirementState>;
+    async fn begin_plaintext_retirement(&self) -> AppResult<HighMemoPlaintextRetirementState>;
+    async fn finish_plaintext_retirement(&self) -> AppResult<HighMemoPlaintextRetirementState>;
     async fn release(self: Box<Self>) -> AppResult<()>;
 }
 
@@ -363,6 +370,20 @@ mod tests {
                     expected.generation + 1
                 },
             })
+        }
+
+        async fn current_plaintext_retirement_state(
+            &self,
+        ) -> AppResult<HighMemoPlaintextRetirementState> {
+            Ok(HighMemoPlaintextRetirementState::Available)
+        }
+
+        async fn begin_plaintext_retirement(&self) -> AppResult<HighMemoPlaintextRetirementState> {
+            Ok(HighMemoPlaintextRetirementState::InProgress)
+        }
+
+        async fn finish_plaintext_retirement(&self) -> AppResult<HighMemoPlaintextRetirementState> {
+            Ok(HighMemoPlaintextRetirementState::Retired)
         }
 
         async fn release(self: Box<Self>) -> AppResult<()> {
