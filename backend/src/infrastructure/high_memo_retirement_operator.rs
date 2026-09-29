@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     application::{
         crypto::HighMemoCryptography,
@@ -143,6 +145,46 @@ struct RetirementVerificationResources<'a> {
     cryptography: &'a dyn HighMemoCryptography,
 }
 
+pub(crate) struct PreparedHighMemoRetirementVerification {
+    cryptography: Arc<dyn HighMemoCryptography>,
+    cache: RedisCache,
+    legacy_search: ManticoreClient,
+    recovery: MongoHighSearchMaintenanceRecovery,
+}
+
+pub(crate) async fn prepare_high_memo_retirement_verification(
+    config: &AppConfig,
+) -> AppResult<PreparedHighMemoRetirementVerification> {
+    // Network/runtime preflight intentionally completes before the maintenance
+    // window is acquired so KMS or search dependency latency does not extend
+    // the traffic freeze.
+    let runtime = HighMemoStagingRuntimeHandle::build(&config.high_memo_crypto).await?;
+    let cryptography = runtime.request_cryptography().ok_or_else(|| {
+        AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness could not obtain the configured request cryptography runtime"
+                .into(),
+        )
+    })?;
+    let search_runtime =
+        HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri).await?;
+    if search_runtime.query_reader().is_none() {
+        return Err(AppError::ServiceUnavailable(
+            "MEMO-HIGH-1 retirement readiness could not obtain the protected search runtime".into(),
+        ));
+    }
+
+    Ok(PreparedHighMemoRetirementVerification {
+        cryptography,
+        cache: RedisCache::new(&config.redis_uri)?,
+        legacy_search: ManticoreClient::new(&config.search_uri)?,
+        recovery: MongoHighSearchMaintenanceRecovery::connect(
+            &config.authoritative_uri,
+            &config.mongodb_database,
+        )
+        .await?,
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 struct RetirementVerificationRequest {
     minimum_soak_hours: u64,
@@ -172,13 +214,14 @@ pub async fn verify_high_memo_retirement_readiness(
         approval,
     )?;
 
+    let prepared = prepare_high_memo_retirement_verification(config).await?;
     let source =
         MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?;
     let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
     let permit = guard.acquire_offline_window().await?;
 
     let result = verify_high_memo_retirement_readiness_under_permit(
-        config,
+        &prepared,
         &source,
         permit.as_ref(),
         minimum_soak_hours,
@@ -186,7 +229,6 @@ pub async fn verify_high_memo_retirement_readiness(
         cache_scan_count,
         expected_memo_generation,
         expected_search_generation,
-        approval,
         HighMemoPlaintextRetirementState::Available,
     )
     .await;
@@ -195,7 +237,7 @@ pub async fn verify_high_memo_retirement_readiness(
 }
 
 pub(crate) async fn verify_high_memo_retirement_readiness_under_permit(
-    config: &AppConfig,
+    prepared: &PreparedHighMemoRetirementVerification,
     source: &MongoDbAuthoritativeStore,
     permit: &dyn HighSearchOfflineWindowPermit,
     minimum_soak_hours: u64,
@@ -203,51 +245,15 @@ pub(crate) async fn verify_high_memo_retirement_readiness_under_permit(
     cache_scan_count: usize,
     expected_memo_generation: i64,
     expected_search_generation: i64,
-    approval: HighMemoRetirementApproval,
     expected_plaintext_retirement_state: HighMemoPlaintextRetirementState,
 ) -> AppResult<HighMemoRetirementReadinessReport> {
-    validate_high_memo_retirement_config(
-        config,
-        minimum_soak_hours,
-        encrypted_page_size,
-        cache_scan_count,
-        expected_memo_generation,
-        expected_search_generation,
-        approval,
-    )?;
-
-    // Preflight the entire configured historical/current KMS key ring and
-    // protected search runtime before destructive plaintext work.
-    let runtime = HighMemoStagingRuntimeHandle::build(&config.high_memo_crypto).await?;
-    let cryptography = runtime.request_cryptography().ok_or_else(|| {
-        AppError::ServiceUnavailable(
-            "MEMO-HIGH-1 retirement readiness could not obtain the configured request cryptography runtime"
-                .into(),
-        )
-    })?;
-    let search_runtime =
-        HighSearchRuntimeHandle::build(&config.high_search, &config.search_uri).await?;
-    if search_runtime.query_reader().is_none() {
-        return Err(AppError::ServiceUnavailable(
-            "MEMO-HIGH-1 retirement readiness could not obtain the protected search runtime".into(),
-        ));
-    }
-
-    let cache = RedisCache::new(&config.redis_uri)?;
-    let legacy_search = ManticoreClient::new(&config.search_uri)?;
-    let recovery = MongoHighSearchMaintenanceRecovery::connect(
-        &config.authoritative_uri,
-        &config.mongodb_database,
-    )
-    .await?;
-
     verify_under_permit(
         RetirementVerificationResources {
             source,
-            cache: &cache,
-            legacy_search: &legacy_search,
-            recovery: &recovery,
-            cryptography: cryptography.as_ref(),
+            cache: &prepared.cache,
+            legacy_search: &prepared.legacy_search,
+            recovery: &prepared.recovery,
+            cryptography: prepared.cryptography.as_ref(),
         },
         permit,
         RetirementVerificationRequest {
