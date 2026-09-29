@@ -33,6 +33,15 @@ impl ProjectionIntent {
 }
 
 #[async_trait]
+pub trait LegacyMemoPlaintextRetirementInspector: Send + Sync {
+    /// Exact count of plaintext authoritative memo documents.
+    ///
+    /// Callers must hold the shared maintenance window so the count can be
+    /// used as a stable dry-run retirement plan input.
+    async fn count_plaintext_memos_for_retirement(&self) -> AppResult<u64>;
+}
+
+#[async_trait]
 pub trait HighEncryptedMemoIntegritySource: Send + Sync {
     async fn count_encrypted_memos_for_integrity(&self) -> AppResult<u64>;
 
