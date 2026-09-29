@@ -740,6 +740,10 @@ fn accepts_complete_jwt_resource_server_configuration() {
             "AUTH_JWKS_URI".to_string(),
             "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
         ),
+        (
+            "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS".to_string(),
+            "900".to_string(),
+        ),
     ])
     .expect("complete JWT resource server configuration should be valid");
 
@@ -750,8 +754,91 @@ fn accepts_complete_jwt_resource_server_configuration() {
             audience: "memo-api".to_string(),
             jwks_uri: "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
             signature_mode: JwtSignatureMode::Rs256,
+            max_access_token_lifetime_seconds: 900,
         }
     );
+}
+
+#[test]
+fn jwt_mode_requires_explicit_access_token_lifetime_policy() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "jwt".to_string()),
+        (
+            "AUTH_ISSUER".to_string(),
+            "https://auth.memo.example.com".to_string(),
+        ),
+        ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+        (
+            "AUTH_JWKS_URI".to_string(),
+            "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+        ),
+    ])
+    .expect_err("JWT mode must require an explicit maximum access-token lifetime");
+
+    assert_eq!(
+        error,
+        ConfigError::MissingJwtSetting("AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS")
+    );
+}
+
+#[test]
+fn jwt_access_token_lifetime_policy_is_bounded() {
+    for invalid in ["0", "59", "3601", "not-a-number"] {
+        let error = AppConfig::from_vars([
+            ("AUTH_MODE".to_string(), "jwt".to_string()),
+            (
+                "AUTH_ISSUER".to_string(),
+                "https://auth.memo.example.com".to_string(),
+            ),
+            ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+            (
+                "AUTH_JWKS_URI".to_string(),
+                "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+            ),
+            (
+                "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS".to_string(),
+                invalid.to_string(),
+            ),
+        ])
+        .expect_err("JWT access-token lifetime must stay within the resource-server policy");
+
+        assert_eq!(
+            error,
+            ConfigError::InvalidJwtAccessTokenMaxLifetime(invalid.to_string())
+        );
+    }
+
+    for valid in ["60", "900", "3600"] {
+        let config = AppConfig::from_vars([
+            ("AUTH_MODE".to_string(), "jwt".to_string()),
+            (
+                "AUTH_ISSUER".to_string(),
+                "https://auth.memo.example.com".to_string(),
+            ),
+            ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+            (
+                "AUTH_JWKS_URI".to_string(),
+                "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+            ),
+            (
+                "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS".to_string(),
+                valid.to_string(),
+            ),
+        ])
+        .expect("bounded JWT access-token lifetime should be accepted");
+
+        let AuthConfig::Jwt {
+            max_access_token_lifetime_seconds,
+            ..
+        } = config.auth
+        else {
+            panic!("JWT auth configuration expected");
+        };
+        assert_eq!(
+            max_access_token_lifetime_seconds,
+            valid.parse::<u64>().unwrap()
+        );
+    }
 }
 
 #[test]
@@ -794,6 +881,10 @@ fn jwt_signature_mode_supports_explicit_migration_and_es384_target() {
             (
                 "AUTH_JWKS_URI".to_string(),
                 "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+            ),
+            (
+                "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS".to_string(),
+                "900".to_string(),
             ),
             ("AUTH_JWT_SIGNATURE_MODE".to_string(), value.to_string()),
         ])
