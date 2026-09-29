@@ -147,6 +147,26 @@ pub trait LegacyMemoPlaintextCacheMaintenance: Send + Sync {
     ) -> AppResult<LegacyMemoCacheSweepStats>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HighMemoCacheSweepStats {
+    pub scanned_candidates: u64,
+    pub encrypted_keys: u64,
+    pub deleted_keys: u64,
+}
+
+#[async_trait]
+pub trait HighMemoCiphertextCacheMaintenance: Send + Sync {
+    async fn inspect_high_encrypted_memo_cache(
+        &self,
+        scan_count: usize,
+    ) -> AppResult<HighMemoCacheSweepStats>;
+
+    async fn purge_high_encrypted_memo_cache(
+        &self,
+        scan_count: usize,
+    ) -> AppResult<HighMemoCacheSweepStats>;
+}
+
 #[async_trait]
 pub trait MemoCache: Send + Sync {
     async fn get_memo(&self, owner_partition: Uuid, memo_id: Uuid) -> AppResult<Option<Memo>>;

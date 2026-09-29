@@ -587,6 +587,13 @@ impl MongoDbAuthoritativeStore {
             .map_err(|error| mongo_error("count MongoDB encrypted migration memos", error))
     }
 
+    pub(crate) async fn count_projection_intents_for_cutover(&self) -> AppResult<u64> {
+        self.projection_intents
+            .count_documents(doc! {})
+            .await
+            .map_err(|error| mongo_error("count MongoDB projection intents for cutover", error))
+    }
+
     async fn save_encrypted_transaction(
         &self,
         envelope: &HighEncryptedMemoEnvelope,

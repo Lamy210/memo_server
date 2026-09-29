@@ -89,7 +89,7 @@ pub async fn run_high_memo_migration(
     finish_guarded_migration(result, permit).await
 }
 
-async fn run_under_permit(
+pub(crate) async fn run_under_permit(
     source: Arc<dyn PlaintextMemoMigrationSource>,
     staging: Arc<dyn HighEncryptedMemoStagingStore>,
     staging_admin: Arc<dyn HighEncryptedMemoStagingAdmin>,

@@ -14,13 +14,22 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::{LegacyMemoCacheSweepStats, LegacyMemoPlaintextCacheMaintenance, MemoCache};
+use super::ports::{
+    HighMemoCacheSweepStats, HighMemoCiphertextCacheMaintenance, LegacyMemoCacheSweepStats,
+    LegacyMemoPlaintextCacheMaintenance, MemoCache,
+};
 
 const LEGACY_CACHE_NAMESPACE: &str = "memo";
 const HIGH_CACHE_NAMESPACE: &str = "memo:high:v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LegacyMemoCacheSweepMode {
+    Inspect,
+    Purge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HighMemoCacheSweepMode {
     Inspect,
     Purge,
 }
@@ -208,6 +217,78 @@ impl RedisCache {
         format!("{HIGH_CACHE_NAMESPACE}:{owner_partition}:{memo_id}")
     }
 
+    fn parse_high_cache_key(key: &str) -> Option<(uuid::Uuid, uuid::Uuid)> {
+        let suffix = key.strip_prefix(HIGH_CACHE_NAMESPACE)?.strip_prefix(':')?;
+        let mut parts = suffix.split(':');
+        let owner_partition = uuid::Uuid::parse_str(parts.next()?).ok()?;
+        let memo_id = uuid::Uuid::parse_str(parts.next()?).ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((owner_partition, memo_id))
+    }
+
+    async fn sweep_high_encrypted_memo_cache(
+        &self,
+        scan_count: usize,
+        mode: HighMemoCacheSweepMode,
+    ) -> AppResult<HighMemoCacheSweepStats> {
+        if scan_count == 0 || scan_count > 10_000 {
+            return Err(AppError::ValidationError(
+                "HIGH encrypted memo cache scan_count must be in 1..=10000".into(),
+            ));
+        }
+
+        let mut connection = self.connection().await?;
+        let mut cursor = 0_u64;
+        let mut stats = HighMemoCacheSweepStats::default();
+
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(format!("{HIGH_CACHE_NAMESPACE}:*"))
+                .arg("COUNT")
+                .arg(scan_count)
+                .query_async(&mut connection)
+                .await
+                .map_err(|error| {
+                    AppError::DatabaseError(format!(
+                        "Failed to scan HIGH encrypted memo cache namespace: {error}"
+                    ))
+                })?;
+
+            stats.scanned_candidates = stats.scanned_candidates.saturating_add(keys.len() as u64);
+            let encrypted_keys = keys
+                .into_iter()
+                .filter(|key| Self::parse_high_cache_key(key).is_some())
+                .collect::<Vec<_>>();
+            stats.encrypted_keys = stats
+                .encrypted_keys
+                .saturating_add(encrypted_keys.len() as u64);
+
+            if matches!(mode, HighMemoCacheSweepMode::Purge) && !encrypted_keys.is_empty() {
+                let deleted: u64 = redis::cmd("UNLINK")
+                    .arg(&encrypted_keys)
+                    .query_async(&mut connection)
+                    .await
+                    .map_err(|error| {
+                        AppError::DatabaseError(format!(
+                            "Failed to purge HIGH encrypted memo cache keys: {error}"
+                        ))
+                    })?;
+                stats.deleted_keys = stats.deleted_keys.saturating_add(deleted);
+            }
+
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        Ok(stats)
+    }
+
     fn validate_cached_memo(
         owner_partition: uuid::Uuid,
         memo_id: uuid::Uuid,
@@ -341,6 +422,25 @@ impl LegacyMemoPlaintextCacheMaintenance for RedisCache {
 }
 
 #[async_trait]
+impl HighMemoCiphertextCacheMaintenance for RedisCache {
+    async fn inspect_high_encrypted_memo_cache(
+        &self,
+        scan_count: usize,
+    ) -> AppResult<HighMemoCacheSweepStats> {
+        self.sweep_high_encrypted_memo_cache(scan_count, HighMemoCacheSweepMode::Inspect)
+            .await
+    }
+
+    async fn purge_high_encrypted_memo_cache(
+        &self,
+        scan_count: usize,
+    ) -> AppResult<HighMemoCacheSweepStats> {
+        self.sweep_high_encrypted_memo_cache(scan_count, HighMemoCacheSweepMode::Purge)
+            .await
+    }
+}
+
+#[async_trait]
 impl MemoCache for RedisCache {
     async fn get_memo(
         &self,
@@ -441,6 +541,32 @@ mod tests {
             RedisCache::legacy_cache_key(envelope.owner_partition, envelope.memo_id),
             format!("memo:{}:{}", envelope.owner_partition, envelope.memo_id)
         );
+    }
+
+    #[test]
+    fn high_cache_key_parser_accepts_only_exact_encrypted_shape() {
+        let owner = uuid::Uuid::new_v4();
+        let memo_id = uuid::Uuid::new_v4();
+        let key = RedisCache::high_cache_key(owner, memo_id);
+
+        assert_eq!(
+            RedisCache::parse_high_cache_key(&key),
+            Some((owner, memo_id))
+        );
+
+        for invalid in [
+            format!("memo:{owner}:{memo_id}"),
+            format!("memo:high:v1:{owner}:{memo_id}:extra"),
+            format!("memo:high:v1:{owner}"),
+            "memo:high:v1:not-a-uuid:not-a-uuid".to_string(),
+            "memo:high:v2:other".to_string(),
+        ] {
+            assert_eq!(
+                RedisCache::parse_high_cache_key(&invalid),
+                None,
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

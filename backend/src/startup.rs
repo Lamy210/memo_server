@@ -133,9 +133,10 @@ impl Application {
                     cryptography,
                 ));
 
-                // The encrypted collection owns a distinct durable outbox.
-                // Never feed those intents through the legacy authoritative
-                // reconciler, or retries could hydrate the wrong generation.
+                // Legacy and encrypted authoritative adapters share the durable
+                // MongoDB projection-intent collection. Route-scoped reconcilers
+                // provide ownership: only the reconciler for the admitted memo
+                // route may consume an intent, preventing cross-generation hydration.
                 let encrypted_reconciler = ProjectionReconciler::new(
                     encrypted_authoritative.clone(),
                     encrypted_cache.clone(),
