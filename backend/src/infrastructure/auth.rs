@@ -7,7 +7,7 @@ use chrono::Utc;
 use jsonwebtoken::{
     decode, decode_header,
     errors::{Error as JwtError, ErrorKind},
-    jwk::JwkSet,
+    jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyOperations, PublicKeyUse},
     Algorithm, DecodingKey, Validation,
 };
 use reqwest::Client;
@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
-    config::AuthConfig,
+    config::{AuthConfig, JwtSignatureMode},
     error::{AppError, AppResult},
 };
 
@@ -48,7 +48,13 @@ impl AuthService {
                 issuer,
                 audience,
                 jwks_uri,
-            } => AuthBackend::Jwt(Box::new(JwtVerifier::new(issuer, audience, jwks_uri))),
+                signature_mode,
+            } => AuthBackend::Jwt(Box::new(JwtVerifier::new(
+                issuer,
+                audience,
+                jwks_uri,
+                signature_mode,
+            ))),
         };
 
         Self { backend }
@@ -97,17 +103,24 @@ struct JwtVerifier {
     issuer: String,
     audience: String,
     jwks_uri: String,
+    signature_mode: JwtSignatureMode,
     jwks: RwLock<Option<CachedJwks>>,
     refresh_state: Mutex<RefreshState>,
 }
 
 impl JwtVerifier {
-    fn new(issuer: String, audience: String, jwks_uri: String) -> Self {
+    fn new(
+        issuer: String,
+        audience: String,
+        jwks_uri: String,
+        signature_mode: JwtSignatureMode,
+    ) -> Self {
         Self {
             client: Client::new(),
             issuer,
             audience,
             jwks_uri,
+            signature_mode,
             jwks: RwLock::new(None),
             refresh_state: Mutex::new(RefreshState::default()),
         }
@@ -117,8 +130,11 @@ impl JwtVerifier {
         let header = decode_header(token)
             .map_err(|_| AppError::Unauthorized("Access token header is invalid".into()))?;
 
-        if header.alg != Algorithm::RS256 {
-            return Err(AppError::Unauthorized("Access token must use RS256".into()));
+        let algorithm = header.alg;
+        if !jwt_algorithm_allowed(self.signature_mode, algorithm) {
+            return Err(AppError::Unauthorized(
+                "Access token signature algorithm is not allowed".into(),
+            ));
         }
 
         let kid = header
@@ -126,14 +142,14 @@ impl JwtVerifier {
             .as_deref()
             .ok_or_else(|| AppError::Unauthorized("Access token is missing kid".into()))?;
 
-        let key = self.decoding_key(kid, false).await?;
-        match self.decode_claims(token, &key) {
+        let key = self.decoding_key(kid, algorithm, false).await?;
+        match self.decode_claims(token, &key, algorithm) {
             Ok(identity) => Ok(identity),
             Err(ClaimsVerificationError::Jwt(error))
                 if matches!(error.kind(), ErrorKind::InvalidSignature) =>
             {
-                let refreshed_key = self.decoding_key(kid, true).await?;
-                self.decode_claims(token, &refreshed_key)
+                let refreshed_key = self.decoding_key(kid, algorithm, true).await?;
+                self.decode_claims(token, &refreshed_key, algorithm)
                     .map_err(|_| AppError::Unauthorized("Access token is invalid".into()))
             }
             Err(_) => Err(AppError::Unauthorized("Access token is invalid".into())),
@@ -144,8 +160,9 @@ impl JwtVerifier {
         &self,
         token: &str,
         key: &DecodingKey,
+        algorithm: Algorithm,
     ) -> Result<AuthenticatedIdentity, ClaimsVerificationError> {
-        let mut validation = Validation::new(Algorithm::RS256);
+        let mut validation = Validation::new(algorithm);
         validation.leeway = JWT_CLOCK_SKEW_SECONDS as u64;
         validation.validate_nbf = true;
         validation.set_audience(&[self.audience.as_str()]);
@@ -156,7 +173,12 @@ impl JwtVerifier {
         claims.try_into()
     }
 
-    async fn decoding_key(&self, kid: &str, force_refresh: bool) -> AppResult<DecodingKey> {
+    async fn decoding_key(
+        &self,
+        kid: &str,
+        algorithm: Algorithm,
+        force_refresh: bool,
+    ) -> AppResult<DecodingKey> {
         let mut set = self.jwks(force_refresh).await?;
 
         if set.find(kid).is_none() && !force_refresh {
@@ -166,6 +188,7 @@ impl JwtVerifier {
         let jwk = set.find(kid).ok_or_else(|| {
             AppError::Unauthorized("Access token signing key is not recognized".into())
         })?;
+        validate_jwk_for_algorithm(jwk, algorithm)?;
 
         DecodingKey::from_jwk(jwk).map_err(|error| {
             log::error!("Failed to build decoding key from JWKS: {error}");
@@ -267,6 +290,66 @@ impl JwtVerifier {
             AppError::ServiceUnavailable("Authentication key service returned invalid data".into())
         })
     }
+}
+
+fn jwt_algorithm_allowed(mode: JwtSignatureMode, algorithm: Algorithm) -> bool {
+    match mode {
+        JwtSignatureMode::Rs256 => algorithm == Algorithm::RS256,
+        JwtSignatureMode::Rs256Es384 => {
+            matches!(algorithm, Algorithm::RS256 | Algorithm::ES384)
+        }
+        JwtSignatureMode::Es384 => algorithm == Algorithm::ES384,
+    }
+}
+
+fn validate_jwk_for_algorithm(jwk: &Jwk, algorithm: Algorithm) -> AppResult<()> {
+    if let Some(declared) = jwk.common.key_algorithm.clone() {
+        let declared = Algorithm::try_from(declared).map_err(|_| {
+            AppError::ServiceUnavailable(
+                "Authentication JWKS contains an unsupported key algorithm".into(),
+            )
+        })?;
+        if declared != algorithm {
+            return Err(AppError::ServiceUnavailable(
+                "Authentication JWKS key algorithm does not match the access token".into(),
+            ));
+        }
+    }
+
+    if let Some(public_key_use) = &jwk.common.public_key_use {
+        if !matches!(public_key_use, PublicKeyUse::Signature) {
+            return Err(AppError::ServiceUnavailable(
+                "Authentication JWKS key is not intended for signature verification".into(),
+            ));
+        }
+    }
+
+    if let Some(operations) = &jwk.common.key_operations {
+        if !operations
+            .iter()
+            .any(|operation| matches!(operation, KeyOperations::Verify))
+        {
+            return Err(AppError::ServiceUnavailable(
+                "Authentication JWKS key does not permit signature verification".into(),
+            ));
+        }
+    }
+
+    let key_matches = match (algorithm, &jwk.algorithm) {
+        (Algorithm::RS256, AlgorithmParameters::RSA(_)) => true,
+        (Algorithm::ES384, AlgorithmParameters::EllipticCurve(parameters)) => {
+            parameters.curve == EllipticCurve::P384
+        }
+        _ => false,
+    };
+    if !key_matches {
+        return Err(AppError::ServiceUnavailable(
+            "Authentication JWKS key type or curve does not match the access token algorithm"
+                .into(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn forced_refresh_allowed(last_attempt: Option<Instant>, now: Instant) -> bool {
