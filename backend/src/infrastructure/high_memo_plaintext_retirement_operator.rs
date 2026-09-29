@@ -70,59 +70,59 @@ pub async fn plan_high_memo_plaintext_retirement(
         MongoDbAuthoritativeStore::new(&config.authoritative_uri, &config.mongodb_database).await?;
     let guard = MongoHighSearchMaintenanceGuard::new(source.database_handle()).await?;
     let permit = guard.acquire_offline_window().await?;
-    let retirement_state = permit.current_plaintext_retirement_state().await?;
 
-    let result = match retirement_state {
-        HighMemoPlaintextRetirementState::Retired => {
-            let plaintext_documents = source.count_plaintext_memos_for_retirement().await?;
-            if plaintext_documents != 0 {
-                Err(AppError::ServiceUnavailable(format!(
-                    "MEMO-HIGH-1 retirement state is retired but {plaintext_documents} plaintext memo document(s) remain"
-                )))
-            } else {
+    let result: AppResult<HighMemoPlaintextRetirementPlan> = async {
+        let retirement_state = permit.current_plaintext_retirement_state().await?;
+
+        match retirement_state {
+            HighMemoPlaintextRetirementState::Retired => {
+                let plaintext_documents = source.count_plaintext_memos_for_retirement().await?;
+                if plaintext_documents != 0 {
+                    Err(AppError::ServiceUnavailable(format!(
+                        "MEMO-HIGH-1 retirement state is retired but {plaintext_documents} plaintext memo document(s) remain"
+                    )))
+                } else {
+                    Ok(HighMemoPlaintextRetirementPlan {
+                        retirement_state,
+                        plaintext_documents,
+                        readiness: None,
+                    })
+                }
+            }
+            HighMemoPlaintextRetirementState::Available
+            | HighMemoPlaintextRetirementState::InProgress => {
+                let readiness = verify_high_memo_retirement_readiness_under_permit(
+                    config,
+                    &source,
+                    permit.as_ref(),
+                    minimum_soak_hours,
+                    encrypted_page_size,
+                    cache_scan_count,
+                    expected_memo_generation,
+                    expected_search_generation,
+                    approval,
+                    retirement_state,
+                )
+                .await?;
+                let plaintext_documents = source.count_plaintext_memos_for_retirement().await?;
+
+                permit.assert_still_enforced().await?;
+                let final_state = permit.current_plaintext_retirement_state().await?;
+                if final_state != retirement_state {
+                    return Err(AppError::ServiceUnavailable(format!(
+                        "MEMO-HIGH-1 plaintext retirement state changed during planning: expected {retirement_state}, observed {final_state}"
+                    )));
+                }
+
                 Ok(HighMemoPlaintextRetirementPlan {
                     retirement_state,
                     plaintext_documents,
-                    readiness: None,
+                    readiness: Some(readiness),
                 })
             }
         }
-        HighMemoPlaintextRetirementState::Available
-        | HighMemoPlaintextRetirementState::InProgress => {
-            let readiness = verify_high_memo_retirement_readiness_under_permit(
-                config,
-                &source,
-                permit.as_ref(),
-                minimum_soak_hours,
-                encrypted_page_size,
-                cache_scan_count,
-                expected_memo_generation,
-                expected_search_generation,
-                approval,
-                retirement_state,
-            )
-            .await?;
-            let plaintext_documents = source.count_plaintext_memos_for_retirement().await?;
-
-            permit.assert_still_enforced().await?;
-            let final_state = permit.current_plaintext_retirement_state().await?;
-            if final_state != retirement_state {
-                return finish_plan(
-                    Err(AppError::ServiceUnavailable(format!(
-                        "MEMO-HIGH-1 plaintext retirement state changed during planning: expected {retirement_state}, observed {final_state}"
-                    ))),
-                    permit,
-                )
-                .await;
-            }
-
-            Ok(HighMemoPlaintextRetirementPlan {
-                retirement_state,
-                plaintext_documents,
-                readiness: Some(readiness),
-            })
-        }
-    };
+    }
+    .await;
 
     finish_plan(result, permit).await
 }
