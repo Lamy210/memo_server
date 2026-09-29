@@ -33,18 +33,12 @@ impl ProjectionIntent {
 }
 
 #[async_trait]
-pub trait LegacyMemoPlaintextRetirementAdmin: Send + Sync {
+pub trait LegacyMemoPlaintextRetirementInspector: Send + Sync {
     /// Exact count of plaintext authoritative memo documents.
     ///
-    /// Callers must hold the shared maintenance window.
+    /// Callers must hold the shared maintenance window so the count can be
+    /// used as a stable dry-run retirement plan input.
     async fn count_plaintext_memos_for_retirement(&self) -> AppResult<u64>;
-
-    /// Irreversibly delete all plaintext authoritative memo documents.
-    ///
-    /// This intentionally preserves the collection/index structure. Callers
-    /// must have entered the durable plaintext-retirement `in_progress` state
-    /// while holding the shared maintenance window before invoking it.
-    async fn purge_plaintext_memos_for_retirement(&self) -> AppResult<u64>;
 }
 
 #[async_trait]
