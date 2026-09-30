@@ -594,9 +594,9 @@ fn validate_access_token_claims(
     )?;
 
     let user_id =
-        Uuid::parse_str(&claims.sub).map_err(|_| ClaimsVerificationError::InvalidIdentity)?;
+        Uuid::parse_str(&claims.sub).map_err(|_| ClaimsVerificationError::InvalidClaims)?;
     if claims.iat > now + JWT_CLOCK_SKEW_SECONDS {
-        return Err(ClaimsVerificationError::InvalidIdentity);
+        return Err(ClaimsVerificationError::InvalidClaims);
     }
 
     let lifetime = claims
@@ -604,9 +604,9 @@ fn validate_access_token_claims(
         .checked_sub(claims.iat)
         .filter(|lifetime| *lifetime > 0)
         .and_then(|lifetime| u64::try_from(lifetime).ok())
-        .ok_or(ClaimsVerificationError::InvalidIdentity)?;
+        .ok_or(ClaimsVerificationError::InvalidClaims)?;
     if lifetime > max_access_token_lifetime_seconds {
-        return Err(ClaimsVerificationError::InvalidIdentity);
+        return Err(ClaimsVerificationError::InvalidClaims);
     }
 
     Ok(AuthenticatedIdentity { user_id })
@@ -627,14 +627,14 @@ fn validate_access_token_profile_claims(
     if client_id_valid && jti_valid {
         Ok(())
     } else {
-        Err(ClaimsVerificationError::InvalidIdentity)
+        Err(ClaimsVerificationError::InvalidClaims)
     }
 }
 
 #[derive(Debug)]
 enum ClaimsVerificationError {
     Jwt(JwtError),
-    InvalidIdentity,
+    InvalidClaims,
 }
 
 impl From<JwtError> for ClaimsVerificationError {
@@ -796,7 +796,7 @@ mod tests {
     fn future_issued_at_is_rejected() {
         assert!(matches!(
             verifier().decode_claims(FUTURE_IAT_TOKEN, &rsa_key(), Algorithm::RS256),
-            Err(ClaimsVerificationError::InvalidIdentity)
+            Err(ClaimsVerificationError::InvalidClaims)
         ));
     }
 
@@ -844,7 +844,7 @@ mod tests {
                     900,
                     now,
                 ),
-                Err(ClaimsVerificationError::InvalidIdentity)
+                Err(ClaimsVerificationError::InvalidClaims)
             ));
         }
     }
@@ -903,7 +903,7 @@ mod tests {
                     900,
                     now,
                 ),
-                Err(ClaimsVerificationError::InvalidIdentity)
+                Err(ClaimsVerificationError::InvalidClaims)
             ));
         }
     }
@@ -925,7 +925,7 @@ mod tests {
     fn access_token_subject_must_be_uuid() {
         assert!(matches!(
             verifier().decode_claims(INVALID_SUBJECT_TOKEN, &rsa_key(), Algorithm::RS256),
-            Err(ClaimsVerificationError::InvalidIdentity)
+            Err(ClaimsVerificationError::InvalidClaims)
         ));
     }
 
