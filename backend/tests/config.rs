@@ -848,6 +848,7 @@ fn jwt_issuer_requires_https_without_userinfo_query_or_fragment() {
     for invalid in [
         "http://auth.memo.example.com",
         "https://user:secret@auth.memo.example.com",
+        "https://@auth.memo.example.com",
         "https://auth.memo.example.com?tenant=a",
         "https://auth.memo.example.com#issuer",
         "auth.memo.example.com",
@@ -899,6 +900,7 @@ fn jwt_jwks_uri_requires_https_without_userinfo_or_fragment() {
     for invalid in [
         "http://auth.memo.example.com/.well-known/jwks.json",
         "https://user:secret@auth.memo.example.com/.well-known/jwks.json",
+        "https://@auth.memo.example.com/.well-known/jwks.json",
         "https://auth.memo.example.com/.well-known/jwks.json#keys",
         "/.well-known/jwks.json",
     ] {
