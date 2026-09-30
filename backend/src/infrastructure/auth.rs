@@ -74,8 +74,20 @@ impl AuthService {
         development_user_id: Option<&str>,
     ) -> AppResult<AuthenticatedIdentity> {
         match &self.backend {
-            AuthBackend::Development => authenticate_development_user(development_user_id),
+            AuthBackend::Development => {
+                if bearer_token.is_some() {
+                    return Err(AppError::Unauthorized(
+                        "Authorization is not accepted in development auth mode".into(),
+                    ));
+                }
+                authenticate_development_user(development_user_id)
+            }
             AuthBackend::Jwt(verifier) => {
+                if development_user_id.is_some() {
+                    return Err(AppError::Unauthorized(
+                        "X-Development-User-Id is not accepted in JWT auth mode".into(),
+                    ));
+                }
                 let token = bearer_token.ok_or_else(|| {
                     AppError::Unauthorized("Bearer access token is required".into())
                 })?;
@@ -600,6 +612,17 @@ mod tests {
         AuthService::new(AuthConfig::Development).expect("development auth must initialize")
     }
 
+    fn jwt_service() -> AuthService {
+        AuthService::new(AuthConfig::Jwt {
+            issuer: TEST_ISSUER.to_string(),
+            audience: TEST_AUDIENCE.to_string(),
+            jwks_uri: "https://unused.test/.well-known/jwks.json".to_string(),
+            signature_mode: JwtSignatureMode::Rs256,
+            max_access_token_lifetime_seconds: 900,
+        })
+        .expect("JWT auth must initialize")
+    }
+
     fn verifier_with_mode(signature_mode: JwtSignatureMode) -> JwtVerifier {
         JwtVerifier::new(
             TEST_ISSUER.to_string(),
@@ -635,6 +658,30 @@ mod tests {
             .authenticate(None, None)
             .await
             .expect_err("missing development identity must be rejected");
+
+        assert!(matches!(error, AppError::Unauthorized(_)));
+    }
+
+    #[tokio::test]
+    async fn development_auth_rejects_bearer_credentials() {
+        let user_id = Uuid::new_v4();
+
+        let error = development_service()
+            .authenticate(Some("aaa.bbb.ccc"), Some(&user_id.to_string()))
+            .await
+            .expect_err("development mode must reject Authorization credentials");
+
+        assert!(matches!(error, AppError::Unauthorized(_)));
+    }
+
+    #[tokio::test]
+    async fn jwt_auth_rejects_development_identity_header_before_token_processing() {
+        let user_id = Uuid::new_v4();
+
+        let error = jwt_service()
+            .authenticate(Some("not-even-a-jwt"), Some(&user_id.to_string()))
+            .await
+            .expect_err("JWT mode must reject development identity credentials");
 
         assert!(matches!(error, AppError::Unauthorized(_)));
     }
