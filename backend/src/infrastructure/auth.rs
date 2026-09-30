@@ -512,12 +512,13 @@ fn validate_jwk_for_algorithm(jwk: &Jwk, algorithm: Algorithm) -> AppResult<()> 
 }
 
 fn jwks_cache_policy(max_access_token_lifetime_seconds: u64) -> JwksCachePolicy {
+    let access_token_lifetime = Duration::from_secs(max_access_token_lifetime_seconds);
     let token_validity_horizon = Duration::from_secs(
         max_access_token_lifetime_seconds.saturating_add(JWT_CLOCK_SKEW_SECONDS as u64),
     );
 
     JwksCachePolicy {
-        fresh_ttl: JWKS_CACHE_TTL_MAX.min(token_validity_horizon),
+        fresh_ttl: JWKS_CACHE_TTL_MAX.min(access_token_lifetime),
         stale_if_error_ttl: JWKS_STALE_IF_ERROR_TTL_MAX.min(token_validity_horizon),
     }
 }
@@ -972,7 +973,7 @@ mod tests {
         assert_eq!(
             jwks_cache_policy(60),
             JwksCachePolicy {
-                fresh_ttl: Duration::from_secs(90),
+                fresh_ttl: Duration::from_secs(60),
                 stale_if_error_ttl: Duration::from_secs(90),
             }
         );
