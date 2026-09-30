@@ -689,6 +689,9 @@ assets:
       jwks_uri_fragment: forbidden
       jwks_redirects: forbidden
       jwks_client_https_only: true
+      jwks_fresh_cache_max_seconds: 300
+      jwks_stale_if_error_max_seconds: 3600
+      jwks_cache_acceptance_bounded_by_access_token_lifetime_plus_clock_skew: true
       jwks_empty_set: rejected
       jwks_duplicate_kid: rejected
       jwks_published_kid_empty_or_oversized: rejected
