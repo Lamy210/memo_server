@@ -419,8 +419,7 @@ fn validate_access_token_type(
     }
 
     let accepted = token_type.is_some_and(|value| {
-        value.eq_ignore_ascii_case("at+jwt")
-            || value.eq_ignore_ascii_case("application/at+jwt")
+        value.eq_ignore_ascii_case("at+jwt") || value.eq_ignore_ascii_case("application/at+jwt")
     });
     if accepted {
         Ok(())
@@ -904,7 +903,9 @@ mod tests {
     #[test]
     fn access_token_type_policy_can_stage_rfc9068_without_breaking_legacy_issuers() {
         for token_type in [None, Some("JWT"), Some("id+jwt"), Some("anything")] {
-            assert!(validate_access_token_type(JwtAccessTokenTypeMode::LegacyAny, token_type).is_ok());
+            assert!(
+                validate_access_token_type(JwtAccessTokenTypeMode::LegacyAny, token_type).is_ok()
+            );
         }
 
         for token_type in [
