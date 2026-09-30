@@ -669,6 +669,11 @@ assets:
       access_token_max_bytes: 16384
       protected_header_segment_max_bytes: 4096
       token_bounds_enforced_before_jose_decode: true
+      credential_header_cardinality:
+        authorization: zero_or_one
+        development_user_id: zero_or_one
+        duplicate_behavior: unauthorized
+        invalid_header_bytes_behavior: unauthorized
       access_token_lifetime_policy:
         setting: AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS
         required_in_jwt_mode: true
