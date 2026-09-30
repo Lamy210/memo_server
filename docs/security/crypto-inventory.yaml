@@ -674,6 +674,14 @@ assets:
         development_user_id: zero_or_one
         duplicate_behavior: unauthorized
         invalid_header_bytes_behavior: unauthorized
+      credential_mode_exclusivity:
+        jwt:
+          accepted: authorization_bearer_only
+          development_user_id_behavior: unauthorized
+        development:
+          accepted: development_user_id_only
+          authorization_behavior: unauthorized
+        unused_credential_behavior: fail_closed
       access_token_lifetime_policy:
         setting: AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS
         required_in_jwt_mode: true
