@@ -68,7 +68,7 @@ The dedicated authentication service issues short-lived JWT access tokens. memo_
 | omitted / `legacy-any` | compatibility mode; `typ` is not a validation signal | current issuer compatibility |
 | `at-jwt` | `at+jwt` or `application/at+jwt`, ASCII case-insensitive | RFC 9068 access-token profile |
 
-The target is `at-jwt` after the dedicated authentication service issues explicitly typed access tokens. In strict mode, missing `typ`, generic `JWT`, ID-token types, and unrelated JWT media types are rejected before JWKS lookup. This is intended to prevent cross-JWT substitution; issuer/audience/signature/claim checks remain required as independent controls.
+The target is `at-jwt` after the dedicated authentication service issues RFC 9068-profile access tokens. In strict mode, missing `typ`, generic `JWT`, ID-token types, and unrelated JWT media types are rejected before JWKS lookup. After signature/issuer/audience validation, the resource server also requires the RFC 9068 mandatory `client_id` and `jti` claims to be present as non-empty strings; `iat`, `iss`, `aud`, `exp`, and `sub` were already mandatory. This keeps `legacy-any` compatible with the current issuer while making `at-jwt` a materially stricter profile rather than a header-only switch.
 
 Access tokens use the JWS Compact Serialization. memo_server rejects malformed compact tokens before JOSE decoding: the token must contain exactly three non-empty base64url segments, the total compact token is capped at 16 KiB, and the protected-header segment is capped at 4 KiB. These are memo_server resource limits, not claims that the JWS standard defines those byte limits.
 
@@ -84,6 +84,8 @@ Each token must have:
 | `sub` | UUID used as memo_server's user ID |
 | `iat` | required; must not be more than the existing clock-skew allowance in the future |
 | `exp` | required; must be after `iat` and `exp - iat` must not exceed `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS` |
+| `client_id` | when `AUTH_JWT_TYPE_MODE=at-jwt`, required as a non-empty string |
+| `jti` | when `AUTH_JWT_TYPE_MODE=at-jwt`, required as a non-empty string |
 | `nbf` | optional; validated when present |
 
 JWKS metadata is also fail-closed. When `alg`, `use`, or `key_ops` are published they must agree with verification. RS256 requires an RSA JWK; ES384 requires an EC JWK on P-384. Token `kid` values must be non-empty and at most 128 bytes. Published JWKs that carry a `kid` must use a unique non-empty value; duplicate `kid` values invalidate the JWKS rather than relying on document order. A `kid` must not be reused to change one active key from RSA to EC during migration.
