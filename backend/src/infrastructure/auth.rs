@@ -810,23 +810,31 @@ mod tests {
             jti: None,
             exp: now + 900,
         };
-        assert!(validate_access_token_claims(valid, JwtAccessTokenTypeMode::LegacyAny, 900, now).is_ok());
+        assert!(
+            validate_access_token_claims(valid, JwtAccessTokenTypeMode::LegacyAny, 900, now).is_ok()
+        );
 
         for claims in [
             AccessTokenClaims {
                 sub: TEST_USER_ID.into(),
                 iat: now,
                 exp: now,
+                client_id: None,
+                jti: None,
             },
             AccessTokenClaims {
                 sub: TEST_USER_ID.into(),
                 iat: now,
                 exp: now - 1,
+                client_id: None,
+                jti: None,
             },
             AccessTokenClaims {
                 sub: TEST_USER_ID.into(),
                 iat: now,
                 exp: now + 901,
+                client_id: None,
+                jti: None,
             },
         ] {
             assert!(matches!(
