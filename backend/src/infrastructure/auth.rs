@@ -22,8 +22,8 @@ use crate::{
 };
 
 const JWT_CLOCK_SKEW_SECONDS: i64 = 30;
-const JWKS_CACHE_TTL: Duration = Duration::from_secs(300);
-const JWKS_STALE_IF_ERROR_TTL: Duration = Duration::from_secs(3600);
+const JWKS_CACHE_TTL_MAX: Duration = Duration::from_secs(300);
+const JWKS_STALE_IF_ERROR_TTL_MAX: Duration = Duration::from_secs(3600);
 const JWKS_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const JWKS_FORCED_REFRESH_COOLDOWN: Duration = Duration::from_secs(5);
 const JWKS_MAX_BODY_BYTES: usize = 256 * 1024;
@@ -106,6 +106,12 @@ struct RefreshState {
     last_forced_attempt: Option<Instant>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct JwksCachePolicy {
+    fresh_ttl: Duration,
+    stale_if_error_ttl: Duration,
+}
+
 struct JwtVerifier {
     client: Client,
     issuer: String,
@@ -113,6 +119,7 @@ struct JwtVerifier {
     jwks_uri: String,
     signature_mode: JwtSignatureMode,
     max_access_token_lifetime_seconds: u64,
+    jwks_cache_policy: JwksCachePolicy,
     jwks: RwLock<Option<CachedJwks>>,
     refresh_state: Mutex<RefreshState>,
 }
@@ -143,6 +150,7 @@ impl JwtVerifier {
             jwks_uri,
             signature_mode,
             max_access_token_lifetime_seconds,
+            jwks_cache_policy: jwks_cache_policy(max_access_token_lifetime_seconds),
             jwks: RwLock::new(None),
             refresh_state: Mutex::new(RefreshState::default()),
         })
@@ -228,7 +236,7 @@ impl JwtVerifier {
     async fn jwks(&self, force_refresh: bool) -> AppResult<Arc<JwkSet>> {
         if !force_refresh {
             if let Some((set, fetched_at)) = self.cached_jwks().await {
-                if fetched_at.elapsed() < JWKS_CACHE_TTL {
+                if fetched_at.elapsed() < self.jwks_cache_policy.fresh_ttl {
                     return Ok(set);
                 }
             }
@@ -243,7 +251,7 @@ impl JwtVerifier {
         // waiting for the refresh lock.
         if !force_refresh {
             if let Some((set, fetched_at)) = &cached {
-                if fetched_at.elapsed() < JWKS_CACHE_TTL {
+                if fetched_at.elapsed() < self.jwks_cache_policy.fresh_ttl {
                     return Ok(set.clone());
                 }
             }
@@ -274,7 +282,7 @@ impl JwtVerifier {
             }
             Err(error) if !force_refresh => {
                 if let Some((set, fetched_at)) = cached {
-                    if fetched_at.elapsed() < JWKS_STALE_IF_ERROR_TTL {
+                    if fetched_at.elapsed() < self.jwks_cache_policy.stale_if_error_ttl {
                         log::warn!(
                             "JWKS refresh failed; temporarily using stale cached keys: {error}"
                         );
@@ -501,6 +509,17 @@ fn validate_jwk_for_algorithm(jwk: &Jwk, algorithm: Algorithm) -> AppResult<()> 
     }
 
     Ok(())
+}
+
+fn jwks_cache_policy(max_access_token_lifetime_seconds: u64) -> JwksCachePolicy {
+    let token_validity_horizon = Duration::from_secs(
+        max_access_token_lifetime_seconds.saturating_add(JWT_CLOCK_SKEW_SECONDS as u64),
+    );
+
+    JwksCachePolicy {
+        fresh_ttl: JWKS_CACHE_TTL_MAX.min(token_validity_horizon),
+        stale_if_error_ttl: JWKS_STALE_IF_ERROR_TTL_MAX.min(token_validity_horizon),
+    }
 }
 
 fn forced_refresh_allowed(last_attempt: Option<Instant>, now: Instant) -> bool {
@@ -946,6 +965,42 @@ mod tests {
             "e": TEST_RSA_EXPONENT
         }));
         assert!(validate_jwk_for_algorithm(&signing_only, Algorithm::RS256).is_err());
+    }
+
+    #[test]
+    fn jwks_cache_acceptance_is_bounded_by_token_lifetime_policy() {
+        assert_eq!(
+            jwks_cache_policy(60),
+            JwksCachePolicy {
+                fresh_ttl: Duration::from_secs(90),
+                stale_if_error_ttl: Duration::from_secs(90),
+            }
+        );
+        assert_eq!(
+            jwks_cache_policy(300),
+            JwksCachePolicy {
+                fresh_ttl: Duration::from_secs(300),
+                stale_if_error_ttl: Duration::from_secs(330),
+            }
+        );
+        assert_eq!(
+            jwks_cache_policy(3600),
+            JwksCachePolicy {
+                fresh_ttl: JWKS_CACHE_TTL_MAX,
+                stale_if_error_ttl: JWKS_STALE_IF_ERROR_TTL_MAX,
+            }
+        );
+    }
+
+    #[test]
+    fn jwks_cache_policy_saturates_for_unbounded_test_values() {
+        assert_eq!(
+            jwks_cache_policy(u64::MAX),
+            JwksCachePolicy {
+                fresh_ttl: JWKS_CACHE_TTL_MAX,
+                stale_if_error_ttl: JWKS_STALE_IF_ERROR_TTL_MAX,
+            }
+        );
     }
 
     #[test]
