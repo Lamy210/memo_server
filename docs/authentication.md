@@ -49,6 +49,8 @@ memo_server does not store passwords or refresh tokens and does not call an auth
 
 Production uses `AUTH_MODE=jwt`.
 
+The HTTP authentication boundary rejects ambiguous credential transport before mode-specific verification: `Authorization` and `X-Development-User-Id` may each appear at most once, and a present value must be representable as a valid HTTP header string. Repeated credential headers or invalid header bytes return 401 rather than relying on first-value ordering or treating malformed input as absent.
+
 The dedicated authentication service issues short-lived JWT access tokens. memo_server independently enforces that property: production JWT mode requires `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS`, accepted only in the repository policy range 60..=3600 seconds, and rejects tokens whose `exp - iat` is non-positive or exceeds that configured maximum. This makes issuer lifetime mistakes fail closed at the resource server. memo_server also uses an explicit signature-policy setting so the RS256 -> ES384 migration does not widen accepted algorithms implicitly.
 
 `AUTH_JWT_SIGNATURE_MODE` supports exactly:
