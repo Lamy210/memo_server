@@ -84,7 +84,7 @@ memo_server reads public verification keys from `AUTH_JWKS_URI`.
 
 `AUTH_JWKS_URI` is treated as trusted deployment configuration but still has an explicit transport boundary: it must be an absolute HTTPS URL, must not contain URL userinfo/password data, and must not contain a fragment. The dedicated JWKS HTTP client is HTTPS-only and does not follow redirects. A 3xx response therefore fails closed instead of allowing the configured authentication service to redirect memo_server to a different origin or scheme.
 
-- JWKS is cached for five minutes.
+- JWKS fresh-cache reuse is capped at five minutes **and** at `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS`, whichever is shorter.
 - An unknown `kid` can trigger a forced refresh.
 - An invalid signature can trigger one forced JWKS refresh before the token is rejected.
 - Refresh work is serialized so concurrent cache misses do not fan out into parallel JWKS requests.
@@ -92,7 +92,7 @@ memo_server reads public verification keys from `AUTH_JWKS_URI`.
 - JWKS requests have a bounded timeout.
 - JWKS response bodies are streamed with a hard 256 KiB limit and accepted sets are limited to 64 keys.
 - Empty JWKS documents, oversized key sets, empty/oversized published `kid` values, and duplicate published `kid` values are rejected before caching.
-- Cached keys may continue to be used when a normal refresh temporarily fails, but only for a bounded stale-if-error window (currently one hour from the successful fetch).
+- Cached keys may continue to be used when a normal refresh temporarily fails, but only for a bounded stale-if-error window: at most one hour from the successful fetch and never longer than `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS + 30s`, whichever is shorter. For short-lived tokens this leaves only the existing clock-skew margin after fresh-cache expiry, instead of inheriting the full one-hour stale-key window.
 - Private signing keys remain only in the authentication service.
 
 This allows the authentication service and memo_server to be deployed and released independently.
