@@ -316,9 +316,7 @@ fn raw_url_authority_contains_userinfo(value: &str) -> bool {
     };
     let authority_end = remainder
         .char_indices()
-        .find_map(|(index, character)| {
-            matches!(character, '/' | '?' | '#').then_some(index)
-        })
+        .find_map(|(index, character)| matches!(character, '/' | '?' | '#').then_some(index))
         .unwrap_or(remainder.len());
 
     remainder[..authority_end].contains('@')
