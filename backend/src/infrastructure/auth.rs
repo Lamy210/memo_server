@@ -397,8 +397,7 @@ fn validate_compact_access_token(token: &str) -> AppResult<()> {
         || protected.len() > JWT_PROTECTED_HEADER_SEGMENT_MAX_BYTES
         || !protected.bytes().all(is_base64url_byte)
         || !payload.bytes().all(is_base64url_byte)
-        || !signature.bytes().all(is_base64url_byte)    {
-        return Err(AppError::Unauthorized(
+        || !signature.bytes().all(is_base64url_byte)    {        return Err(AppError::Unauthorized(
             "Access token is not a supported compact JWS".into(),
         ));
     }
@@ -797,8 +796,7 @@ mod tests {
 
     #[test]
     fn future_issued_at_is_rejected() {
-        assert!(matches!(
-            verifier().decode_claims(FUTURE_IAT_TOKEN, &rsa_key(), Algorithm::RS256),
+        assert!(matches!(            verifier().decode_claims(FUTURE_IAT_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::InvalidClaims)
         ));    }
 
@@ -877,8 +875,8 @@ mod tests {
         for (client_id, jti) in [
             (None, Some("token-123".into())),
             (Some("memo-web".into()), None),
-            (Some(String::new()), Some("token-123".into())),
-            (Some("memo-web".into()), Some(String::new())),
+            (Some(String::new().into()), Some("token-123".into())),
+            (Some("memo-web".into()), Some(String::new().into())),
         ] {
             let claims = AccessTokenClaims {
                 sub: TEST_USER_ID.into(),
@@ -1197,8 +1195,7 @@ mod tests {
             "kty": "RSA",
             "key_ops": ["sign"],
             "alg": "RS256",
-            "kid": "sign-only",
-            "n": TEST_RSA_MODULUS,
+            "kid": "sign-only",            "n": TEST_RSA_MODULUS,
             "e": TEST_RSA_EXPONENT
         }));
         assert!(validate_jwk_for_algorithm(&signing_only, Algorithm::RS256).is_err());
