@@ -174,6 +174,10 @@ pub enum ConfigError {
     InvalidAuthMode(String),
     #[error("{0} is required when AUTH_MODE=jwt")]
     MissingJwtSetting(&'static str),
+    #[error(
+        "AUTH_ISSUER must be an absolute HTTPS URL without userinfo, query, or fragment, got `{0}`"
+    )]
+    InvalidJwtIssuer(String),
     #[error("AUTH_JWKS_URI must be an absolute HTTPS URL without userinfo or fragment, got `{0}`")]
     InvalidJwtJwksUri(String),
     #[error("AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`")]
@@ -271,6 +275,7 @@ impl AppConfig {
             "development" => AuthConfig::Development,
             "jwt" => {
                 let issuer = required_jwt_setting(&vars, "AUTH_ISSUER")?;
+                validate_jwt_issuer(&issuer)?;
                 let audience = required_jwt_setting(&vars, "AUTH_AUDIENCE")?;
                 let jwks_uri = required_jwt_setting(&vars, "AUTH_JWKS_URI")?;
                 validate_jwt_jwks_uri(&jwks_uri)?;
@@ -302,6 +307,22 @@ impl AppConfig {
             port,
             auth,
         })
+    }
+}
+
+fn validate_jwt_issuer(value: &str) -> Result<(), ConfigError> {
+    let url = Url::parse(value).map_err(|_| ConfigError::InvalidJwtIssuer(value.to_string()))?;
+    let valid = url.scheme() == "https"
+        && url.has_host()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none();
+
+    if valid {
+        Ok(())
+    } else {
+        Err(ConfigError::InvalidJwtIssuer(value.to_string()))
     }
 }
 
