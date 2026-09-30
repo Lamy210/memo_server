@@ -224,6 +224,7 @@ impl JwtVerifier {
         let claims = decode::<AccessTokenClaims>(token, key, &validation)?.claims;
         validate_access_token_claims(
             claims,
+            self.access_token_type_mode,
             self.max_access_token_lifetime_seconds,
             Utc::now().timestamp(),
         )
@@ -576,13 +577,22 @@ struct AccessTokenClaims {
     sub: String,
     iat: i64,
     exp: i64,
+    client_id: Option<String>,
+    jti: Option<String>,
 }
 
 fn validate_access_token_claims(
     claims: AccessTokenClaims,
+    access_token_type_mode: JwtAccessTokenTypeMode,
     max_access_token_lifetime_seconds: u64,
     now: i64,
 ) -> Result<AuthenticatedIdentity, ClaimsVerificationError> {
+    validate_access_token_profile_claims(
+        access_token_type_mode,
+        claims.client_id.as_deref(),
+        claims.jti.as_deref(),
+    )?;
+
     let user_id =
         Uuid::parse_str(&claims.sub).map_err(|_| ClaimsVerificationError::InvalidIdentity)?;
     if claims.iat > now + JWT_CLOCK_SKEW_SECONDS {
@@ -600,6 +610,25 @@ fn validate_access_token_claims(
     }
 
     Ok(AuthenticatedIdentity { user_id })
+}
+
+fn validate_access_token_profile_claims(
+    mode: JwtAccessTokenTypeMode,
+    client_id: Option<&str>,
+    jti: Option<&str>,
+) -> Result<(), ClaimsVerificationError> {
+    if mode == JwtAccessTokenTypeMode::LegacyAny {
+        return Ok(());
+    }
+
+    let client_id_valid = client_id.is_some_and(|value| !value.is_empty());
+    let jti_valid = jti.is_some_and(|value| !value.is_empty());
+
+    if client_id_valid && jti_valid {
+        Ok(())
+    } else {
+        Err(ClaimsVerificationError::InvalidIdentity)
+    }
 }
 
 #[derive(Debug)]
@@ -777,9 +806,11 @@ mod tests {
         let valid = AccessTokenClaims {
             sub: TEST_USER_ID.into(),
             iat: now,
+            client_id: None,
+            jti: None,
             exp: now + 900,
         };
-        assert!(validate_access_token_claims(valid, 900, now).is_ok());
+        assert!(validate_access_token_claims(valid, JwtAccessTokenTypeMode::LegacyAny, 900, now).is_ok());
 
         for claims in [
             AccessTokenClaims {
@@ -799,10 +830,87 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                validate_access_token_claims(claims, 900, now),
+                validate_access_token_claims(
+                    claims,
+                    JwtAccessTokenTypeMode::LegacyAny,
+                    900,
+                    now,
+                ),
                 Err(ClaimsVerificationError::InvalidIdentity)
             ));
         }
+    }
+
+    #[test]
+    fn rfc9068_profile_requires_client_id_and_jti_without_breaking_legacy_tokens() {
+        let now = 1_700_000_000_i64;
+
+        let legacy = AccessTokenClaims {
+            sub: TEST_USER_ID.into(),
+            iat: now,
+            exp: now + 900,
+            client_id: None,
+            jti: None,
+        };
+        assert!(validate_access_token_claims(
+            legacy,
+            JwtAccessTokenTypeMode::LegacyAny,
+            900,
+            now,
+        )
+        .is_ok());
+
+        let strict = AccessTokenClaims {
+            sub: TEST_USER_ID.into(),
+            iat: now,
+            exp: now + 900,
+            client_id: Some("memo-web".into()),
+            jti: Some("token-123".into()),
+        };
+        assert!(validate_access_token_claims(
+            strict,
+            JwtAccessTokenTypeMode::AtJwt,
+            900,
+            now,
+        )
+        .is_ok());
+
+        for (client_id, jti) in [
+            (None, Some("token-123".into())),
+            (Some("memo-web".into()), None),
+            (Some(String::new()), Some("token-123".into())),
+            (Some("memo-web".into()), Some(String::new())),
+        ] {
+            let claims = AccessTokenClaims {
+                sub: TEST_USER_ID.into(),
+                iat: now,
+                exp: now + 900,
+                client_id,
+                jti,
+            };
+            assert!(matches!(
+                validate_access_token_claims(
+                    claims,
+                    JwtAccessTokenTypeMode::AtJwt,
+                    900,
+                    now,
+                ),
+                Err(ClaimsVerificationError::InvalidIdentity)
+            ));
+        }
+    }
+
+    #[test]
+    fn rfc9068_profile_claims_must_be_strings_when_present() {
+        let claims = serde_json::json!({
+            "sub": TEST_USER_ID,
+            "iat": 1_700_000_000_i64,
+            "exp": 1_700_000_900_i64,
+            "client_id": 42,
+            "jti": "token-123"
+        });
+
+        assert!(serde_json::from_value::<AccessTokenClaims>(claims).is_err());
     }
 
     #[test]
