@@ -1,4 +1,9 @@
-use actix_web::{dev::Payload, http::header::AUTHORIZATION, web::Data, FromRequest, HttpRequest};
+use actix_web::{
+    dev::Payload,
+    http::header::{HeaderValue, AUTHORIZATION},
+    web::Data,
+    FromRequest, HttpRequest,
+};
 use futures::future::LocalBoxFuture;
 
 use crate::{
@@ -16,21 +21,19 @@ impl FromRequest for AuthenticatedUser {
 
     fn from_request(request: &HttpRequest, _payload: &mut Payload) -> Self::Future {
         let auth_service = request.app_data::<Data<AuthService>>().cloned();
-        let authorization = request
-            .headers()
-            .get(AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let development_user_id = request
-            .headers()
-            .get(DEVELOPMENT_USER_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
+        let authorization =
+            single_header_value(request.headers().get_all(AUTHORIZATION), "Authorization");
+        let development_user_id = single_header_value(
+            request.headers().get_all(DEVELOPMENT_USER_HEADER),
+            "X-Development-User-Id",
+        );
 
         Box::pin(async move {
             let auth_service = auth_service.ok_or_else(|| {
                 AppError::InternalServerError("Authentication service is not configured".into())
             })?;
+            let authorization = authorization?;
+            let development_user_id = development_user_id?;
             let bearer_token = authorization
                 .as_deref()
                 .map(parse_bearer_token)
@@ -43,6 +46,25 @@ impl FromRequest for AuthenticatedUser {
             Ok(Self(identity))
         })
     }
+}
+
+fn single_header_value<'a>(
+    mut values: impl Iterator<Item = &'a HeaderValue>,
+    header_name: &str,
+) -> AppResult<Option<String>> {
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(AppError::Unauthorized(format!(
+            "{header_name} header must not be repeated"
+        )));
+    }
+
+    let value = value.to_str().map_err(|_| {
+        AppError::Unauthorized(format!("{header_name} header contains invalid bytes"))
+    })?;
+    Ok(Some(value.to_owned()))
 }
 
 fn parse_bearer_token(value: &str) -> AppResult<&str> {
@@ -65,6 +87,36 @@ fn parse_bearer_token(value: &str) -> AppResult<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_authentication_header_is_accepted() {
+        let values = [HeaderValue::from_static("Bearer aaa.bbb.ccc")];
+        assert_eq!(
+            single_header_value(values.iter(), "Authorization").unwrap(),
+            Some("Bearer aaa.bbb.ccc".to_string())
+        );
+    }
+
+    #[test]
+    fn duplicate_authentication_headers_are_rejected() {
+        let values = [
+            HeaderValue::from_static("Bearer aaa.bbb.ccc"),
+            HeaderValue::from_static("Bearer ddd.eee.fff"),
+        ];
+        assert!(matches!(
+            single_header_value(values.iter(), "Authorization"),
+            Err(AppError::Unauthorized(_))
+        ));
+    }
+
+    #[test]
+    fn invalid_header_bytes_are_rejected_instead_of_treated_as_missing() {
+        let values = [HeaderValue::from_bytes(&[0xFF]).unwrap()];
+        assert!(matches!(
+            single_header_value(values.iter(), "Authorization"),
+            Err(AppError::Unauthorized(_))
+        ));
+    }
 
     #[test]
     fn bearer_parser_accepts_case_insensitive_scheme() {
