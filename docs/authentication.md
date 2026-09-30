@@ -61,6 +61,15 @@ The dedicated authentication service issues short-lived JWT access tokens. memo_
 | `rs256-es384` | `RS256` and `ES384` only | bounded issuer migration window |
 | `es384` | `ES384` only | target AUTH-1 resource-server policy |
 
+`AUTH_JWT_TYPE_MODE` is a separate bounded migration control:
+
+| Value | Accepted JWT `typ` | Intended use |
+| --- | --- | --- |
+| omitted / `legacy-any` | compatibility mode; `typ` is not a validation signal | current issuer compatibility |
+| `at-jwt` | `at+jwt` or `application/at+jwt`, ASCII case-insensitive | RFC 9068 access-token profile |
+
+The target is `at-jwt` after the dedicated authentication service issues explicitly typed access tokens. In strict mode, missing `typ`, generic `JWT`, ID-token types, and unrelated JWT media types are rejected before JWKS lookup. This is intended to prevent cross-JWT substitution; issuer/audience/signature/claim checks remain required as independent controls.
+
 Access tokens use the JWS Compact Serialization. memo_server rejects malformed compact tokens before JOSE decoding: the token must contain exactly three non-empty base64url segments, the total compact token is capped at 16 KiB, and the protected-header segment is capped at 4 KiB. These are memo_server resource limits, not claims that the JWS standard defines those byte limits.
 
 Each token must have:
@@ -68,6 +77,7 @@ Each token must have:
 | Field | Requirement |
 | --- | --- |
 | JWT header `alg` | allowed by `AUTH_JWT_SIGNATURE_MODE`; no other algorithm is accepted |
+| JWT header `typ` | when `AUTH_JWT_TYPE_MODE=at-jwt`, must be `at+jwt` or `application/at+jwt` |
 | JWT header `kid` | required; identifies one published JWKS verification key |
 | `iss` | must equal `AUTH_ISSUER` |
 | `aud` | must include `AUTH_AUDIENCE` |
