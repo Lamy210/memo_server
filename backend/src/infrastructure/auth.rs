@@ -918,25 +918,18 @@ mod tests {
         ] {
             let legacy = serde_json::from_value::<AccessTokenClaims>(claims.clone())
                 .expect("legacy mode must preserve previously ignored profile-claim types");
-            assert!(
-                validate_access_token_claims(
-                    legacy,
-                    JwtAccessTokenTypeMode::LegacyAny,
-                    900,
-                    now,
-                )
-                .is_ok()
-            );
+            assert!(validate_access_token_claims(
+                legacy,
+                JwtAccessTokenTypeMode::LegacyAny,
+                900,
+                now,
+            )
+            .is_ok());
 
             let strict = serde_json::from_value::<AccessTokenClaims>(claims)
                 .expect("profile claims must deserialize before strict validation");
             assert!(matches!(
-                validate_access_token_claims(
-                    strict,
-                    JwtAccessTokenTypeMode::AtJwt,
-                    900,
-                    now,
-                ),
+                validate_access_token_claims(strict, JwtAccessTokenTypeMode::AtJwt, 900, now,),
                 Err(ClaimsVerificationError::InvalidClaims)
             ));
         }
