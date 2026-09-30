@@ -310,10 +310,25 @@ impl AppConfig {
     }
 }
 
+fn raw_url_authority_contains_userinfo(value: &str) -> bool {
+    let Some((_, remainder)) = value.split_once("://") else {
+        return false;
+    };
+    let authority_end = remainder
+        .char_indices()
+        .find_map(|(index, character)| {
+            matches!(character, '/' | '?' | '#').then_some(index)
+        })
+        .unwrap_or(remainder.len());
+
+    remainder[..authority_end].contains('@')
+}
+
 fn validate_jwt_issuer(value: &str) -> Result<(), ConfigError> {
     let url = Url::parse(value).map_err(|_| ConfigError::InvalidJwtIssuer(value.to_string()))?;
     let valid = url.scheme() == "https"
         && url.has_host()
+        && !raw_url_authority_contains_userinfo(value)
         && url.username().is_empty()
         && url.password().is_none()
         && url.query().is_none()
@@ -330,6 +345,7 @@ fn validate_jwt_jwks_uri(value: &str) -> Result<(), ConfigError> {
     let url = Url::parse(value).map_err(|_| ConfigError::InvalidJwtJwksUri(value.to_string()))?;
     let valid = url.scheme() == "https"
         && url.has_host()
+        && !raw_url_authority_contains_userinfo(value)
         && url.username().is_empty()
         && url.password().is_none()
         && url.fragment().is_none();
