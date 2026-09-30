@@ -49,7 +49,7 @@ memo_server does not store passwords or refresh tokens and does not call an auth
 
 Production uses `AUTH_MODE=jwt`.
 
-The dedicated authentication service issues short-lived JWT access tokens. memo_server uses an explicit signature-policy setting so the RS256 -> ES384 migration does not widen accepted algorithms implicitly.
+The dedicated authentication service issues short-lived JWT access tokens. memo_server independently enforces that property: production JWT mode requires `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS`, accepted only in the repository policy range 60..=3600 seconds, and rejects tokens whose `exp - iat` is non-positive or exceeds that configured maximum. This makes issuer lifetime mistakes fail closed at the resource server. memo_server also uses an explicit signature-policy setting so the RS256 -> ES384 migration does not widen accepted algorithms implicitly.
 
 `AUTH_JWT_SIGNATURE_MODE` supports exactly:
 
@@ -70,8 +70,8 @@ Each token must have:
 | `iss` | must equal `AUTH_ISSUER` |
 | `aud` | must include `AUTH_AUDIENCE` |
 | `sub` | UUID used as memo_server's user ID |
-| `iat` | required |
-| `exp` | required |
+| `iat` | required; must not be more than the existing clock-skew allowance in the future |
+| `exp` | required; must be after `iat` and `exp - iat` must not exceed `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS` |
 | `nbf` | optional; validated when present |
 
 JWKS metadata is also fail-closed. When `alg`, `use`, or `key_ops` are published they must agree with verification. RS256 requires an RSA JWK; ES384 requires an EC JWK on P-384. Token `kid` values must be non-empty and at most 128 bytes. Published JWKs that carry a `kid` must use a unique non-empty value; duplicate `kid` values invalidate the JWKS rather than relying on document order. A `kid` must not be reused to change one active key from RSA to EC during migration.

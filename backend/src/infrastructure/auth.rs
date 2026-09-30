@@ -55,11 +55,13 @@ impl AuthService {
                 audience,
                 jwks_uri,
                 signature_mode,
+                max_access_token_lifetime_seconds,
             } => AuthBackend::Jwt(Box::new(JwtVerifier::new(
                 issuer,
                 audience,
                 jwks_uri,
                 signature_mode,
+                max_access_token_lifetime_seconds,
             )?)),
         };
 
@@ -110,6 +112,7 @@ struct JwtVerifier {
     audience: String,
     jwks_uri: String,
     signature_mode: JwtSignatureMode,
+    max_access_token_lifetime_seconds: u64,
     jwks: RwLock<Option<CachedJwks>>,
     refresh_state: Mutex<RefreshState>,
 }
@@ -120,6 +123,7 @@ impl JwtVerifier {
         audience: String,
         jwks_uri: String,
         signature_mode: JwtSignatureMode,
+        max_access_token_lifetime_seconds: u64,
     ) -> AppResult<Self> {
         let client = Client::builder()
             .https_only(true)
@@ -138,6 +142,7 @@ impl JwtVerifier {
             audience,
             jwks_uri,
             signature_mode,
+            max_access_token_lifetime_seconds,
             jwks: RwLock::new(None),
             refresh_state: Mutex::new(RefreshState::default()),
         })
@@ -190,7 +195,11 @@ impl JwtVerifier {
         validation.set_required_spec_claims(&["exp", "iat", "iss", "aud", "sub"]);
 
         let claims = decode::<AccessTokenClaims>(token, key, &validation)?.claims;
-        claims.try_into()
+        validate_access_token_claims(
+            claims,
+            self.max_access_token_lifetime_seconds,
+            Utc::now().timestamp(),
+        )
     }
 
     async fn decoding_key(
@@ -507,20 +516,31 @@ fn forced_refresh_allowed(last_attempt: Option<Instant>, now: Instant) -> bool {
 struct AccessTokenClaims {
     sub: String,
     iat: i64,
+    exp: i64,
 }
 
-impl TryFrom<AccessTokenClaims> for AuthenticatedIdentity {
-    type Error = ClaimsVerificationError;
-
-    fn try_from(claims: AccessTokenClaims) -> Result<Self, Self::Error> {
-        let user_id =
-            Uuid::parse_str(&claims.sub).map_err(|_| ClaimsVerificationError::InvalidIdentity)?;
-        if claims.iat > Utc::now().timestamp() + JWT_CLOCK_SKEW_SECONDS {
-            return Err(ClaimsVerificationError::InvalidIdentity);
-        }
-
-        Ok(Self { user_id })
+fn validate_access_token_claims(
+    claims: AccessTokenClaims,
+    max_access_token_lifetime_seconds: u64,
+    now: i64,
+) -> Result<AuthenticatedIdentity, ClaimsVerificationError> {
+    let user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| ClaimsVerificationError::InvalidIdentity)?;
+    if claims.iat > now + JWT_CLOCK_SKEW_SECONDS {
+        return Err(ClaimsVerificationError::InvalidIdentity);
     }
+
+    let lifetime = claims
+        .exp
+        .checked_sub(claims.iat)
+        .filter(|lifetime| *lifetime > 0)
+        .and_then(|lifetime| u64::try_from(lifetime).ok())
+        .ok_or(ClaimsVerificationError::InvalidIdentity)?;
+    if lifetime > max_access_token_lifetime_seconds {
+        return Err(ClaimsVerificationError::InvalidIdentity);
+    }
+
+    Ok(AuthenticatedIdentity { user_id })
 }
 
 #[derive(Debug)]
@@ -566,6 +586,7 @@ mod tests {
             TEST_AUDIENCE.to_string(),
             "https://unused.test/.well-known/jwks.json".to_string(),
             signature_mode,
+            u64::MAX,
         )
         .expect("test JWT verifier must initialize")
     }
@@ -652,6 +673,40 @@ mod tests {
             verifier().decode_claims(FUTURE_IAT_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::InvalidIdentity)
         ));
+    }
+
+    #[test]
+    fn access_token_lifetime_must_be_positive_and_within_resource_server_policy() {
+        let now = 1_700_000_000_i64;
+        let valid = AccessTokenClaims {
+            sub: TEST_USER_ID.into(),
+            iat: now,
+            exp: now + 900,
+        };
+        assert!(validate_access_token_claims(valid, 900, now).is_ok());
+
+        for claims in [
+            AccessTokenClaims {
+                sub: TEST_USER_ID.into(),
+                iat: now,
+                exp: now,
+            },
+            AccessTokenClaims {
+                sub: TEST_USER_ID.into(),
+                iat: now,
+                exp: now - 1,
+            },
+            AccessTokenClaims {
+                sub: TEST_USER_ID.into(),
+                iat: now,
+                exp: now + 901,
+            },
+        ] {
+            assert!(matches!(
+                validate_access_token_claims(claims, 900, now),
+                Err(ClaimsVerificationError::InvalidIdentity)
+            ));
+        }
     }
 
     #[test]
