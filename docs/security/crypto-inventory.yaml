@@ -674,6 +674,18 @@ assets:
         strict_missing_type_behavior: unauthorized
         strict_wrong_type_behavior: unauthorized
         validation_before_jwks_lookup: true
+        strict_required_profile_claims:
+          - iss
+          - sub
+          - aud
+          - exp
+          - iat
+          - client_id
+          - jti
+        strict_client_id_behavior: required_non_empty_string
+        strict_jti_behavior: required_non_empty_string
+        profile_claim_validation_after_signature: true
+        legacy_profile_claim_compatibility: client_id_and_jti_optional
         issuer_rollout: pending_external_auth_service
       kid_required: true
       compact_jws_segments: exactly_three_non_empty
