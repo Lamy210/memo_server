@@ -397,8 +397,7 @@ fn validate_compact_access_token(token: &str) -> AppResult<()> {
         || protected.len() > JWT_PROTECTED_HEADER_SEGMENT_MAX_BYTES
         || !protected.bytes().all(is_base64url_byte)
         || !payload.bytes().all(is_base64url_byte)
-        || !signature.bytes().all(is_base64url_byte)
-    {
+        || !signature.bytes().all(is_base64url_byte)    {
         return Err(AppError::Unauthorized(
             "Access token is not a supported compact JWS".into(),
         ));
@@ -577,8 +576,8 @@ struct AccessTokenClaims {
     sub: String,
     iat: i64,
     exp: i64,
-    client_id: Option<String>,
-    jti: Option<String>,
+    client_id: Option<serde_json::Value>,
+    jti: Option<serde_json::Value>,
 }
 
 fn validate_access_token_claims(
@@ -589,8 +588,8 @@ fn validate_access_token_claims(
 ) -> Result<AuthenticatedIdentity, ClaimsVerificationError> {
     validate_access_token_profile_claims(
         access_token_type_mode,
-        claims.client_id.as_deref(),
-        claims.jti.as_deref(),
+        claims.client_id.as_ref(),
+        claims.jti.as_ref(),
     )?;
 
     let user_id =
@@ -614,15 +613,19 @@ fn validate_access_token_claims(
 
 fn validate_access_token_profile_claims(
     mode: JwtAccessTokenTypeMode,
-    client_id: Option<&str>,
-    jti: Option<&str>,
+    client_id: Option<&serde_json::Value>,
+    jti: Option<&serde_json::Value>,
 ) -> Result<(), ClaimsVerificationError> {
     if mode == JwtAccessTokenTypeMode::LegacyAny {
         return Ok(());
     }
 
-    let client_id_valid = client_id.is_some_and(|value| !value.is_empty());
-    let jti_valid = jti.is_some_and(|value| !value.is_empty());
+    let client_id_valid = client_id
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.is_empty());
+    let jti_valid = jti
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.is_empty());
 
     if client_id_valid && jti_valid {
         Ok(())
@@ -797,8 +800,7 @@ mod tests {
         assert!(matches!(
             verifier().decode_claims(FUTURE_IAT_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::InvalidClaims)
-        ));
-    }
+        ));    }
 
     #[test]
     fn access_token_lifetime_must_be_positive_and_within_resource_server_policy() {
@@ -893,16 +895,49 @@ mod tests {
     }
 
     #[test]
-    fn rfc9068_profile_claims_must_be_strings_when_present() {
-        let claims = serde_json::json!({
-            "sub": TEST_USER_ID,
-            "iat": 1_700_000_000_i64,
-            "exp": 1_700_000_900_i64,
-            "client_id": 42,
-            "jti": "token-123"
-        });
+    fn legacy_profile_ignores_non_string_profile_claims_but_strict_mode_rejects_them() {
+        let now = 1_700_000_000_i64;
 
-        assert!(serde_json::from_value::<AccessTokenClaims>(claims).is_err());
+        for claims in [
+            serde_json::json!({
+                "sub": TEST_USER_ID,
+                "iat": now,
+                "exp": now + 900,
+                "client_id": 42,
+                "jti": "token-123"
+            }),
+            serde_json::json!({
+                "sub": TEST_USER_ID,
+                "iat": now,
+                "exp": now + 900,
+                "client_id": "memo-web",
+                "jti": 42
+            }),
+        ] {
+            let legacy = serde_json::from_value::<AccessTokenClaims>(claims.clone())
+                .expect("legacy mode must preserve previously ignored profile-claim types");
+            assert!(
+                validate_access_token_claims(
+                    legacy,
+                    JwtAccessTokenTypeMode::LegacyAny,
+                    900,
+                    now,
+                )
+                .is_ok()
+            );
+
+            let strict = serde_json::from_value::<AccessTokenClaims>(claims)
+                .expect("profile claims must deserialize before strict validation");
+            assert!(matches!(
+                validate_access_token_claims(
+                    strict,
+                    JwtAccessTokenTypeMode::AtJwt,
+                    900,
+                    now,
+                ),
+                Err(ClaimsVerificationError::InvalidClaims)
+            ));
+        }
     }
 
     #[test]
@@ -1197,8 +1232,7 @@ mod tests {
     #[test]
     fn jwks_cache_policy_saturates_for_unbounded_test_values() {
         assert_eq!(
-            jwks_cache_policy(u64::MAX),
-            JwksCachePolicy {
+            jwks_cache_policy(u64::MAX),            JwksCachePolicy {
                 fresh_ttl: JWKS_CACHE_TTL_MAX,
                 stale_if_error_ttl: JWKS_STALE_IF_ERROR_TTL_MAX,
             }
