@@ -397,7 +397,9 @@ fn validate_compact_access_token(token: &str) -> AppResult<()> {
         || protected.len() > JWT_PROTECTED_HEADER_SEGMENT_MAX_BYTES
         || !protected.bytes().all(is_base64url_byte)
         || !payload.bytes().all(is_base64url_byte)
-        || !signature.bytes().all(is_base64url_byte)    {        return Err(AppError::Unauthorized(
+        || !signature.bytes().all(is_base64url_byte)
+    {
+        return Err(AppError::Unauthorized(
             "Access token is not a supported compact JWS".into(),
         ));
     }
@@ -796,9 +798,11 @@ mod tests {
 
     #[test]
     fn future_issued_at_is_rejected() {
-        assert!(matches!(            verifier().decode_claims(FUTURE_IAT_TOKEN, &rsa_key(), Algorithm::RS256),
+        assert!(matches!(
+            verifier().decode_claims(FUTURE_IAT_TOKEN, &rsa_key(), Algorithm::RS256),
             Err(ClaimsVerificationError::InvalidClaims)
-        ));    }
+        ));
+    }
 
     #[test]
     fn access_token_lifetime_must_be_positive_and_within_resource_server_policy() {
@@ -1195,7 +1199,8 @@ mod tests {
             "kty": "RSA",
             "key_ops": ["sign"],
             "alg": "RS256",
-            "kid": "sign-only",            "n": TEST_RSA_MODULUS,
+            "kid": "sign-only",
+            "n": TEST_RSA_MODULUS,
             "e": TEST_RSA_EXPONENT
         }));
         assert!(validate_jwk_for_algorithm(&signing_only, Algorithm::RS256).is_err());
@@ -1229,7 +1234,8 @@ mod tests {
     #[test]
     fn jwks_cache_policy_saturates_for_unbounded_test_values() {
         assert_eq!(
-            jwks_cache_policy(u64::MAX),            JwksCachePolicy {
+            jwks_cache_policy(u64::MAX),
+            JwksCachePolicy {
                 fresh_ttl: JWKS_CACHE_TTL_MAX,
                 stale_if_error_ttl: JWKS_STALE_IF_ERROR_TTL_MAX,
             }
