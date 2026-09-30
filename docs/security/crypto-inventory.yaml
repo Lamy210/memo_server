@@ -663,6 +663,18 @@ assets:
         rs256-es384: explicit_dual_accept_migration
         es384: target_only
       accepted_algorithms_outside_selected_mode: forbidden
+      access_token_type_policy:
+        setting: AUTH_JWT_TYPE_MODE
+        default: legacy-any
+        target: at-jwt
+        strict_accepted_values:
+          - at+jwt
+          - application/at+jwt
+        strict_case_matching: ascii_case_insensitive
+        strict_missing_type_behavior: unauthorized
+        strict_wrong_type_behavior: unauthorized
+        validation_before_jwks_lookup: true
+        issuer_rollout: pending_external_auth_service
       kid_required: true
       compact_jws_segments: exactly_three_non_empty
       compact_jws_base64url_characters_only: true

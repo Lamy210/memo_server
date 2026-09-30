@@ -17,7 +17,7 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
-    config::{AuthConfig, JwtSignatureMode},
+    config::{AuthConfig, JwtAccessTokenTypeMode, JwtSignatureMode},
     error::{AppError, AppResult},
 };
 
@@ -55,12 +55,14 @@ impl AuthService {
                 audience,
                 jwks_uri,
                 signature_mode,
+                access_token_type_mode,
                 max_access_token_lifetime_seconds,
             } => AuthBackend::Jwt(Box::new(JwtVerifier::new(
                 issuer,
                 audience,
                 jwks_uri,
                 signature_mode,
+                access_token_type_mode,
                 max_access_token_lifetime_seconds,
             )?)),
         };
@@ -130,6 +132,7 @@ struct JwtVerifier {
     audience: String,
     jwks_uri: String,
     signature_mode: JwtSignatureMode,
+    access_token_type_mode: JwtAccessTokenTypeMode,
     max_access_token_lifetime_seconds: u64,
     jwks_cache_policy: JwksCachePolicy,
     jwks: RwLock<Option<CachedJwks>>,
@@ -142,6 +145,7 @@ impl JwtVerifier {
         audience: String,
         jwks_uri: String,
         signature_mode: JwtSignatureMode,
+        access_token_type_mode: JwtAccessTokenTypeMode,
         max_access_token_lifetime_seconds: u64,
     ) -> AppResult<Self> {
         let client = Client::builder()
@@ -161,6 +165,7 @@ impl JwtVerifier {
             audience,
             jwks_uri,
             signature_mode,
+            access_token_type_mode,
             max_access_token_lifetime_seconds,
             jwks_cache_policy: jwks_cache_policy(max_access_token_lifetime_seconds),
             jwks: RwLock::new(None),
@@ -173,6 +178,8 @@ impl JwtVerifier {
 
         let header = decode_header(token)
             .map_err(|_| AppError::Unauthorized("Access token header is invalid".into()))?;
+
+        validate_access_token_type(self.access_token_type_mode, header.typ.as_deref())?;
 
         let algorithm = header.alg;
         if !jwt_algorithm_allowed(self.signature_mode, algorithm) {
@@ -403,6 +410,26 @@ fn is_base64url_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
 }
 
+fn validate_access_token_type(
+    mode: JwtAccessTokenTypeMode,
+    token_type: Option<&str>,
+) -> AppResult<()> {
+    if mode == JwtAccessTokenTypeMode::LegacyAny {
+        return Ok(());
+    }
+
+    let accepted = token_type.is_some_and(|value| {
+        value.eq_ignore_ascii_case("at+jwt") || value.eq_ignore_ascii_case("application/at+jwt")
+    });
+    if accepted {
+        Ok(())
+    } else {
+        Err(AppError::Unauthorized(
+            "Access token typ is not allowed by the configured access-token profile".into(),
+        ))
+    }
+}
+
 fn validate_token_kid(kid: &str) -> AppResult<()> {
     if kid.is_empty() || kid.len() > JWT_KID_MAX_BYTES {
         return Err(AppError::Unauthorized(
@@ -618,6 +645,7 @@ mod tests {
             audience: TEST_AUDIENCE.to_string(),
             jwks_uri: "https://unused.test/.well-known/jwks.json".to_string(),
             signature_mode: JwtSignatureMode::Rs256,
+            access_token_type_mode: JwtAccessTokenTypeMode::LegacyAny,
             max_access_token_lifetime_seconds: 900,
         })
         .expect("JWT auth must initialize")
@@ -629,6 +657,7 @@ mod tests {
             TEST_AUDIENCE.to_string(),
             "https://unused.test/.well-known/jwks.json".to_string(),
             signature_mode,
+            JwtAccessTokenTypeMode::LegacyAny,
             u64::MAX,
         )
         .expect("test JWT verifier must initialize")
@@ -869,6 +898,31 @@ mod tests {
             validate_compact_access_token(&oversized),
             Err(AppError::Unauthorized(_))
         ));
+    }
+
+    #[test]
+    fn access_token_type_policy_can_stage_rfc9068_without_breaking_legacy_issuers() {
+        for token_type in [None, Some("JWT"), Some("id+jwt"), Some("anything")] {
+            assert!(
+                validate_access_token_type(JwtAccessTokenTypeMode::LegacyAny, token_type).is_ok()
+            );
+        }
+
+        for token_type in [
+            Some("at+jwt"),
+            Some("AT+JWT"),
+            Some("application/at+jwt"),
+            Some("APPLICATION/AT+JWT"),
+        ] {
+            assert!(validate_access_token_type(JwtAccessTokenTypeMode::AtJwt, token_type).is_ok());
+        }
+
+        for token_type in [None, Some("JWT"), Some("id+jwt"), Some("")] {
+            assert!(matches!(
+                validate_access_token_type(JwtAccessTokenTypeMode::AtJwt, token_type),
+                Err(AppError::Unauthorized(_))
+            ));
+        }
     }
 
     #[test]

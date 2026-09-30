@@ -41,6 +41,16 @@ pub enum JwtSignatureMode {
     Es384,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JwtAccessTokenTypeMode {
+    /// Compatibility mode for the current external issuer contract. Header
+    /// `typ` is not used as a validation signal yet.
+    LegacyAny,
+    /// RFC 9068 access-token profile. Only `at+jwt` (or its full media type)
+    /// is accepted so other JWT kinds cannot be substituted as access tokens.
+    AtJwt,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthConfig {
     Development,
@@ -49,6 +59,7 @@ pub enum AuthConfig {
         audience: String,
         jwks_uri: String,
         signature_mode: JwtSignatureMode,
+        access_token_type_mode: JwtAccessTokenTypeMode,
         max_access_token_lifetime_seconds: u64,
     },
 }
@@ -167,6 +178,8 @@ pub enum ConfigError {
     InvalidJwtJwksUri(String),
     #[error("AUTH_JWT_SIGNATURE_MODE must be `rs256`, `rs256-es384`, or `es384`, got `{0}`")]
     InvalidJwtSignatureMode(String),
+    #[error("AUTH_JWT_TYPE_MODE must be `legacy-any` or `at-jwt`, got `{0}`")]
+    InvalidJwtAccessTokenTypeMode(String),
     #[error("AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS must be an integer in 60..=3600, got `{0}`")]
     InvalidJwtAccessTokenMaxLifetime(String),
 }
@@ -267,6 +280,7 @@ impl AppConfig {
                     audience,
                     jwks_uri,
                     signature_mode: parse_jwt_signature_mode(&vars)?,
+                    access_token_type_mode: parse_jwt_access_token_type_mode(&vars)?,
                     max_access_token_lifetime_seconds: parse_jwt_access_token_max_lifetime_seconds(
                         &vars,
                     )?,
@@ -319,6 +333,21 @@ fn parse_jwt_signature_mode(
         "rs256-es384" => Ok(JwtSignatureMode::Rs256Es384),
         "es384" => Ok(JwtSignatureMode::Es384),
         _ => Err(ConfigError::InvalidJwtSignatureMode(mode)),
+    }
+}
+
+fn parse_jwt_access_token_type_mode(
+    vars: &HashMap<String, String>,
+) -> Result<JwtAccessTokenTypeMode, ConfigError> {
+    let mode = vars
+        .get("AUTH_JWT_TYPE_MODE")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "legacy-any".to_string());
+
+    match mode.as_str() {
+        "legacy-any" => Ok(JwtAccessTokenTypeMode::LegacyAny),
+        "at-jwt" => Ok(JwtAccessTokenTypeMode::AtJwt),
+        _ => Err(ConfigError::InvalidJwtAccessTokenTypeMode(mode)),
     }
 }
 
