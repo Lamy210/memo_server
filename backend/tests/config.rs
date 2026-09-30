@@ -1,6 +1,7 @@
 use memo_app_backend::config::{
     AppConfig, AuthConfig, AuthoritativeBackend, ConfigError, HighMemoCryptoConfig,
-    HighSearchConfig, HighSearchShadowConfig, JwtSignatureMode, SearchBackend,
+    HighSearchConfig, HighSearchShadowConfig, JwtAccessTokenTypeMode, JwtSignatureMode,
+    SearchBackend,
 };
 
 fn development_vars() -> Vec<(String, String)> {
@@ -754,6 +755,7 @@ fn accepts_complete_jwt_resource_server_configuration() {
             audience: "memo-api".to_string(),
             jwks_uri: "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
             signature_mode: JwtSignatureMode::Rs256,
+            access_token_type_mode: JwtAccessTokenTypeMode::LegacyAny,
             max_access_token_lifetime_seconds: 900,
         }
     );
@@ -862,6 +864,78 @@ fn jwt_jwks_uri_requires_https_without_userinfo_or_fragment() {
 
         assert_eq!(error, ConfigError::InvalidJwtJwksUri(invalid.to_string()));
     }
+}
+
+#[test]
+fn jwt_access_token_type_mode_is_legacy_compatible_by_default_and_supports_rfc9068() {
+    let base = [
+        ("AUTH_MODE".to_string(), "jwt".to_string()),
+        (
+            "AUTH_ISSUER".to_string(),
+            "https://auth.memo.example.com".to_string(),
+        ),
+        ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+        (
+            "AUTH_JWKS_URI".to_string(),
+            "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+        ),
+        (
+            "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS".to_string(),
+            "900".to_string(),
+        ),
+    ];
+
+    let config = AppConfig::from_vars(base.clone())
+        .expect("omitted token type policy must preserve legacy compatibility");
+    let AuthConfig::Jwt {
+        access_token_type_mode,
+        ..
+    } = config.auth
+    else {
+        panic!("JWT auth configuration expected");
+    };
+    assert_eq!(access_token_type_mode, JwtAccessTokenTypeMode::LegacyAny);
+
+    let config = AppConfig::from_vars(
+        base.into_iter()
+            .chain([("AUTH_JWT_TYPE_MODE".to_string(), "AT-JWT".to_string())]),
+    )
+    .expect("RFC 9068 token type mode should parse case-insensitively");
+    let AuthConfig::Jwt {
+        access_token_type_mode,
+        ..
+    } = config.auth
+    else {
+        panic!("JWT auth configuration expected");
+    };
+    assert_eq!(access_token_type_mode, JwtAccessTokenTypeMode::AtJwt);
+}
+
+#[test]
+fn jwt_access_token_type_mode_rejects_unknown_profiles() {
+    let error = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "jwt".to_string()),
+        (
+            "AUTH_ISSUER".to_string(),
+            "https://auth.memo.example.com".to_string(),
+        ),
+        ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+        (
+            "AUTH_JWKS_URI".to_string(),
+            "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+        ),
+        (
+            "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS".to_string(),
+            "900".to_string(),
+        ),
+        ("AUTH_JWT_TYPE_MODE".to_string(), "id-jwt".to_string()),
+    ])
+    .expect_err("unknown JWT type profiles must fail closed");
+
+    assert_eq!(
+        error,
+        ConfigError::InvalidJwtAccessTokenTypeMode("id-jwt".to_string())
+    );
 }
 
 #[test]
