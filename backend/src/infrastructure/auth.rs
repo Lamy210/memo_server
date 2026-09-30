@@ -811,7 +811,8 @@ mod tests {
             exp: now + 900,
         };
         assert!(
-            validate_access_token_claims(valid, JwtAccessTokenTypeMode::LegacyAny, 900, now).is_ok()
+            validate_access_token_claims(valid, JwtAccessTokenTypeMode::LegacyAny, 900, now)
+                .is_ok()
         );
 
         for claims in [
@@ -838,12 +839,7 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                validate_access_token_claims(
-                    claims,
-                    JwtAccessTokenTypeMode::LegacyAny,
-                    900,
-                    now,
-                ),
+                validate_access_token_claims(claims, JwtAccessTokenTypeMode::LegacyAny, 900, now,),
                 Err(ClaimsVerificationError::InvalidClaims)
             ));
         }
@@ -860,13 +856,10 @@ mod tests {
             client_id: None,
             jti: None,
         };
-        assert!(validate_access_token_claims(
-            legacy,
-            JwtAccessTokenTypeMode::LegacyAny,
-            900,
-            now,
-        )
-        .is_ok());
+        assert!(
+            validate_access_token_claims(legacy, JwtAccessTokenTypeMode::LegacyAny, 900, now,)
+                .is_ok()
+        );
 
         let strict = AccessTokenClaims {
             sub: TEST_USER_ID.into(),
@@ -875,13 +868,9 @@ mod tests {
             client_id: Some("memo-web".into()),
             jti: Some("token-123".into()),
         };
-        assert!(validate_access_token_claims(
-            strict,
-            JwtAccessTokenTypeMode::AtJwt,
-            900,
-            now,
-        )
-        .is_ok());
+        assert!(
+            validate_access_token_claims(strict, JwtAccessTokenTypeMode::AtJwt, 900, now,).is_ok()
+        );
 
         for (client_id, jti) in [
             (None, Some("token-123".into())),
@@ -897,12 +886,7 @@ mod tests {
                 jti,
             };
             assert!(matches!(
-                validate_access_token_claims(
-                    claims,
-                    JwtAccessTokenTypeMode::AtJwt,
-                    900,
-                    now,
-                ),
+                validate_access_token_claims(claims, JwtAccessTokenTypeMode::AtJwt, 900, now,),
                 Err(ClaimsVerificationError::InvalidClaims)
             ));
         }
