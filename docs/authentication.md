@@ -74,6 +74,8 @@ The target is `at-jwt` after the dedicated authentication service issues RFC 906
 
 Access tokens use the JWS Compact Serialization. memo_server rejects malformed compact tokens before JOSE decoding: the token must contain exactly three non-empty base64url segments, the total compact token is capped at 16 KiB, and the protected-header segment is capped at 4 KiB. These are memo_server resource limits, not claims that the JWS standard defines those byte limits.
 
+memo_server does not currently implement any JOSE critical-header extension. A protected header containing `crit` is therefore rejected before JWKS lookup, including an empty `crit` array. Non-critical custom JOSE headers remain ignorable; adding support for a critical extension requires an explicit verifier change that understands and enforces that extension's semantics.
+
 Each token must have:
 
 | Field | Requirement |
@@ -81,6 +83,7 @@ Each token must have:
 | JWT header `alg` | allowed by `AUTH_JWT_SIGNATURE_MODE`; no other algorithm is accepted |
 | JWT header `typ` | when `AUTH_JWT_TYPE_MODE=at-jwt`, must be `at+jwt` or `application/at+jwt` |
 | JWT header `kid` | required; identifies one published JWKS verification key |
+| JWT header `crit` | unsupported; any presence is rejected until the listed extension semantics are explicitly implemented |
 | `iss` | must equal `AUTH_ISSUER` |
 | `aud` | must include `AUTH_AUDIENCE` |
 | `sub` | UUID used as memo_server's user ID |
