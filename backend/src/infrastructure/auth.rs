@@ -179,6 +179,7 @@ impl JwtVerifier {
         let header = decode_header(token)
             .map_err(|_| AppError::Unauthorized("Access token header is invalid".into()))?;
 
+        validate_access_token_critical_headers(header.crit.as_deref())?;
         validate_access_token_type(self.access_token_type_mode, header.typ.as_deref())?;
 
         let algorithm = header.alg;
@@ -429,6 +430,16 @@ fn validate_access_token_type(
             "Access token typ is not allowed by the configured access-token profile".into(),
         ))
     }
+}
+
+fn validate_access_token_critical_headers(critical_headers: Option<&[String]>) -> AppResult<()> {
+    if critical_headers.is_some() {
+        return Err(AppError::Unauthorized(
+            "Access token uses unsupported critical JOSE headers".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_token_kid(kid: &str) -> AppResult<()> {
@@ -1050,6 +1061,22 @@ mod tests {
         for token_type in [None, Some("JWT"), Some("id+jwt"), Some("")] {
             assert!(matches!(
                 validate_access_token_type(JwtAccessTokenTypeMode::AtJwt, token_type),
+                Err(AppError::Unauthorized(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn critical_jose_headers_are_rejected_until_explicitly_supported() {
+        assert!(validate_access_token_critical_headers(None).is_ok());
+
+        for critical_headers in [
+            Vec::<String>::new(),
+            vec!["b64".to_string()],
+            vec!["urn:example:unsupported".to_string()],
+        ] {
+            assert!(matches!(
+                validate_access_token_critical_headers(Some(&critical_headers)),
                 Err(AppError::Unauthorized(_))
             ));
         }

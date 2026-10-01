@@ -688,6 +688,11 @@ assets:
         legacy_profile_claim_compatibility: client_id_and_jti_optional
         issuer_rollout: pending_external_auth_service
       kid_required: true
+      jose_critical_headers:
+        supported_extensions: none
+        crit_present_behavior: unauthorized
+        validation_before_jwks_lookup: true
+        non_critical_custom_headers: ignored
       compact_jws_segments: exactly_three_non_empty
       compact_jws_base64url_characters_only: true
       access_token_max_bytes: 16384
