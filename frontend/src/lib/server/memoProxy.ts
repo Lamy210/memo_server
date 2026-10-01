@@ -37,6 +37,8 @@ const RESPONSE_HEADERS_TO_STRIP = [
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
 
+export const MEMO_BFF_MAX_REQUEST_BODY_BYTES = 512 * 1024;
+
 export interface BackendAuthContext {
   developmentUserId?: string;
   bearerToken?: string;
@@ -47,6 +49,73 @@ export class InvalidProxyPathError extends Error {
     super('Invalid memo API proxy path');
     this.name = 'InvalidProxyPathError';
   }
+}
+
+export class MemoProxyBodyTooLargeError extends Error {
+  constructor() {
+    super('Memo API proxy request body exceeds the supported size');
+    this.name = 'MemoProxyBodyTooLargeError';
+  }
+}
+
+function declaredBodyExceedsLimit(headers: Headers): boolean {
+  const rawLength = headers.get('content-length');
+  if (rawLength === null || !/^\d+$/.test(rawLength)) {
+    return false;
+  }
+
+  const declaredLength = Number(rawLength);
+  return (
+    !Number.isSafeInteger(declaredLength) || declaredLength > MEMO_BFF_MAX_REQUEST_BODY_BYTES
+  );
+}
+
+export async function readMemoProxyRequestBody(request: Request): Promise<ArrayBuffer | undefined> {
+  if (declaredBodyExceedsLimit(request.headers)) {
+    throw new MemoProxyBodyTooLargeError();
+  }
+
+  if (!request.body) {
+    return undefined;
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value.byteLength === 0) {
+        continue;
+      }
+      if (value.byteLength > MEMO_BFF_MAX_REQUEST_BODY_BYTES - totalBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new MemoProxyBodyTooLargeError();
+      }
+
+      totalBytes += value.byteLength;
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (totalBytes === 0) {
+    return undefined;
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return body.buffer;
 }
 
 export function buildBackendRequestHeaders(
