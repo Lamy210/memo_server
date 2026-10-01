@@ -5,7 +5,10 @@ import {
   buildBackendUrl,
   buildFrontendResponseHeaders,
   InvalidProxyPathError,
-  isTrustedMemoProxyRequest
+  isTrustedMemoProxyRequest,
+  MEMO_BFF_MAX_REQUEST_BODY_BYTES,
+  MemoProxyBodyTooLargeError,
+  readMemoProxyRequestBody
 } from './memoProxy';
 
 describe('buildBackendRequestHeaders', () => {
@@ -78,6 +81,63 @@ describe('buildBackendUrl', () => {
       );
     }
   );
+});
+
+describe('readMemoProxyRequestBody', () => {
+  it('preserves bounded request bodies and treats an empty body as absent', async () => {
+    const body = await readMemoProxyRequestBody(
+      new Request('https://memo.example.com/api/v1/memos', {
+        method: 'POST',
+        body: 'memo payload'
+      })
+    );
+
+    expect(new TextDecoder().decode(body)).toBe('memo payload');
+
+    const empty = await readMemoProxyRequestBody(
+      new Request('https://memo.example.com/api/v1/memos', {
+        method: 'POST'
+      })
+    );
+    expect(empty).toBeUndefined();
+  });
+
+  it('accepts exactly the shared 512 KiB request-body budget', async () => {
+    const body = await readMemoProxyRequestBody(
+      new Request('https://memo.example.com/api/v1/memos', {
+        method: 'POST',
+        body: 'x'.repeat(MEMO_BFF_MAX_REQUEST_BODY_BYTES)
+      })
+    );
+
+    expect(body?.byteLength).toBe(MEMO_BFF_MAX_REQUEST_BODY_BYTES);
+  });
+
+  it('rejects an actual streamed body that exceeds the limit', async () => {
+    const request = new Request('https://memo.example.com/api/v1/memos', {
+      method: 'POST',
+      body: 'x'.repeat(MEMO_BFF_MAX_REQUEST_BODY_BYTES + 1)
+    });
+
+    await expect(readMemoProxyRequestBody(request)).rejects.toBeInstanceOf(
+      MemoProxyBodyTooLargeError
+    );
+  });
+
+  it('rejects an oversized declared Content-Length before consuming the body', async () => {
+    const request = new Request('https://memo.example.com/api/v1/memos', {
+      method: 'POST',
+      headers: {
+        'Content-Length': String(MEMO_BFF_MAX_REQUEST_BODY_BYTES + 1)
+      },
+      body: 'small'
+    });
+
+    await expect(readMemoProxyRequestBody(request)).rejects.toBeInstanceOf(
+      MemoProxyBodyTooLargeError
+    );
+    expect(request.bodyUsed).toBe(false);
+  });
 });
 
 describe('buildFrontendResponseHeaders', () => {
