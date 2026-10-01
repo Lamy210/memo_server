@@ -714,6 +714,17 @@ assets:
         exp_after_iat: required
         exp_minus_iat_within_policy: required
         issuer_misconfiguration_behavior: fail_closed
+      issuer_configuration:
+        setting: AUTH_ISSUER
+        scheme: https_only
+        absolute_url: required
+        host: required
+        userinfo: forbidden
+        query: forbidden
+        fragment: forbidden
+        path: allowed
+        token_comparison: exact_configured_string
+        normalization_before_comparison: forbidden
       jwks_algorithm_match: required_when_declared
       jwks_signature_use: required_when_declared
       jwks_verify_operation: required_when_declared

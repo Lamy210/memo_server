@@ -70,6 +70,8 @@ The dedicated authentication service issues short-lived JWT access tokens. memo_
 
 The target is `at-jwt` after the dedicated authentication service issues RFC 9068-profile access tokens. In strict mode, missing `typ`, generic `JWT`, ID-token types, and unrelated JWT media types are rejected before JWKS lookup. After signature/issuer/audience validation, the resource server also requires the RFC 9068 mandatory `client_id` and `jti` claims to be present as non-empty strings; `iat`, `iss`, `aud`, `exp`, and `sub` were already mandatory. This keeps `legacy-any` compatible with the current issuer while making `at-jwt` a materially stricter profile rather than a header-only switch.
 
+`AUTH_ISSUER` is also validated as deployment configuration rather than accepted as an arbitrary string. It must be an absolute HTTPS URL with a host and no userinfo, query, or fragment. Path components remain allowed for multi-tenant authorization-server issuer identifiers. The configured string itself is retained and compared exactly with the JWT `iss` claim; memo_server does not normalize issuer identity before comparison.
+
 Access tokens use the JWS Compact Serialization. memo_server rejects malformed compact tokens before JOSE decoding: the token must contain exactly three non-empty base64url segments, the total compact token is capped at 16 KiB, and the protected-header segment is capped at 4 KiB. These are memo_server resource limits, not claims that the JWS standard defines those byte limits.
 
 Each token must have:

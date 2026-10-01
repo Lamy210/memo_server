@@ -844,10 +844,63 @@ fn jwt_access_token_lifetime_policy_is_bounded() {
 }
 
 #[test]
+fn jwt_issuer_requires_https_without_userinfo_query_or_fragment() {
+    for invalid in [
+        "http://auth.memo.example.com",
+        "https://user:secret@auth.memo.example.com",
+        "https://@auth.memo.example.com",
+        "https://auth.memo.example.com?tenant=a",
+        "https://auth.memo.example.com#issuer",
+        "auth.memo.example.com",
+    ] {
+        let error = AppConfig::from_vars([
+            ("AUTH_MODE".to_string(), "jwt".to_string()),
+            ("AUTH_ISSUER".to_string(), invalid.to_string()),
+            ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+            (
+                "AUTH_JWKS_URI".to_string(),
+                "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+            ),
+            (
+                "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS".to_string(),
+                "900".to_string(),
+            ),
+        ])
+        .expect_err("unsafe OAuth issuer identifiers must fail closed");
+
+        assert_eq!(error, ConfigError::InvalidJwtIssuer(invalid.to_string()));
+    }
+
+    let config = AppConfig::from_vars([
+        ("AUTH_MODE".to_string(), "jwt".to_string()),
+        (
+            "AUTH_ISSUER".to_string(),
+            "https://auth.memo.example.com/tenant-a".to_string(),
+        ),
+        ("AUTH_AUDIENCE".to_string(), "memo-api".to_string()),
+        (
+            "AUTH_JWKS_URI".to_string(),
+            "https://auth.memo.example.com/.well-known/jwks.json".to_string(),
+        ),
+        (
+            "AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS".to_string(),
+            "900".to_string(),
+        ),
+    ])
+    .expect("HTTPS issuer paths must remain valid for multi-tenant authorization servers");
+
+    let AuthConfig::Jwt { issuer, .. } = config.auth else {
+        panic!("JWT auth configuration expected");
+    };
+    assert_eq!(issuer, "https://auth.memo.example.com/tenant-a");
+}
+
+#[test]
 fn jwt_jwks_uri_requires_https_without_userinfo_or_fragment() {
     for invalid in [
         "http://auth.memo.example.com/.well-known/jwks.json",
         "https://user:secret@auth.memo.example.com/.well-known/jwks.json",
+        "https://@auth.memo.example.com/.well-known/jwks.json",
         "https://auth.memo.example.com/.well-known/jwks.json#keys",
         "/.well-known/jwks.json",
     ] {
