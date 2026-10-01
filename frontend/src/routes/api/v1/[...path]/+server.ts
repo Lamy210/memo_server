@@ -7,7 +7,9 @@ import {
   buildBackendUrl,
   buildFrontendResponseHeaders,
   InvalidProxyPathError,
-  isTrustedMemoProxyRequest
+  isTrustedMemoProxyRequest,
+  MemoProxyBodyTooLargeError,
+  readMemoProxyRequestBody
 } from '$lib/server/memoProxy';
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8080';
@@ -33,14 +35,22 @@ const proxyRequest: RequestHandler = async ({ request, params, url, fetch, local
     return Response.json({ message: 'Memo backend is unavailable' }, { status: 502 });
   }
 
+  let body: ArrayBuffer | undefined;
+  if (method !== 'GET' && method !== 'HEAD') {
+    try {
+      body = await readMemoProxyRequestBody(request);
+    } catch (error) {
+      if (error instanceof MemoProxyBodyTooLargeError) {
+        return Response.json({ message: 'Memo request body is too large' }, { status: 413 });
+      }
+      throw error;
+    }
+  }
+
   const headers = buildBackendRequestHeaders(
     request.headers,
     dev ? { developmentUserId } : { bearerToken: locals.accessToken }
   );
-  const body =
-    method === 'GET' || method === 'HEAD'
-      ? undefined
-      : await request.arrayBuffer().then((value) => (value.byteLength > 0 ? value : undefined));
 
   try {
     const response = await fetch(target, {
