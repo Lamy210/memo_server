@@ -173,7 +173,7 @@
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">
-            {mode === 'create' ? 'New note' : 'Editor'}
+            {mode === 'create' ? '新規メモ' : '編集'}
           </p>
           <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-950">
             {mode === 'create' ? '新しいメモ' : 'メモを編集'}
@@ -283,10 +283,10 @@
     <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
       <div class="mb-5 flex items-center justify-between">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Preview</p>
+          <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">プレビュー</p>
           <h2 class="mt-1 font-semibold text-slate-900">Markdownプレビュー</h2>
         </div>
-        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">Live</span>
+        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">リアルタイム</span>
       </div>
       {#if content.trim()}
         <article class="prose prose-slate max-w-none break-words prose-pre:overflow-auto">
