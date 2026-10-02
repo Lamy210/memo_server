@@ -88,6 +88,8 @@ describe('buildBackendUrl', () => {
     'http://@backend:8080',
     'http://backend:8080/internal',
     'http://backend:8080/internal/..',
+    'http://backend:8080\\internal\\..',
+    'http://back\tend:8080',
     'http://backend:8080/?',
     'http://backend:8080/#',
     'http://backend:8080?tenant=a',
