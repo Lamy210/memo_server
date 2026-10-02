@@ -76,7 +76,6 @@ struct ErrorResponse {
 
 pub type AppResult<T> = Result<T, AppError>;
 
-
 #[cfg(test)]
 mod tests {
     use actix_web::{body::to_bytes, http::StatusCode};
