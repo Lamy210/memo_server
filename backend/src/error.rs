@@ -50,9 +50,10 @@ impl ResponseError for AppError {
                 message: msg.clone(),
             }),
             AppError::ServiceUnavailable(msg) => {
+                log::warn!("Request failed because a required service is unavailable: {msg}");
                 HttpResponse::ServiceUnavailable().json(ErrorResponse {
                     error: "Service Unavailable".into(),
-                    message: msg.clone(),
+                    message: "A required service is temporarily unavailable".into(),
                 })
             }
             AppError::Conflict(msg) => HttpResponse::Conflict().json(ErrorResponse {
@@ -74,3 +75,45 @@ struct ErrorResponse {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+
+#[cfg(test)]
+mod tests {
+    use actix_web::{body::to_bytes, http::StatusCode};
+    use serde_json::Value;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn service_unavailable_response_hides_internal_detail() {
+        let response = AppError::ServiceUnavailable(
+            "memo mutation failed; primary=Database Error: secret backend detail".into(),
+        )
+        .error_response();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let body = to_bytes(response.into_body())
+            .await
+            .expect("service unavailable response body");
+        let json: Value = serde_json::from_slice(&body).expect("valid JSON error response");
+
+        assert_eq!(json["error"], "Service Unavailable");
+        assert_eq!(
+            json["message"],
+            "A required service is temporarily unavailable"
+        );
+        assert!(!String::from_utf8_lossy(&body).contains("secret backend detail"));
+    }
+
+    #[tokio::test]
+    async fn client_actionable_errors_keep_their_existing_detail() {
+        let response = AppError::ValidationError("Title is required".into()).error_response();
+        let body = to_bytes(response.into_body())
+            .await
+            .expect("validation response body");
+        let json: Value = serde_json::from_slice(&body).expect("valid JSON error response");
+
+        assert_eq!(json["message"], "Title is required");
+    }
+}
