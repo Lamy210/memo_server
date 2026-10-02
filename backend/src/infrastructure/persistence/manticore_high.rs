@@ -16,6 +16,8 @@ use crate::{
     error::{AppError, AppResult},
 };
 
+use super::manticore_http::build_manticore_http_client;
+
 const TABLE_NAME: &str = "memos_high_v1";
 const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos_high_v1 (id uuid, content_tokens text indexed, tag_tokens text indexed, owner_partition string, version int, analysis_version string, search_key_version string, memo_sort_key string) dict='keywords_32k'";
 
@@ -27,7 +29,7 @@ pub struct HighManticoreClient {
 
 impl HighManticoreClient {
     pub fn new(uri: &str) -> AppResult<Self> {
-        let client = Client::builder().build().map_err(|error| {
+        let client = build_manticore_http_client().map_err(|error| {
             AppError::DatabaseError(format!(
                 "Failed to create HIGH Manticore HTTP client: {error}"
             ))
