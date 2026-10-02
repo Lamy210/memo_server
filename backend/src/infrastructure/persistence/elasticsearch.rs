@@ -335,7 +335,6 @@ impl HealthProbe for ElasticsearchClient {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -353,12 +352,11 @@ mod tests {
             sleep(Duration::from_secs(1)).await;
         });
 
-        let client =
-            ElasticsearchClient::new_with_request_timeout(
-                &format!("http://{addr}"),
-                Duration::from_millis(50),
-            )
-            .unwrap();
+        let client = ElasticsearchClient::new_with_request_timeout(
+            &format!("http://{addr}"),
+            Duration::from_millis(50),
+        )
+        .unwrap();
 
         let result = tokio::time::timeout(Duration::from_millis(500), client.health_check())
             .await
