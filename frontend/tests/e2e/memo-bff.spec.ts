@@ -26,6 +26,17 @@ test('creates a memo through the protected browser BFF', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'メモを編集' })).toBeVisible();
 });
 
+test('declares Japanese document semantics', async ({ page }) => {
+  await page.goto('/memos');
+
+  await expect(page.locator('html')).toHaveAttribute('lang', 'ja');
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+    'content',
+    'メモの作成・検索・整理に集中できるシンプルなワークスペースです。'
+  );
+  await expect(page.getByRole('navigation', { name: 'メインナビゲーション' })).toBeVisible();
+});
+
 test('marks memo API responses as non-storable', async ({ request }) => {
   const response = await request.get('/api/v1/memos');
 

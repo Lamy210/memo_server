@@ -6,7 +6,7 @@
   <title>Schnee Memo</title>
   <meta
     name="description"
-    content="A focused memo workspace for writing, searching, and refining notes."
+    content="メモの作成・検索・整理に集中できるシンプルなワークスペースです。"
   />
 </svelte:head>
 
@@ -18,7 +18,7 @@
         <span>Schnee Memo</span>
       </a>
 
-      <nav class="flex items-center gap-1 text-sm font-medium text-slate-600" aria-label="Main navigation">
+      <nav class="flex items-center gap-1 text-sm font-medium text-slate-600" aria-label="メインナビゲーション">
         <a href="/memos" class="rounded-lg px-3 py-2 transition hover:bg-slate-100 hover:text-slate-950">
           メモ
         </a>
