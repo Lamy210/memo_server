@@ -40,7 +40,7 @@ describe('buildBackendRequestHeaders', () => {
       developmentUserId: '12345678-1234-1234-1234-123456789012'
     });
 
-    expect(headers.get('accept-encoding')).toBeNull();
+    expect(headers.get('accept-encoding')).toBe('identity');
     expect(headers.get('authorization')).toBeNull();
     expect(headers.get('cookie')).toBeNull();
     expect(headers.get('connection')).toBeNull();
@@ -69,6 +69,7 @@ describe('buildBackendRequestHeaders', () => {
       developmentUserId: '12345678-1234-1234-1234-123456789012'
     });
 
+    expect(headers.get('accept-encoding')).toBe('identity');
     expect(headers.get('authorization')).toBe('Bearer trusted-access-token');
     expect(headers.get('x-development-user-id')).toBeNull();
   });
