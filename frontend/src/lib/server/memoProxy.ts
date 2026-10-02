@@ -36,7 +36,6 @@ const RESPONSE_HEADERS_TO_STRIP = [
 ] as const;
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
-const RAW_URL_AUTHORITY_WITH_USERINFO = /^[A-Za-z][A-Za-z\d+.-]*:\/\/[^/?#]*@/;
 
 export const MEMO_BFF_MAX_REQUEST_BODY_BYTES = 512 * 1024;
 
@@ -153,6 +152,23 @@ export function buildFrontendResponseHeaders(source: Headers): Headers {
   return headers;
 }
 
+function hasOriginOnlyRawShape(value: string): boolean {
+  const schemeEnd = value.indexOf('://');
+  if (schemeEnd < 0) {
+    return false;
+  }
+
+  const remainder = value.slice(schemeEnd + 3);
+  const authorityEnd = [...remainder].findIndex((character) =>
+    character === '/' || character === '?' || character === '#'
+  );
+  const splitAt = authorityEnd < 0 ? remainder.length : authorityEnd;
+  const authority = remainder.slice(0, splitAt);
+  const suffix = remainder.slice(splitAt);
+
+  return authority.length > 0 && !authority.includes('@') && (suffix === '' || suffix === '/');
+}
+
 function parseBackendOrigin(value: string): URL {
   let target: URL;
   try {
@@ -164,7 +180,7 @@ function parseBackendOrigin(value: string): URL {
   const valid =
     (target.protocol === 'http:' || target.protocol === 'https:') &&
     target.hostname.length > 0 &&
-    !RAW_URL_AUTHORITY_WITH_USERINFO.test(value) &&
+    hasOriginOnlyRawShape(value) &&
     target.username === '' &&
     target.password === '' &&
     target.pathname === '/' &&
