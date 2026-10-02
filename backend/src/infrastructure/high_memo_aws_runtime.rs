@@ -14,7 +14,10 @@ use crate::{
 };
 
 #[cfg(feature = "aws-kms-memo")]
-use super::{crypto::RingHighMemoCryptography, crypto_keys_aws_kms::AwsKmsDataKeyProvider};
+use super::{
+    aws_kms_runtime::aws_kms_timeout_config, crypto::RingHighMemoCryptography,
+    crypto_keys_aws_kms::AwsKmsDataKeyProvider,
+};
 
 pub(crate) struct HighMemoStagingRuntimeHandle {
     staging_cryptography: Option<Arc<dyn HighMemoStagingCryptography>>,
@@ -75,6 +78,7 @@ async fn build_aws_kms_cryptography(
     // provider chain and are never copied into application configuration.
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.clone()))
+        .timeout_config(aws_kms_timeout_config())
         .load()
         .await;
 
