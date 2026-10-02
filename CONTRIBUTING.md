@@ -92,6 +92,8 @@ UIを変更するPRでは、通常のFrontend CIに加えてこのartifactを確
 
 同じcaptureでは `@axe-core/playwright` でWCAG 2.x系ルールを検査し、baseと候補画面のserious/critical違反を比較します。既存違反はbaselineとして許容しますが、新しいルールが出た場合、または同じルールで影響ノード数が増えた場合はUI Diffをfailさせます。違反が減る変更はそのまま通過します。
 
+UI Diff / Lighthouse はPR path filterで重い実行を限定しています。将来これらのworkflowをbranch protectionのrequired checkにする場合は、path filterでworkflow自体をskipさせず、常に完了する軽量gateと条件付きの重いjobへ分けてください。
+
 Svelte componentは `@testing-library/svelte` + Vitest + jsdomで、DOM実装詳細ではなくrole/text/linkなど利用者から観測できる振る舞いを優先して検証します。
 
 Playwright browser E2Eは固定fixture backendとproduction previewを起動し、実ブラウザからmemo BFFを通る重要経路を検証します。現在は保存操作がsame-origin/CSRF marker境界を満たすことと、共通API helperを迂回したraw mutationが403になることをCIで固定します。失敗時のHTML report/trace/screenshotはCI artifactへ保存します。
