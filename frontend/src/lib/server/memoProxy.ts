@@ -7,9 +7,13 @@ import {
 const REQUEST_HEADERS_TO_STRIP = [
   'accept-encoding',
   'authorization',
+  'cf-connecting-ip',
+  'client-ip',
   'connection',
   'content-length',
   'cookie',
+  'fastly-client-ip',
+  'forwarded',
   'host',
   'keep-alive',
   'proxy-authenticate',
@@ -17,10 +21,15 @@ const REQUEST_HEADERS_TO_STRIP = [
   'te',
   'trailer',
   'transfer-encoding',
+  'true-client-ip',
   'upgrade',
+  'via',
   'x-development-user-id',
+  'x-real-ip',
   'x-schnee-memo-request'
 ] as const;
+
+const REQUEST_HEADER_PREFIXES_TO_STRIP = ['x-forwarded-'] as const;
 
 const RESPONSE_HEADERS_TO_STRIP = [
   'connection',
@@ -134,6 +143,14 @@ export function buildBackendRequestHeaders(
 
   for (const name of REQUEST_HEADERS_TO_STRIP) {
     headers.delete(name);
+  }
+
+  const sourceHeaderNames: string[] = [];
+  headers.forEach((_value, name) => sourceHeaderNames.push(name));
+  for (const name of sourceHeaderNames) {
+    if (REQUEST_HEADER_PREFIXES_TO_STRIP.some((prefix) => name.startsWith(prefix))) {
+      headers.delete(name);
+    }
   }
 
   if (auth.bearerToken) {
