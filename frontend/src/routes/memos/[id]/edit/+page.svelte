@@ -25,6 +25,10 @@
   });
 </script>
 
+<svelte:head>
+  <title>メモを編集 | Schnee Memo</title>
+</svelte:head>
+
 {#if loading}
   <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
     <div class="h-[720px] animate-pulse rounded-3xl border border-slate-200 bg-white"></div>
