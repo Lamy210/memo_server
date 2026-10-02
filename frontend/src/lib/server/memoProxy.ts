@@ -159,9 +159,7 @@ function hasOriginOnlyRawShape(value: string): boolean {
   }
 
   const remainder = value.slice(schemeEnd + 3);
-  const authorityEnd = [...remainder].findIndex((character) =>
-    character === '/' || character === '?' || character === '#'
-  );
+  const authorityEnd = remainder.search(/[/?#]/);
   const splitAt = authorityEnd < 0 ? remainder.length : authorityEnd;
   const authority = remainder.slice(0, splitAt);
   const suffix = remainder.slice(splitAt);
