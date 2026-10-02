@@ -36,6 +36,7 @@ const RESPONSE_HEADERS_TO_STRIP = [
 ] as const;
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
+const INVALID_BACKEND_URL_RAW_CHARACTER = /[\\\u0000-\u0020\u007f]/;
 
 export const MEMO_BFF_MAX_REQUEST_BODY_BYTES = 512 * 1024;
 
@@ -153,6 +154,10 @@ export function buildFrontendResponseHeaders(source: Headers): Headers {
 }
 
 function hasOriginOnlyRawShape(value: string): boolean {
+  if (INVALID_BACKEND_URL_RAW_CHARACTER.test(value)) {
+    return false;
+  }
+
   const schemeEnd = value.indexOf('://');
   if (schemeEnd < 0) {
     return false;
