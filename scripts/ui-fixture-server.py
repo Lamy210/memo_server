@@ -43,6 +43,7 @@ MEMOS = [
 
 
 UNAUTHORIZED = False
+REQUIRE_IDENTITY_ENCODING = False
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -54,8 +55,26 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def require_identity_encoding(self, path):
+        if (
+            REQUIRE_IDENTITY_ENCODING
+            and path.startswith("/api/v1/")
+            and self.headers.get("Accept-Encoding") != "identity"
+        ):
+            self.send_json(
+                400,
+                {
+                    "message": "Fixture expected Accept-Encoding: identity on memo API backend requests"
+                },
+            )
+            return False
+        return True
+
     def do_GET(self):
         path = urlparse(self.path).path
+
+        if not self.require_identity_encoding(path):
+            return
 
         if path == "/healthz":
             self.send_json(200, {"status": "ok"})
@@ -90,6 +109,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
         global UNAUTHORIZED
         path = urlparse(self.path).path
 
+        if not self.require_identity_encoding(path):
+            return
+
         if path == "/__visual__/scenario/unauthorized":
             UNAUTHORIZED = True
             self.send_json(200, {"scenario": "unauthorized"})
@@ -106,13 +128,19 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.send_json(404, {"message": "Visual fixture route not found"})
 
     def do_PATCH(self):
-        if urlparse(self.path).path.startswith("/api/v1/memos/"):
+        path = urlparse(self.path).path
+        if not self.require_identity_encoding(path):
+            return
+        if path.startswith("/api/v1/memos/"):
             self.send_json(200, {**MEMOS[0], "version": 4})
             return
         self.send_json(404, {"message": "Visual fixture route not found"})
 
     def do_DELETE(self):
-        if urlparse(self.path).path.startswith("/api/v1/memos/"):
+        path = urlparse(self.path).path
+        if not self.require_identity_encoding(path):
+            return
+        if path.startswith("/api/v1/memos/"):
             self.send_response(204)
             self.end_headers()
             return
@@ -120,9 +148,13 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    global REQUIRE_IDENTITY_ENCODING
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=18080)
+    parser.add_argument("--require-identity-encoding", action="store_true")
     args = parser.parse_args()
+    REQUIRE_IDENTITY_ENCODING = args.require_identity_encoding
     ThreadingHTTPServer(("127.0.0.1", args.port), FixtureHandler).serve_forever()
 
 
