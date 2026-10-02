@@ -45,10 +45,13 @@ impl ResponseError for AppError {
                     message: msg.clone(),
                 })
             }
-            AppError::Unauthorized(msg) => HttpResponse::Unauthorized().json(ErrorResponse {
-                error: "Unauthorized".into(),
-                message: msg.clone(),
-            }),
+            AppError::Unauthorized(msg) => {
+                log::debug!("Request authentication failed: {msg}");
+                HttpResponse::Unauthorized().json(ErrorResponse {
+                    error: "Unauthorized".into(),
+                    message: "Valid authentication credentials are required".into(),
+                })
+            }
             AppError::ServiceUnavailable(msg) => {
                 log::debug!("Request failed because a required service is unavailable: {msg}");
                 HttpResponse::ServiceUnavailable().json(ErrorResponse {
@@ -82,6 +85,26 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+
+    #[tokio::test]
+    async fn unauthorized_response_hides_authentication_detail() {
+        let response = AppError::Unauthorized("Access token signing key is not recognized".into())
+            .error_response();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let body = to_bytes(response.into_body())
+            .await
+            .expect("unauthorized response body");
+        let json: Value = serde_json::from_slice(&body).expect("valid JSON error response");
+
+        assert_eq!(json["error"], "Unauthorized");
+        assert_eq!(
+            json["message"],
+            "Valid authentication credentials are required"
+        );
+        assert!(!String::from_utf8_lossy(&body).contains("signing key"));
+    }
 
     #[tokio::test]
     async fn service_unavailable_response_hides_internal_detail() {
