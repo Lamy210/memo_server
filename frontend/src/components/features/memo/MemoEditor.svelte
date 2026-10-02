@@ -180,17 +180,19 @@
           </h1>
         </div>
         <div class="flex items-center gap-2 text-xs font-medium">
-          {#if status === 'saving'}
-            <span class="rounded-full bg-amber-50 px-3 py-1.5 text-amber-700">保存中…</span>
-          {:else if status === 'saved'}
-            <span class="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">保存済み</span>
-          {:else if status === 'conflict'}
-            <span class="rounded-full bg-rose-50 px-3 py-1.5 text-rose-700">競合</span>
-          {:else if status === 'error'}
-            <span class="rounded-full bg-rose-50 px-3 py-1.5 text-rose-700">エラー</span>
-          {:else}
-            <span class="rounded-full bg-slate-100 px-3 py-1.5 text-slate-600">未保存</span>
-          {/if}
+          <div role="status" aria-live="polite" aria-atomic="true">
+            {#if status === 'saving'}
+              <span class="rounded-full bg-amber-50 px-3 py-1.5 text-amber-700">保存中…</span>
+            {:else if status === 'saved'}
+              <span class="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">保存済み</span>
+            {:else if status === 'conflict'}
+              <span class="rounded-full bg-rose-50 px-3 py-1.5 text-rose-700">競合</span>
+            {:else if status === 'error'}
+              <span class="rounded-full bg-rose-50 px-3 py-1.5 text-rose-700">エラー</span>
+            {:else}
+              <span class="rounded-full bg-slate-100 px-3 py-1.5 text-slate-600">未保存</span>
+            {/if}
+          </div>
           {#if mode === 'edit'}
             <span class="text-slate-500">v{version}</span>
           {/if}
