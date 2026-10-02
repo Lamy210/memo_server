@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use redis::{AsyncCommands, Client};
+use redis::{AsyncCommands, AsyncConnectionConfig, Client};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::error;
 
@@ -21,6 +21,14 @@ use super::ports::{
 
 const LEGACY_CACHE_NAMESPACE: &str = "memo";
 const HIGH_CACHE_NAMESPACE: &str = "memo:high:v1";
+const REDIS_CONNECTION_TIMEOUT: Duration = Duration::from_secs(1);
+const REDIS_RESPONSE_TIMEOUT: Duration = Duration::from_millis(500);
+
+fn redis_async_connection_config() -> AsyncConnectionConfig {
+    AsyncConnectionConfig::new()
+        .set_connection_timeout(Some(REDIS_CONNECTION_TIMEOUT))
+        .set_response_timeout(Some(REDIS_RESPONSE_TIMEOUT))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LegacyMemoCacheSweepMode {
@@ -128,7 +136,7 @@ impl RedisCache {
 
     async fn connection(&self) -> AppResult<redis::aio::MultiplexedConnection> {
         self.client
-            .get_multiplexed_async_connection()
+            .get_multiplexed_async_connection_with_config(&redis_async_connection_config())
             .await
             .map_err(|error| {
                 error!("Failed to get Redis connection: {error}");
@@ -532,6 +540,12 @@ mod tests {
             key_version: "test-kms-v1".into(),
             schema_version: MEMO_HIGH_SCHEMA_VERSION,
         }
+    }
+
+    #[test]
+    fn redis_async_timeout_policy_is_explicit_and_matches_reviewed_baseline() {
+        assert_eq!(REDIS_CONNECTION_TIMEOUT, Duration::from_secs(1));
+        assert_eq!(REDIS_RESPONSE_TIMEOUT, Duration::from_millis(500));
     }
 
     #[test]
