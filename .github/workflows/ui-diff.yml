@@ -2,6 +2,13 @@ name: UI Diff
 
 on:
   pull_request:
+    paths:
+      - '.github/workflows/ui-diff.yml'
+      - 'frontend/**'
+      - 'scripts/a11y-diff.py'
+      - 'scripts/ci-retry.sh'
+      - 'scripts/ui-diff.sh'
+      - 'scripts/ui-fixture-server.py'
 
 permissions:
   contents: read
