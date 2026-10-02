@@ -154,7 +154,7 @@ The auth service may use a separate database, hostname, deployment pipeline and 
 
 ## Browser integration
 
-The browser/session transport is a separate concern from memo_server's JWT verification boundary.
+The browser/session transport is a separate concern from memo_server's JWT verification boundary. memo_server keeps authentication verifier diagnostics server-side: HTTP 401 responses expose a stable generic message rather than details such as token shape, algorithm policy, key lookup, or development-auth parsing failures. Clients must branch on the 401 status instead of matching diagnostic text.
 
 The production frontend integration should prefer:
 
