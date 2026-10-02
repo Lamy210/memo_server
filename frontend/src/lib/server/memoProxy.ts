@@ -36,12 +36,20 @@ const RESPONSE_HEADERS_TO_STRIP = [
 ] as const;
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
+const INVALID_BACKEND_URL_RAW_CHARACTER = /[\\\u0000-\u0020\u007f]/;
 
 export const MEMO_BFF_MAX_REQUEST_BODY_BYTES = 512 * 1024;
 
 export interface BackendAuthContext {
   developmentUserId?: string;
   bearerToken?: string;
+}
+
+export class InvalidBackendUrlError extends Error {
+  constructor() {
+    super('Invalid memo backend URL');
+    this.name = 'InvalidBackendUrlError';
+  }
 }
 
 export class InvalidProxyPathError extends Error {
@@ -145,6 +153,50 @@ export function buildFrontendResponseHeaders(source: Headers): Headers {
   return headers;
 }
 
+function hasOriginOnlyRawShape(value: string): boolean {
+  if (INVALID_BACKEND_URL_RAW_CHARACTER.test(value)) {
+    return false;
+  }
+
+  const schemeEnd = value.indexOf('://');
+  if (schemeEnd < 0) {
+    return false;
+  }
+
+  const remainder = value.slice(schemeEnd + 3);
+  const authorityEnd = remainder.search(/[/?#]/);
+  const splitAt = authorityEnd < 0 ? remainder.length : authorityEnd;
+  const authority = remainder.slice(0, splitAt);
+  const suffix = remainder.slice(splitAt);
+
+  return authority.length > 0 && !authority.includes('@') && (suffix === '' || suffix === '/');
+}
+
+function parseBackendOrigin(value: string): URL {
+  let target: URL;
+  try {
+    target = new URL(value);
+  } catch {
+    throw new InvalidBackendUrlError();
+  }
+
+  const valid =
+    (target.protocol === 'http:' || target.protocol === 'https:') &&
+    target.hostname.length > 0 &&
+    hasOriginOnlyRawShape(value) &&
+    target.username === '' &&
+    target.password === '' &&
+    target.pathname === '/' &&
+    target.search === '' &&
+    target.hash === '';
+
+  if (!valid) {
+    throw new InvalidBackendUrlError();
+  }
+
+  return target;
+}
+
 function encodeProxyPath(path: string | undefined): string {
   if (!path) return '';
 
@@ -165,10 +217,9 @@ function encodeProxyPath(path: string | undefined): string {
 }
 
 export function buildBackendUrl(backendUrl: string, path: string | undefined, search: string): URL {
-  const target = new URL(backendUrl);
+  const target = parseBackendOrigin(backendUrl);
   target.pathname = `/api/v1/${encodeProxyPath(path)}`;
   target.search = search;
-  target.hash = '';
   return target;
 }
 
