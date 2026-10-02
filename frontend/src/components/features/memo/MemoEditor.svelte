@@ -19,6 +19,8 @@
   export let memo: Memo | undefined = undefined;
 
   const revisions = new SaveRevisionTracker();
+  const MAX_MEMO_TAGS = 10;
+  const MAX_MEMO_TAG_CHARS = 64;
 
   let title = memo?.title ?? '';
   let content = memo?.content ?? '';
@@ -35,9 +37,18 @@
   $: tags = tagsText
     .split(',')
     .map((tag) => tag.trim())
-    .filter(Boolean)
-    .slice(0, 10);
-  $: canSave = title.trim().length > 0 && content.trim().length > 0 && !saving;
+    .filter(Boolean);
+  $: tagValidationMessage =
+    tags.length > MAX_MEMO_TAGS
+      ? `タグは最大${MAX_MEMO_TAGS}個までです。`
+      : tags.some((tag) => [...tag].length > MAX_MEMO_TAG_CHARS)
+        ? `タグは1つ${MAX_MEMO_TAG_CHARS}文字以内にしてください。`
+        : '';
+  $: canSave =
+    title.trim().length > 0 &&
+    content.trim().length > 0 &&
+    tagValidationMessage === '' &&
+    !saving;
   $: previewHtml = DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
 
   function scheduleAutosave(): void {
@@ -237,10 +248,18 @@
         <input
           bind:value={tagsText}
           oninput={markDirty}
+          aria-describedby="memo-tags-help"
+          aria-invalid={tagValidationMessage ? 'true' : 'false'}
           placeholder="rust, architecture, todo"
           class="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-500 focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
         />
-        <span class="mt-2 block text-xs text-slate-500">カンマ区切り、最大10個</span>
+        <span
+          id="memo-tags-help"
+          class="mt-2 block text-xs {tagValidationMessage ? 'text-rose-700' : 'text-slate-500'}"
+          aria-live="polite"
+        >
+          {tagValidationMessage || `カンマ区切り、最大${MAX_MEMO_TAGS}個・1つ${MAX_MEMO_TAG_CHARS}文字まで`}
+        </span>
       </label>
 
       {#if errorMessage}
