@@ -36,7 +36,7 @@
 <section>
   <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
     <div>
-      <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Workspace</p>
+      <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">ワークスペース</p>
       <h1 class="mt-2 text-3xl font-bold tracking-tight text-slate-950">メモ</h1>
       <p class="mt-2 text-sm leading-6 text-slate-500">アイデア、設計、TODOをひとつの場所に。</p>
     </div>
