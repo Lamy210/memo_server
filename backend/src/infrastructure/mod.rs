@@ -1,4 +1,6 @@
 pub mod auth;
+#[cfg(any(feature = "aws-kms-memo", feature = "aws-kms-search"))]
+pub(crate) mod aws_kms_runtime;
 pub mod crypto;
 pub(crate) mod crypto_keys;
 #[cfg(feature = "aws-kms-memo")]
