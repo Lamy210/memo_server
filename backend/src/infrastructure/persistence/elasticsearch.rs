@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use crate::application::health::HealthProbe;
@@ -13,31 +15,42 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 const INDEX_NAME: &str = "memos";
+const ELASTICSEARCH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ElasticsearchClient {
     client: Elasticsearch,
+    request_timeout: Duration,
 }
 
 impl ElasticsearchClient {
     pub async fn new(uri: &str) -> AppResult<Self> {
+        Self::new_with_request_timeout(uri, ELASTICSEARCH_REQUEST_TIMEOUT)
+    }
+
+    fn new_with_request_timeout(uri: &str, request_timeout: Duration) -> AppResult<Self> {
         let transport = Transport::single_node(uri).map_err(|e| {
             AppError::DatabaseError(format!("Failed to create Elasticsearch transport: {}", e))
         })?;
         let client = Elasticsearch::new(transport);
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            request_timeout,
+        })
     }
 
     async fn ensure_index(&self) -> AppResult<()> {
-        Self::initialize_index(&self.client).await
+        self.initialize_index().await
     }
 
-    async fn initialize_index(client: &Elasticsearch) -> AppResult<()> {
+    async fn initialize_index(&self) -> AppResult<()> {
+        let client = &self.client;
         let exists = client
             .indices()
             .exists(elasticsearch::indices::IndicesExistsParts::Index(&[
                 INDEX_NAME,
             ]))
+            .request_timeout(self.request_timeout)
             .send()
             .await
             .map_err(|e| {
@@ -81,6 +94,7 @@ impl ElasticsearchClient {
                     INDEX_NAME,
                 ))
                 .body(mapping)
+                .request_timeout(self.request_timeout)
                 .send()
                 .await
                 .map_err(|e| AppError::DatabaseError(format!("Failed to create index: {}", e)))?;
@@ -109,6 +123,7 @@ impl ElasticsearchClient {
             .index(IndexParts::IndexId(INDEX_NAME, &memo_id))
             .body(doc)
             .refresh(Refresh::True)
+            .request_timeout(self.request_timeout)
             .send()
             .await
             .map_err(|e| AppError::DatabaseError(format!("Failed to index memo: {}", e)))?;
@@ -190,6 +205,7 @@ impl ElasticsearchClient {
             .client
             .search(SearchParts::Index(&[INDEX_NAME]))
             .body(query_body)
+            .request_timeout(self.request_timeout)
             .send()
             .await
             .map_err(|e| AppError::DatabaseError(format!("Failed to execute search: {}", e)))?;
@@ -255,6 +271,7 @@ impl ElasticsearchClient {
             .delete_by_query(DeleteByQueryParts::Index(&[INDEX_NAME]))
             .body(query_body)
             .refresh(true)
+            .request_timeout(self.request_timeout)
             .send()
             .await
             .map_err(|e| AppError::DatabaseError(format!("Failed to delete memo: {}", e)))?;
@@ -274,6 +291,7 @@ impl ElasticsearchClient {
             .client
             .cat()
             .health()
+            .request_timeout(self.request_timeout)
             .send()
             .await
             .map_err(|e| AppError::DatabaseError(format!("Health check failed: {}", e)))?;
@@ -314,5 +332,37 @@ impl HealthProbe for ElasticsearchClient {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::{net::TcpListener, time::sleep};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn health_check_times_out_stalled_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            sleep(Duration::from_secs(1)).await;
+        });
+
+        let client = ElasticsearchClient::new_with_request_timeout(
+            &format!("http://{addr}"),
+            Duration::from_millis(50),
+        )
+        .unwrap();
+
+        let result = tokio::time::timeout(Duration::from_millis(500), client.health_check())
+            .await
+            .expect("Elasticsearch request timeout should finish before the outer test deadline");
+
+        assert!(result.is_err(), "stalled Elasticsearch response must fail");
+        server_task.abort();
     }
 }
