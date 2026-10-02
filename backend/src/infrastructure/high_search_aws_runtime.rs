@@ -18,8 +18,7 @@ use super::high_search_runtime::HighSearchRuntimeStack;
 
 #[cfg(feature = "aws-kms-search")]
 use super::{
-    aws_kms_runtime::aws_kms_timeout_config,
-    crypto_search_seed_aws_kms::AwsKmsSearchSeedPrfClient,
+    aws_kms_runtime::aws_kms_timeout_config, crypto_search_seed_aws_kms::AwsKmsSearchSeedPrfClient,
     crypto_search_seed_provider::ManagedSearchSeedPrfClient,
 };
 
