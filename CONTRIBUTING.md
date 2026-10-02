@@ -80,7 +80,7 @@ pnpm test:e2e
 
 ### UI visual diff
 
-PRでは `UI Diff / Visual diff` workflow がbase revisionとPR revisionを同じChromium環境で起動し、`/memos`、検索、作成、編集画面を固定fixtureで撮影します。UI差分はreview用のinformational signalであり、pixel差分そのものではPRをfailさせません。
+Frontendまたはvisual fixture/diff基盤に関係するPRでは `UI Diff / Visual diff` workflow がbase revisionとPR revisionを同じChromium環境で起動し、`/memos`、検索、作成、編集画面を固定fixtureで撮影します。Backend-onlyや無関係なdocs変更ではこの重いworkflowを起動しません。UI差分はreview用のinformational signalであり、pixel差分そのものではPRをfailさせません。
 
 workflow artifact `ui-diff-pr-<number>` には各画面の以下を含めます。
 
@@ -92,13 +92,15 @@ UIを変更するPRでは、通常のFrontend CIに加えてこのartifactを確
 
 同じcaptureでは `@axe-core/playwright` でWCAG 2.x系ルールを検査し、baseと候補画面のserious/critical違反を比較します。既存違反はbaselineとして許容しますが、新しいルールが出た場合、または同じルールで影響ノード数が増えた場合はUI Diffをfailさせます。違反が減る変更はそのまま通過します。
 
+UI Diff / Lighthouse はPR path filterで重い実行を限定しています。将来これらのworkflowをbranch protectionのrequired checkにする場合は、path filterでworkflow自体をskipさせず、常に完了する軽量gateと条件付きの重いjobへ分けてください。
+
 Svelte componentは `@testing-library/svelte` + Vitest + jsdomで、DOM実装詳細ではなくrole/text/linkなど利用者から観測できる振る舞いを優先して検証します。
 
 Playwright browser E2Eは固定fixture backendとproduction previewを起動し、実ブラウザからmemo BFFを通る重要経路を検証します。現在は保存操作がsame-origin/CSRF marker境界を満たすことと、共通API helperを迂回したraw mutationが403になることをCIで固定します。失敗時のHTML report/trace/screenshotはCI artifactへ保存します。
 
 ### Lighthouse baseline
 
-PRでは `Lighthouse / Lighthouse baseline` workflow がproduction build/previewを固定fixture backendへ接続し、代表画面（一覧・新規・編集）を各3回計測します。median runの Performance / Accessibility / Best Practices / SEO scoreをjob summaryへ出し、HTML/JSON reportとmanifestを `lighthouse-pr-<number>` artifactへ14日間保存します。
+FrontendまたはLighthouse fixture/report基盤に関係するPRでは `Lighthouse / Lighthouse baseline` workflow がproduction build/previewを固定fixture backendへ接続し、代表画面（一覧・新規・編集）を各3回計測します。Backend-onlyや無関係なdocs変更ではこの重いworkflowを起動しません。median runの Performance / Accessibility / Best Practices / SEO scoreをjob summaryへ出し、HTML/JSON reportとmanifestを `lighthouse-pr-<number>` artifactへ14日間保存します。
 
 現在の安定baseline（代表3画面で各category 100）を基準に、Accessibilityは100、Best PracticesとSEOは95未満をblocking failureにします。PerformanceはCI runnerの実行ノイズを考慮し、90未満をwarningとして可視化します。依存解決・build・preview・Lighthouse collection・report生成が壊れた場合もworkflowをfailさせます。
 
