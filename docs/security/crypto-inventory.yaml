@@ -292,6 +292,7 @@ assets:
         builder: HighMemoStagingRuntimeHandle
         aws_sdk_region: explicit
         credentials: aws_standard_refreshable_provider_chain
+        aws_kms_operation_timeout_seconds: 30
         kms_preflight_before_use: required
         application_startup_wired: standby_when_high_memo_enabled
         operator_migration_trait: available
@@ -452,6 +453,7 @@ assets:
         aws_region_source: explicit_validated_config
         aws_credentials_source: standard_provider_chain
         aws_client_construction: once_per_application_startup
+        aws_kms_operation_timeout_seconds: 30
         aws_kms_startup_preflight: DescribeKey
         aws_kms_startup_required_properties:
           - pinned_arn_match
