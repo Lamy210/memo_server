@@ -52,6 +52,10 @@
   });
 </script>
 
+<svelte:head>
+  <title>メモを検索 | Schnee Memo</title>
+</svelte:head>
+
 <section>
   <div>
     <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Search</p>
