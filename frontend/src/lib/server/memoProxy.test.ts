@@ -191,9 +191,10 @@ describe('readMemoProxyRequestBody', () => {
 });
 
 describe('buildFrontendResponseHeaders', () => {
-  it('removes hop-by-hop response headers', () => {
+  it('removes hop-by-hop response headers and disables caching', () => {
     const headers = buildFrontendResponseHeaders(
       new Headers({
+        'Cache-Control': 'public, max-age=3600',
         Connection: 'keep-alive',
         'Content-Type': 'application/json',
         'Set-Cookie': 'memo=should-not-cross-boundary',
@@ -201,6 +202,7 @@ describe('buildFrontendResponseHeaders', () => {
       })
     );
 
+    expect(headers.get('cache-control')).toBe('no-store');
     expect(headers.get('connection')).toBeNull();
     expect(headers.get('set-cookie')).toBeNull();
     expect(headers.get('transfer-encoding')).toBeNull();
