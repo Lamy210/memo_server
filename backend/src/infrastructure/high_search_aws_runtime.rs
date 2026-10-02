@@ -18,6 +18,7 @@ use super::high_search_runtime::HighSearchRuntimeStack;
 
 #[cfg(feature = "aws-kms-search")]
 use super::{
+    aws_kms_runtime::aws_kms_timeout_config,
     crypto_search_seed_aws_kms::AwsKmsSearchSeedPrfClient,
     crypto_search_seed_provider::ManagedSearchSeedPrfClient,
 };
@@ -131,6 +132,7 @@ async fn build_aws_kms_prf_client(
     // refreshable provider state rather than application secrets.
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.clone()))
+        .timeout_config(aws_kms_timeout_config())
         .load()
         .await;
 
