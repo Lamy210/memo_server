@@ -26,6 +26,13 @@ test('creates a memo through the protected browser BFF', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'メモを編集' })).toBeVisible();
 });
 
+test('marks memo API responses as non-storable', async ({ request }) => {
+  const response = await request.get('/api/v1/memos');
+
+  expect(response.status()).toBe(200);
+  expect(response.headers()['cache-control']).toBe('no-store');
+});
+
 test('rejects a same-origin raw mutation that bypasses the shared API helper', async ({ page }) => {
   await page.goto('/memos');
 
