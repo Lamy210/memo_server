@@ -173,7 +173,7 @@ Backend が利用する主な環境変数:
 
 本番切替では書き込み停止、バックアップ、secondary projectionの再構築、ロールバック条件が必要です。手順は [docs/migrations/scylla-to-mongodb.md](docs/migrations/scylla-to-mongodb.md) を参照してください。
 
-Frontend は SvelteKit server route `/api/v1/...` をBackendへの同一origin proxyとして利用します。`BACKEND_URL` はserver-sideのみで参照され、Composeでは `http://backend:8080` が設定されます。ローカル開発では private env `DEVELOPMENT_USER_ID` を設定し、development buildのserver proxyだけが `X-Development-User-Id` を注入します。`VITE_*` へ認証情報を置かないでください。
+Frontend は SvelteKit server route `/api/v1/...` をBackendへの同一origin proxyとして利用します。`BACKEND_URL` はserver-sideのみで参照され、`http://` または `https://` のorigin URL（userinfo・path prefix・query・fragmentなし）だけを許可します。不正・曖昧な設定はBackendへ接続せず502でfail-closedにし、Composeでは `http://backend:8080` が設定されます。ローカル開発では private env `DEVELOPMENT_USER_ID` を設定し、development buildのserver proxyだけが `X-Development-User-Id` を注入します。`VITE_*` へ認証情報を置かないでください。
 
 ## スコープ
 
