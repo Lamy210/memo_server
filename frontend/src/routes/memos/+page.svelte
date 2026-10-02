@@ -62,7 +62,7 @@
   </form>
 
   {#if loading}
-    <div class="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Loading memos">
+    <div class="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="メモを読み込み中">
       {#each Array(6) as _}
         <div class="h-48 animate-pulse rounded-2xl border border-slate-200 bg-white"></div>
       {/each}
