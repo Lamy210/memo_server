@@ -37,6 +37,18 @@ test('declares Japanese document semantics', async ({ page }) => {
   await expect(page.getByRole('navigation', { name: 'メインナビゲーション' })).toBeVisible();
 });
 
+test('uses route-specific page titles', async ({ page }) => {
+  for (const [path, title] of [
+    ['/memos', 'メモ | Schnee Memo'],
+    ['/memos/new', '新しいメモ | Schnee Memo'],
+    ['/memos/search', 'メモを検索 | Schnee Memo'],
+    ['/memos/018f0c7a-8b7d-7f25-b239-36e6d9f9b001/edit', 'メモを編集 | Schnee Memo']
+  ] as const) {
+    await page.goto(path);
+    await expect(page).toHaveTitle(title);
+  }
+});
+
 test('marks memo API responses as non-storable', async ({ request }) => {
   const response = await request.get('/api/v1/memos');
 
