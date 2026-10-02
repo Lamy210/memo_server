@@ -87,6 +87,9 @@ describe('buildBackendUrl', () => {
     'http://user:secret@backend:8080',
     'http://@backend:8080',
     'http://backend:8080/internal',
+    'http://backend:8080/internal/..',
+    'http://backend:8080/?',
+    'http://backend:8080/#',
     'http://backend:8080?tenant=a',
     'http://backend:8080#memo'
   ])('rejects unsafe or ambiguous backend URL %s', (backendUrl) => {
