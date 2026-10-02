@@ -232,7 +232,7 @@ jobs:
 
           pnpm build
 
-          python3 ../scripts/ui-fixture-server.py --port 18080 >"$RUNNER_TEMP/e2e-fixture.log" 2>&1 &
+          python3 ../scripts/ui-fixture-server.py --port 18080 --require-identity-encoding >"$RUNNER_TEMP/e2e-fixture.log" 2>&1 &
           fixture_pid=$!
 
           BACKEND_URL=http://127.0.0.1:18080 \
