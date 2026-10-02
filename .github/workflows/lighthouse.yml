@@ -2,6 +2,12 @@ name: Lighthouse
 
 on:
   pull_request:
+    paths:
+      - '.github/workflows/lighthouse.yml'
+      - 'frontend/**'
+      - 'scripts/ci-retry.sh'
+      - 'scripts/lighthouse-summary.py'
+      - 'scripts/ui-fixture-server.py'
 
 permissions:
   contents: read
