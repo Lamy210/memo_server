@@ -88,10 +88,8 @@ mod tests {
 
     #[tokio::test]
     async fn unauthorized_response_hides_authentication_detail() {
-        let response = AppError::Unauthorized(
-            "Access token signing key is not recognized".into(),
-        )
-        .error_response();
+        let response = AppError::Unauthorized("Access token signing key is not recognized".into())
+            .error_response();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
