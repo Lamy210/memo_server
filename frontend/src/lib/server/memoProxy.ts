@@ -153,6 +153,11 @@ export function buildBackendRequestHeaders(
     }
   }
 
+  // Node fetch adds compression negotiation automatically when this header is absent.
+  // Keep the trusted backend hop representation-stable so a decoded body cannot be
+  // paired with stale Content-Encoding metadata when it is proxied to the browser.
+  headers.set('Accept-Encoding', 'identity');
+
   if (auth.bearerToken) {
     headers.set('Authorization', `Bearer ${auth.bearerToken}`);
   } else if (auth.developmentUserId) {
