@@ -68,6 +68,29 @@ test('exposes memo save state as a polite live status', async ({ page }) => {
   await expect(status).toHaveText('未保存');
 });
 
+test('keeps invalid tag input visible instead of silently truncating it', async ({ page }) => {
+  await page.goto('/memos/new');
+
+  await page.getByLabel('タイトル').fill('Tag validation probe');
+  await page.getByLabel('本文').fill('Keep invalid tags visible until the user fixes them.');
+
+  const tags = page.getByLabel('タグ');
+  const save = page.getByRole('button', { name: /保存/ });
+
+  await tags.fill('one,two,three,four,five,six,seven,eight,nine,ten,eleven');
+  await expect(page.getByText('タグは最大10個までです。')).toBeVisible();
+  await expect(tags).toHaveAttribute('aria-invalid', 'true');
+  await expect(save).toBeDisabled();
+
+  await tags.fill('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
+  await expect(page.getByText('タグは1つ64文字以内にしてください。')).toBeVisible();
+  await expect(save).toBeDisabled();
+
+  await tags.fill('one,two');
+  await expect(tags).toHaveAttribute('aria-invalid', 'false');
+  await expect(save).toBeEnabled();
+});
+
 test('marks memo API responses as non-storable', async ({ request }) => {
   const response = await request.get('/api/v1/memos');
 
