@@ -17,6 +17,7 @@ It is intentionally implementation-oriented. New security mechanisms must state 
 - Storage-system administrators cannot recover HIGH plaintext from storage alone.
 - Backend, KMS, and operators cannot recover VAULT plaintext by design.
 - Authentication secrets and encryption secrets are separated.
+- Internal service, storage, and cryptographic diagnostic details remain server-side and are not reflected in generic HTTP 503 response bodies.
 
 ### Integrity
 
