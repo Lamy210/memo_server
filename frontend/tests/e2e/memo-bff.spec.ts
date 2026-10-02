@@ -49,6 +49,16 @@ test('uses route-specific page titles', async ({ page }) => {
   }
 });
 
+test('keeps visible interface chrome localized in Japanese', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText('メモに集中できるワークスペース', { exact: true })).toBeVisible();
+
+  await page.goto('/memos/new');
+  await expect(page.getByText('新規メモ', { exact: true })).toBeVisible();
+  await expect(page.getByText('プレビュー', { exact: true })).toBeVisible();
+  await expect(page.getByText('リアルタイム', { exact: true })).toBeVisible();
+});
+
 test('marks memo API responses as non-storable', async ({ request }) => {
   const response = await request.get('/api/v1/memos');
 
