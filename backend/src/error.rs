@@ -50,7 +50,7 @@ impl ResponseError for AppError {
                 message: msg.clone(),
             }),
             AppError::ServiceUnavailable(msg) => {
-                log::warn!("Request failed because a required service is unavailable: {msg}");
+                log::debug!("Request failed because a required service is unavailable: {msg}");
                 HttpResponse::ServiceUnavailable().json(ErrorResponse {
                     error: "Service Unavailable".into(),
                     message: "A required service is temporarily unavailable".into(),
