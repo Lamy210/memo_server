@@ -29,6 +29,10 @@
   }
 </script>
 
+<svelte:head>
+  <title>メモ | Schnee Memo</title>
+</svelte:head>
+
 <section>
   <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
     <div>
