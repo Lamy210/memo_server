@@ -18,10 +18,7 @@ mod tests {
     fn aws_kms_operation_timeout_is_bounded_without_overriding_attempt_policy() {
         let config = aws_kms_timeout_config();
 
-        assert_eq!(
-            config.operation_timeout(),
-            Some(AWS_KMS_OPERATION_TIMEOUT)
-        );
+        assert_eq!(config.operation_timeout(), Some(AWS_KMS_OPERATION_TIMEOUT));
         assert_eq!(config.operation_attempt_timeout(), None);
     }
 }
