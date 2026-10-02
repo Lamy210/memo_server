@@ -183,7 +183,7 @@ The BFF also rejects unsafe memo mutations unless both conditions hold:
 
 The marker is stripped before forwarding to memo_server. Cross-site forms cannot add the custom header, while cross-origin JavaScript requires CORS preflight and still fails the exact-origin check. Production reverse proxies must configure SvelteKit's canonical request origin correctly so `event.url.origin` reflects the public application origin.
 
-The BFF also enforces the memo write-body budget before proxying: declared oversized bodies can be rejected immediately, and the actual request stream is counted so chunked or inaccurate length metadata cannot bypass the 512 KiB limit. Oversized bodies return 413 without reaching memo_server; memo_server independently keeps the same limit as a second boundary.
+The BFF also enforces the memo write-body budget before proxying: declared oversized bodies can be rejected immediately, and the actual request stream is counted so chunked or inaccurate length metadata cannot bypass the 512 KiB limit. Oversized bodies return 413 without reaching memo_server; memo_server independently keeps the same limit as a second boundary. Browser-facing memo API responses always set `Cache-Control: no-store`, overriding any backend cache directive so authenticated/private memo payloads are not intentionally stored by browser or intermediary HTTP caches.
 
 The login/session/refresh implementation that populates this production server context remains part of the dedicated authentication-service integration tracked by #10 and #13.
 
