@@ -4,6 +4,7 @@ import {
   buildBackendRequestHeaders,
   buildBackendUrl,
   buildFrontendResponseHeaders,
+  InvalidBackendUrlError,
   InvalidProxyPathError,
   isTrustedMemoProxyRequest,
   MEMO_BFF_MAX_REQUEST_BODY_BYTES,
@@ -71,6 +72,25 @@ describe('buildBackendUrl', () => {
         '?query=hello&page=2'
       ).toString()
     ).toBe('http://backend:8080/api/v1/memos/folder%20name?query=hello&page=2');
+  });
+
+  it('accepts HTTP and HTTPS backend origins only', () => {
+    expect(buildBackendUrl('https://backend.example.com/', 'memos', '').toString()).toBe(
+      'https://backend.example.com/api/v1/memos'
+    );
+  });
+
+  it.each([
+    'ftp://backend:8080',
+    'file:///tmp/memo',
+    'backend:8080',
+    'http://user:secret@backend:8080',
+    'http://@backend:8080',
+    'http://backend:8080/internal',
+    'http://backend:8080?tenant=a',
+    'http://backend:8080#memo'
+  ])('rejects unsafe or ambiguous backend URL %s', (backendUrl) => {
+    expect(() => buildBackendUrl(backendUrl, 'memos', '')).toThrow(InvalidBackendUrlError);
   });
 
   it.each(['../admin', 'memos/../health', 'memos//admin', 'memos\\admin'])(
