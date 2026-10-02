@@ -80,7 +80,7 @@ pnpm test:e2e
 
 ### UI visual diff
 
-PRでは `UI Diff / Visual diff` workflow がbase revisionとPR revisionを同じChromium環境で起動し、`/memos`、検索、作成、編集画面を固定fixtureで撮影します。UI差分はreview用のinformational signalであり、pixel差分そのものではPRをfailさせません。
+Frontendまたはvisual fixture/diff基盤に関係するPRでは `UI Diff / Visual diff` workflow がbase revisionとPR revisionを同じChromium環境で起動し、`/memos`、検索、作成、編集画面を固定fixtureで撮影します。Backend-onlyや無関係なdocs変更ではこの重いworkflowを起動しません。UI差分はreview用のinformational signalであり、pixel差分そのものではPRをfailさせません。
 
 workflow artifact `ui-diff-pr-<number>` には各画面の以下を含めます。
 
@@ -98,7 +98,7 @@ Playwright browser E2Eは固定fixture backendとproduction previewを起動し�
 
 ### Lighthouse baseline
 
-PRでは `Lighthouse / Lighthouse baseline` workflow がproduction build/previewを固定fixture backendへ接続し、代表画面（一覧・新規・編集）を各3回計測します。median runの Performance / Accessibility / Best Practices / SEO scoreをjob summaryへ出し、HTML/JSON reportとmanifestを `lighthouse-pr-<number>` artifactへ14日間保存します。
+FrontendまたはLighthouse fixture/report基盤に関係するPRでは `Lighthouse / Lighthouse baseline` workflow がproduction build/previewを固定fixture backendへ接続し、代表画面（一覧・新規・編集）を各3回計測します。Backend-onlyや無関係なdocs変更ではこの重いworkflowを起動しません。median runの Performance / Accessibility / Best Practices / SEO scoreをjob summaryへ出し、HTML/JSON reportとmanifestを `lighthouse-pr-<number>` artifactへ14日間保存します。
 
 現在の安定baseline（代表3画面で各category 100）を基準に、Accessibilityは100、Best PracticesとSEOは95未満をblocking failureにします。PerformanceはCI runnerの実行ノイズを考慮し、90未満をwarningとして可視化します。依存解決・build・preview・Lighthouse collection・report生成が壊れた場合もworkflowをfailさせます。
 
