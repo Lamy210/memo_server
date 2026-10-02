@@ -12,7 +12,10 @@ use crate::{
     error::{AppError, AppResult},
 };
 
-use super::ports::{MemoSearchHitPage, MemoSearchProjection};
+use super::{
+    manticore_http::build_manticore_http_client,
+    ports::{MemoSearchHitPage, MemoSearchProjection},
+};
 
 const TABLE_NAME: &str = "memos";
 const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS memos (id uuid, title text indexed, content text indexed, tag_tokens text indexed, user_id string, updated_at bigint, version int) dict='keywords_32k'";
@@ -25,7 +28,7 @@ pub struct ManticoreClient {
 
 impl ManticoreClient {
     pub fn new(uri: &str) -> AppResult<Self> {
-        let client = Client::builder().build().map_err(|error| {
+        let client = build_manticore_http_client().map_err(|error| {
             AppError::DatabaseError(format!("Failed to create Manticore HTTP client: {error}"))
         })?;
 
