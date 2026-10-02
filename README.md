@@ -70,7 +70,7 @@ Base path は `/api/v1` です。
 | `DELETE` | `/memos/{id}` | 削除 |
 | `GET` | `/memos/search` | 検索 |
 
-Memo write API applies explicit input boundaries: JSON request bodies are limited to 512 KiB, titles to 160 Unicode characters, tags to at most 10 entries, and each tag to 64 Unicode characters. Search queries are limited to 512 Unicode characters and search tags to 64. Requests outside these field limits return `422 Unprocessable Entity`; an oversized JSON body returns `413 Payload Too Large`.
+Memo write API applies explicit input boundaries: JSON request bodies are limited to 512 KiB, titles to 160 Unicode characters, tags to at most 10 entries, and each tag to 64 Unicode characters. The SvelteKit BFF enforces the same 512 KiB body budget while streaming the browser request and returns `413 Payload Too Large` before forwarding oversized bodies to the Backend; the Backend independently retains its own limit as defense in depth. Search queries are limited to 512 Unicode characters and search tags to 64. Requests outside these field limits return `422 Unprocessable Entity`; an oversized JSON body returns `413 Payload Too Large`.
 
 ### Authentication
 

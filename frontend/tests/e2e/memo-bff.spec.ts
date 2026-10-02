@@ -47,6 +47,29 @@ test('rejects a same-origin raw mutation that bypasses the shared API helper', a
 });
 
 
+test('rejects an oversized same-origin mutation at the BFF boundary', async ({ page }) => {
+  await page.goto('/memos');
+
+  const status = await page.evaluate(async () => {
+    const response = await fetch('/api/v1/memos', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Schnee-Memo-Request': '1'
+      },
+      body: JSON.stringify({
+        title: 'Oversized BFF probe',
+        content: 'x'.repeat(513 * 1024),
+        tags: ['e2e']
+      })
+    });
+
+    return response.status;
+  });
+
+  expect(status).toBe(413);
+});
+
 test('serves the frontend security header and CSP baseline', async ({ page }) => {
   const response = await page.goto('/memos');
   expect(response).not.toBeNull();
