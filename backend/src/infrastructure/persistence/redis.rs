@@ -21,6 +21,8 @@ use super::ports::{
 
 const LEGACY_CACHE_NAMESPACE: &str = "memo";
 const HIGH_CACHE_NAMESPACE: &str = "memo:high:v1";
+// Pin the reviewed redis-rs 1.7.0 async defaults as application policy so
+// dependency upgrades cannot silently widen or remove cache deadlines.
 const REDIS_CONNECTION_TIMEOUT: Duration = Duration::from_secs(1);
 const REDIS_RESPONSE_TIMEOUT: Duration = Duration::from_millis(500);
 
