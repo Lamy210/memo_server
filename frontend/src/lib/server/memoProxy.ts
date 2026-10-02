@@ -172,6 +172,11 @@ export function buildFrontendResponseHeaders(source: Headers): Headers {
   for (const name of RESPONSE_HEADERS_TO_STRIP) {
     headers.delete(name);
   }
+
+  // Memo API responses can contain authenticated/private data. Never allow
+  // backend cache policy to make the browser-facing BFF response storable.
+  headers.set('Cache-Control', 'no-store');
+
   return headers;
 }
 
