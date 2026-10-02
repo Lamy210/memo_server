@@ -59,6 +59,15 @@ test('keeps visible interface chrome localized in Japanese', async ({ page }) =>
   await expect(page.getByText('リアルタイム', { exact: true })).toBeVisible();
 });
 
+test('exposes memo save state as a polite live status', async ({ page }) => {
+  await page.goto('/memos/new');
+
+  const status = page.getByRole('status');
+  await expect(status).toHaveAttribute('aria-live', 'polite');
+  await expect(status).toHaveAttribute('aria-atomic', 'true');
+  await expect(status).toHaveText('未保存');
+});
+
 test('marks memo API responses as non-storable', async ({ request }) => {
   const response = await request.get('/api/v1/memos');
 
