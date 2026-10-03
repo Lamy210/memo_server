@@ -8,6 +8,7 @@ import {
   MemoBackendTimeoutError
 } from '$lib/server/memoBackendRequest';
 import {
+  allowedMemoProxyMethods,
   buildBackendRequestHeaders,
   buildBackendUrl,
   buildFrontendResponseHeaders,
@@ -23,6 +24,28 @@ const proxyRequest: RequestHandler = async ({ request, params, url, fetch, local
   const backendUrl = env.BACKEND_URL?.trim() || DEFAULT_BACKEND_URL;
   const developmentUserId = dev ? env.DEVELOPMENT_USER_ID?.trim() || undefined : undefined;
   const method = request.method.toUpperCase();
+
+  let allowedMethods: readonly string[];
+  try {
+    allowedMethods = allowedMemoProxyMethods(params.path);
+  } catch (error) {
+    if (error instanceof InvalidProxyPathError) {
+      return Response.json({ message: 'Invalid memo API path' }, { status: 400 });
+    }
+    throw error;
+  }
+
+  if (!allowedMethods.includes(method)) {
+    return Response.json(
+      { message: 'Memo API method not allowed' },
+      {
+        status: 405,
+        headers: {
+          Allow: allowedMethods.join(', ')
+        }
+      }
+    );
+  }
 
   if (!isTrustedMemoProxyRequest(method, request.headers, url)) {
     return Response.json({ message: 'Memo mutation request rejected' }, { status: 403 });
