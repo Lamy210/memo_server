@@ -3,6 +3,7 @@ import {
   MEMO_BFF_MUTATION_HEADER,
   MEMO_BFF_MUTATION_VALUE
 } from '$lib/security/memoBff';
+import { validateMemoProxyQuery } from '$lib/server/memoProxyQuery';
 
 const REQUEST_HEADERS_TO_STRIP = [
   'accept-encoding',
@@ -293,6 +294,7 @@ export function allowedMemoProxyMethods(path: string | undefined): readonly stri
 export function buildBackendUrl(backendUrl: string, path: string | undefined, search: string): URL {
   const target = parseBackendOrigin(backendUrl);
   target.pathname = `/api/v1/${encodeProxyPath(path)}`;
+  validateMemoProxyQuery(path, search);
   target.search = search;
   return target;
 }
