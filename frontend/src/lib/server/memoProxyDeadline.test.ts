@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildMemoBackendFailureResponse,
   fetchMemoBackend,
   MEMO_BFF_BACKEND_REQUEST_TIMEOUT_MS,
   MemoBackendTimeoutError
@@ -33,5 +34,21 @@ describe('fetchMemoBackend', () => {
         5
       )
     ).rejects.toBeInstanceOf(MemoBackendTimeoutError);
+  });
+});
+
+describe('buildMemoBackendFailureResponse', () => {
+  it('maps backend deadline expiration to gateway timeout', async () => {
+    const response = buildMemoBackendFailureResponse(new MemoBackendTimeoutError());
+
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toEqual({ message: 'Memo backend request timed out' });
+  });
+
+  it('keeps non-timeout backend failures as bad gateway', async () => {
+    const response = buildMemoBackendFailureResponse(new Error('connection reset'));
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ message: 'Memo backend is unavailable' });
   });
 });
