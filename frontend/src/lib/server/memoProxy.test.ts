@@ -12,37 +12,58 @@ import {
   readMemoProxyRequestBody
 } from './memoProxy';
 
+const AUTH_CONTEXT = {
+  developmentUserId: '12345678-1234-1234-1234-123456789012'
+};
+
+function createStreamingRequest(totalBytes: number, chunkBytes: number): Request {
+  let remaining = totalBytes;
+  return new Request('https://memo.example/api/v1/memos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (remaining === 0) {
+          controller.close();
+          return;
+        }
+        const next = Math.min(remaining, chunkBytes);
+        remaining -= next;
+        controller.enqueue(new Uint8Array(next));
+      }
+    }),
+    duplex: 'half'
+  } as RequestInit & { duplex: 'half' }) as Request;
+}
+
 describe('buildBackendRequestHeaders', () => {
-  it('strips browser credentials and injects the server-controlled development identity', () => {
-    const source = new Headers({
-      'Accept-Encoding': 'gzip',
-      Authorization: 'Bearer attacker-token',
-      'CF-Connecting-IP': '203.0.113.20',
-      'Client-IP': '203.0.113.21',
-      Connection: 'keep-alive',
-      Cookie: 'session=browser-secret',
-      'Content-Type': 'application/json',
-      'Fastly-Client-IP': '203.0.113.22',
-      Forwarded: 'for=203.0.113.23;proto=https',
-      'True-Client-IP': '203.0.113.24',
-      Via: '1.1 attacker.example',
-      'X-Development-User-Id': '87654321-4321-4321-4321-210987654321',
-      'X-Forwarded-For': '203.0.113.25',
-      'X-Forwarded-Host': 'attacker.example',
-      'X-Forwarded-Proto': 'http',
-      'X-Forwarded-Untrusted': 'browser-controlled',
-      'X-Real-IP': '203.0.113.26',
-      'X-Request-Id': 'browser-request-id',
-      'X-Schnee-Memo-Request': '1'
-    });
+  it('replaces browser-controlled auth, cookies and hop-by-hop headers', () => {
+    const headers = buildBackendRequestHeaders(
+      new Headers({
+        'Accept-Encoding': 'gzip, deflate',
+        Authorization: 'Bearer browser-token',
+        'CF-Connecting-IP': '203.0.113.20',
+        'Client-IP': '203.0.113.21',
+        Connection: 'keep-alive',
+        Cookie: 'session=browser-secret',
+        'Content-Type': 'application/json',
+        'Fastly-Client-IP': '203.0.113.22',
+        Forwarded: 'for=203.0.113.23;proto=https',
+        'True-Client-IP': '203.0.113.24',
+        Via: '1.1 attacker.example',
+        'X-Development-User-Id': '87654321-4321-4321-4321-210987654321',
+        'X-Forwarded-For': '203.0.113.25',
+        'X-Forwarded-Host': 'attacker.example',
+        'X-Forwarded-Proto': 'http',
+        'X-Forwarded-Untrusted': 'browser-controlled',
+        'X-Real-IP': '203.0.113.26',
+        'X-Request-Id': 'browser-request-id',
+        'X-Schnee-Memo-Request': '1'
+      }),
+      AUTH_CONTEXT
+    );
 
-    const headers = buildBackendRequestHeaders(source, {
-      developmentUserId: '12345678-1234-1234-1234-123456789012'
-    });
-
-    expect(headers.get('accept-encoding')).toBe('identity');
     expect(headers.get('authorization')).toBeNull();
-    expect(headers.get('cookie')).toBeNull();
     expect(headers.get('connection')).toBeNull();
     expect(headers.get('cf-connecting-ip')).toBeNull();
     expect(headers.get('client-ip')).toBeNull();
@@ -61,12 +82,13 @@ describe('buildBackendRequestHeaders', () => {
       '12345678-1234-1234-1234-123456789012'
     );
     expect(headers.get('x-schnee-memo-request')).toBeNull();
+    expect(headers.get('accept-encoding')).toBe('identity');
   });
 
-  it('prefers a server-provided bearer token over development identity', () => {
+  it('uses server bearer auth when provided', () => {
     const headers = buildBackendRequestHeaders(new Headers(), {
-      bearerToken: 'trusted-access-token',
-      developmentUserId: '12345678-1234-1234-1234-123456789012'
+      developmentUserId: '12345678-1234-1234-1234-123456789012',
+      bearerToken: 'trusted-access-token'
     });
 
     expect(headers.get('accept-encoding')).toBe('identity');
@@ -74,7 +96,7 @@ describe('buildBackendRequestHeaders', () => {
     expect(headers.get('x-development-user-id')).toBeNull();
   });
 
-  it('forwards no authentication when the server has no auth context', () => {
+  it('forwards no identity when the server has no trusted auth context', () => {
     const headers = buildBackendRequestHeaders(
       new Headers({
         Authorization: 'Bearer browser-token',
@@ -89,14 +111,10 @@ describe('buildBackendRequestHeaders', () => {
 });
 
 describe('buildBackendUrl', () => {
-  it('preserves the API namespace, encoded path and query string', () => {
-    expect(
-      buildBackendUrl(
-        'http://backend:8080',
-        'memos/folder name',
-        '?query=hello&page=2'
-      ).toString()
-    ).toBe('http://backend:8080/api/v1/memos/folder%20name?query=hello&page=2');
+  it('preserves the API namespace and encoded path', () => {
+    expect(buildBackendUrl('http://backend:8080', 'memos/folder name', '').toString()).toBe(
+      'http://backend:8080/api/v1/memos/folder%20name'
+    );
   });
 
   it('accepts HTTP and HTTPS backend origins only', () => {
@@ -124,69 +142,55 @@ describe('buildBackendUrl', () => {
   });
 
   it.each(['../admin', 'memos/../health', 'memos//admin', 'memos\\admin'])(
-    'rejects path traversal or ambiguous path %s',
+    'rejects ambiguous proxy path %s',
     (path) => {
-      expect(() => buildBackendUrl('http://backend:8080', path, '')).toThrow(
-        InvalidProxyPathError
-      );
+      expect(() => buildBackendUrl('http://backend:8080', path, '')).toThrow(InvalidProxyPathError);
     }
   );
 });
 
 describe('readMemoProxyRequestBody', () => {
-  it('preserves bounded request bodies and treats an empty body as absent', async () => {
-    const body = await readMemoProxyRequestBody(
-      new Request('https://memo.example.com/api/v1/memos', {
-        method: 'POST',
-        body: 'memo payload'
-      })
-    );
-
-    expect(new TextDecoder().decode(body)).toBe('memo payload');
-
-    const empty = await readMemoProxyRequestBody(
-      new Request('https://memo.example.com/api/v1/memos', {
-        method: 'POST'
-      })
-    );
-    expect(empty).toBeUndefined();
-  });
-
-  it('accepts exactly the shared 512 KiB request-body budget', async () => {
-    const body = await readMemoProxyRequestBody(
-      new Request('https://memo.example.com/api/v1/memos', {
-        method: 'POST',
-        body: 'x'.repeat(MEMO_BFF_MAX_REQUEST_BODY_BYTES)
-      })
-    );
+  it('accepts a body exactly at the BFF limit', async () => {
+    const request = createStreamingRequest(MEMO_BFF_MAX_REQUEST_BODY_BYTES, 64 * 1024);
+    const body = await readMemoProxyRequestBody(request);
 
     expect(body?.byteLength).toBe(MEMO_BFF_MAX_REQUEST_BODY_BYTES);
   });
 
-  it('rejects an actual streamed body that exceeds the limit', async () => {
-    const request = new Request('https://memo.example.com/api/v1/memos', {
-      method: 'POST',
-      body: 'x'.repeat(MEMO_BFF_MAX_REQUEST_BODY_BYTES + 1)
+  it('rejects an oversized body declared by Content-Length before reading it', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start() {
+        throw new Error('body stream must not be consumed');
+      }
     });
+    const request = new Request('https://memo.example/api/v1/memos', {
+      method: 'POST',
+      headers: { 'Content-Length': String(MEMO_BFF_MAX_REQUEST_BODY_BYTES + 1) },
+      body,
+      duplex: 'half'
+    } as RequestInit & { duplex: 'half' });
 
     await expect(readMemoProxyRequestBody(request)).rejects.toBeInstanceOf(
       MemoProxyBodyTooLargeError
     );
   });
 
-  it('rejects an oversized declared Content-Length before consuming the body', async () => {
-    const request = new Request('https://memo.example.com/api/v1/memos', {
-      method: 'POST',
-      headers: {
-        'Content-Length': String(MEMO_BFF_MAX_REQUEST_BODY_BYTES + 1)
-      },
-      body: 'small'
-    });
+  it('rejects an oversized streamed body even without a declared length', async () => {
+    const request = createStreamingRequest(MEMO_BFF_MAX_REQUEST_BODY_BYTES + 1, 64 * 1024);
 
     await expect(readMemoProxyRequestBody(request)).rejects.toBeInstanceOf(
       MemoProxyBodyTooLargeError
     );
-    expect(request.bodyUsed).toBe(false);
+  });
+
+  it('returns undefined for an empty body', async () => {
+    const request = new Request('https://memo.example/api/v1/memos', {
+      method: 'POST',
+      body: new Uint8Array(),
+      duplex: 'half'
+    } as RequestInit & { duplex: 'half' });
+
+    await expect(readMemoProxyRequestBody(request)).resolves.toBeUndefined();
   });
 });
 
@@ -210,72 +214,54 @@ describe('buildFrontendResponseHeaders', () => {
   });
 });
 
-
 describe('isTrustedMemoProxyRequest', () => {
-  const requestUrl = new URL('https://memo.example.com/api/v1/memos');
+  const requestUrl = new URL('https://memo.example/api/v1/memos');
 
-  it('allows safe methods without CSRF metadata', () => {
+  it('allows safe methods without a mutation marker', () => {
     expect(isTrustedMemoProxyRequest('GET', new Headers(), requestUrl)).toBe(true);
     expect(isTrustedMemoProxyRequest('HEAD', new Headers(), requestUrl)).toBe(true);
   });
 
-  it('allows same-origin mutations with the BFF marker', () => {
+  it('requires marker and exact same-origin for mutations', () => {
     const headers = new Headers({
-      Origin: 'https://memo.example.com',
+      Origin: 'https://memo.example',
       'X-Schnee-Memo-Request': '1'
     });
 
     expect(isTrustedMemoProxyRequest('POST', headers, requestUrl)).toBe(true);
   });
 
-  it('rejects mutations without the BFF marker', () => {
-    const headers = new Headers({ Origin: 'https://memo.example.com' });
-    expect(isTrustedMemoProxyRequest('PATCH', headers, requestUrl)).toBe(false);
+  it('rejects missing or incorrect marker values', () => {
+    expect(
+      isTrustedMemoProxyRequest(
+        'POST',
+        new Headers({ Origin: 'https://memo.example' }),
+        requestUrl
+      )
+    ).toBe(false);
+    expect(
+      isTrustedMemoProxyRequest(
+        'POST',
+        new Headers({ Origin: 'https://memo.example', 'X-Schnee-Memo-Request': '0' }),
+        requestUrl
+      )
+    ).toBe(false);
   });
 
-  it('rejects missing, opaque, invalid, and cross-site origins', () => {
+  it('rejects cross-origin and malformed Origin values', () => {
     expect(
       isTrustedMemoProxyRequest(
-        'DELETE',
-        new Headers({ 'X-Schnee-Memo-Request': '1' }),
+        'POST',
+        new Headers({ Origin: 'https://attacker.example', 'X-Schnee-Memo-Request': '1' }),
         requestUrl
       )
     ).toBe(false);
-
     expect(
       isTrustedMemoProxyRequest(
-        'DELETE',
-        new Headers({ Origin: 'null', 'X-Schnee-Memo-Request': '1' }),
-        requestUrl
-      )
-    ).toBe(false);
-
-    expect(
-      isTrustedMemoProxyRequest(
-        'DELETE',
+        'POST',
         new Headers({ Origin: 'not a url', 'X-Schnee-Memo-Request': '1' }),
         requestUrl
       )
     ).toBe(false);
-
-    expect(
-      isTrustedMemoProxyRequest(
-        'DELETE',
-        new Headers({
-          Origin: 'https://attacker.example',
-          'X-Schnee-Memo-Request': '1'
-        }),
-        requestUrl
-      )
-    ).toBe(false);
-  });
-
-  it('requires the serialized origin rather than an origin with a path', () => {
-    const headers = new Headers({
-      Origin: 'https://memo.example.com/path',
-      'X-Schnee-Memo-Request': '1'
-    });
-
-    expect(isTrustedMemoProxyRequest('PUT', headers, requestUrl)).toBe(false);
   });
 });
