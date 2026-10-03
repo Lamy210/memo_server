@@ -49,6 +49,8 @@ const RESPONSE_HEADERS_TO_STRIP = [
   'upgrade'
 ] as const;
 
+const RESPONSE_HEADER_PREFIXES_TO_STRIP = ['access-control-'] as const;
+
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
 const INVALID_BACKEND_URL_RAW_CHARACTER = /[\\\u0000-\u0020\u007f]/;
 const CONNECTION_OPTION_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
@@ -199,6 +201,14 @@ export function buildFrontendResponseHeaders(source: Headers): Headers {
     headers.delete(name);
   }
   stripConnectionOptionHeaders(headers, connectionValue);
+
+  const sourceHeaderNames: string[] = [];
+  headers.forEach((_value, name) => sourceHeaderNames.push(name));
+  for (const name of sourceHeaderNames) {
+    if (RESPONSE_HEADER_PREFIXES_TO_STRIP.some((prefix) => name.startsWith(prefix))) {
+      headers.delete(name);
+    }
+  }
 
   // Memo API responses can contain authenticated/private data. Never allow
   // backend cache policy to make the browser-facing BFF response storable.
