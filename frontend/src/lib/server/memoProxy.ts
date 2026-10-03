@@ -18,6 +18,7 @@ const REQUEST_HEADERS_TO_STRIP = [
   'keep-alive',
   'proxy-authenticate',
   'proxy-authorization',
+  'proxy-connection',
   'te',
   'trailer',
   'transfer-encoding',
@@ -37,6 +38,7 @@ const RESPONSE_HEADERS_TO_STRIP = [
   'keep-alive',
   'proxy-authenticate',
   'proxy-authorization',
+  'proxy-connection',
   'set-cookie',
   'te',
   'trailer',
@@ -46,6 +48,7 @@ const RESPONSE_HEADERS_TO_STRIP = [
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
 const INVALID_BACKEND_URL_RAW_CHARACTER = /[\\\u0000-\u0020\u007f]/;
+const CONNECTION_OPTION_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const MEMO_COLLECTION_METHODS: readonly string[] = ['GET', 'HEAD', 'POST'];
 const MEMO_SEARCH_METHODS: readonly string[] = ['GET', 'HEAD'];
 const MEMO_ITEM_METHODS: readonly string[] = ['GET', 'HEAD', 'PATCH', 'DELETE'];
@@ -88,6 +91,19 @@ function declaredBodyExceedsLimit(headers: Headers): boolean {
   return (
     !Number.isSafeInteger(declaredLength) || declaredLength > MEMO_BFF_MAX_REQUEST_BODY_BYTES
   );
+}
+
+function stripConnectionOptionHeaders(headers: Headers, connectionValue: string | null): void {
+  if (!connectionValue) {
+    return;
+  }
+
+  for (const option of connectionValue.split(',')) {
+    const headerName = option.trim();
+    if (CONNECTION_OPTION_TOKEN.test(headerName)) {
+      headers.delete(headerName);
+    }
+  }
 }
 
 export async function readMemoProxyRequestBody(request: Request): Promise<ArrayBuffer | undefined> {
@@ -143,10 +159,12 @@ export function buildBackendRequestHeaders(
   auth: BackendAuthContext
 ): Headers {
   const headers = new Headers(source);
+  const connectionValue = headers.get('connection');
 
   for (const name of REQUEST_HEADERS_TO_STRIP) {
     headers.delete(name);
   }
+  stripConnectionOptionHeaders(headers, connectionValue);
 
   const sourceHeaderNames: string[] = [];
   headers.forEach((_value, name) => sourceHeaderNames.push(name));
@@ -172,9 +190,12 @@ export function buildBackendRequestHeaders(
 
 export function buildFrontendResponseHeaders(source: Headers): Headers {
   const headers = new Headers(source);
+  const connectionValue = headers.get('connection');
+
   for (const name of RESPONSE_HEADERS_TO_STRIP) {
     headers.delete(name);
   }
+  stripConnectionOptionHeaders(headers, connectionValue);
 
   // Memo API responses can contain authenticated/private data. Never allow
   // backend cache policy to make the browser-facing BFF response storable.
