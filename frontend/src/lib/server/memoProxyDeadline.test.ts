@@ -4,7 +4,7 @@ import {
   fetchMemoBackend,
   MEMO_BFF_BACKEND_REQUEST_TIMEOUT_MS,
   MemoBackendTimeoutError
-} from './memoProxy';
+} from './memoBackendRequest';
 
 describe('fetchMemoBackend', () => {
   it('uses the shared 30 second backend deadline', () => {
