@@ -87,6 +87,20 @@ test('rejects unsupported memo BFF method and route combinations locally', async
   }
 });
 
+test('rejects query parameters outside the memo BFF route contract locally', async ({ request }) => {
+  for (const path of [
+    '/api/v1/memos?query=snow',
+    '/api/v1/memos/018f0c7a-8b7d-7f25-b239-36e6d9f9b001?tag=work',
+    '/api/v1/memos/search?sort=updated_at',
+    '/api/v1/memos/search?page=1&page=2'
+  ]) {
+    const response = await request.get(path);
+
+    expect(response.status(), path).toBe(400);
+    await expect(response.json()).resolves.toEqual({ message: 'Invalid memo API query' });
+  }
+});
+
 test('rejects a same-origin raw mutation that bypasses the shared API helper', async ({ page }) => {
   await page.goto('/memos');
 

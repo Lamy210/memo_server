@@ -89,14 +89,10 @@ describe('buildBackendRequestHeaders', () => {
 });
 
 describe('buildBackendUrl', () => {
-  it('preserves the API namespace, encoded path and query string', () => {
-    expect(
-      buildBackendUrl(
-        'http://backend:8080',
-        'memos/folder name',
-        '?query=hello&page=2'
-      ).toString()
-    ).toBe('http://backend:8080/api/v1/memos/folder%20name?query=hello&page=2');
+  it('preserves the API namespace and encoded path', () => {
+    expect(buildBackendUrl('http://backend:8080', 'memos/folder name', '').toString()).toBe(
+      'http://backend:8080/api/v1/memos/folder%20name'
+    );
   });
 
   it('accepts HTTP and HTTPS backend origins only', () => {
@@ -209,7 +205,6 @@ describe('buildFrontendResponseHeaders', () => {
     expect(headers.get('content-type')).toBe('application/json');
   });
 });
-
 
 describe('isTrustedMemoProxyRequest', () => {
   const requestUrl = new URL('https://memo.example.com/api/v1/memos');
