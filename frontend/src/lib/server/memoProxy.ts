@@ -225,7 +225,9 @@ function parseBackendOrigin(value: string): URL {
 }
 
 function encodeProxyPath(path: string | undefined): string {
-  if (!path) return '';
+  if (!path) {
+    throw new InvalidProxyPathError();
+  }
 
   const segments = path.split('/');
   if (
@@ -240,6 +242,10 @@ function encodeProxyPath(path: string | undefined): string {
     throw new InvalidProxyPathError();
   }
 
+  if (segments[0] !== 'memos' || segments.length > 2) {
+    throw new InvalidProxyPathError();
+  }
+
   return segments.map((segment) => encodeURIComponent(segment)).join('/');
 }
 
@@ -249,7 +255,6 @@ export function buildBackendUrl(backendUrl: string, path: string | undefined, se
   target.search = search;
   return target;
 }
-
 
 export function isTrustedMemoProxyRequest(
   method: string,

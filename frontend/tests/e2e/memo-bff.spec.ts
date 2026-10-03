@@ -66,6 +66,13 @@ test('marks memo API responses as non-storable', async ({ request }) => {
   expect(response.headers()['cache-control']).toBe('no-store');
 });
 
+test('does not expose backend health routes through the memo BFF', async ({ request }) => {
+  const response = await request.get('/api/v1/health/ready');
+
+  expect(response.status()).toBe(400);
+  await expect(response.json()).resolves.toEqual({ message: 'Invalid memo API path' });
+});
+
 test('rejects a same-origin raw mutation that bypasses the shared API helper', async ({ page }) => {
   await page.goto('/memos');
 
@@ -85,7 +92,6 @@ test('rejects a same-origin raw mutation that bypasses the shared API helper', a
 
   expect(status).toBe(403);
 });
-
 
 test('rejects an oversized same-origin mutation at the BFF boundary', async ({ page }) => {
   await page.goto('/memos');
