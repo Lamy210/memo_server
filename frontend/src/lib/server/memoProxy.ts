@@ -17,9 +17,11 @@ const REQUEST_HEADERS_TO_STRIP = [
   'forwarded',
   'host',
   'keep-alive',
+  'origin',
   'proxy-authenticate',
   'proxy-authorization',
   'proxy-connection',
+  'referer',
   'te',
   'trailer',
   'transfer-encoding',
@@ -31,7 +33,7 @@ const REQUEST_HEADERS_TO_STRIP = [
   'x-schnee-memo-request'
 ] as const;
 
-const REQUEST_HEADER_PREFIXES_TO_STRIP = ['x-forwarded-'] as const;
+const REQUEST_HEADER_PREFIXES_TO_STRIP = ['sec-fetch-', 'x-forwarded-'] as const;
 
 const RESPONSE_HEADERS_TO_STRIP = [
   'connection',
