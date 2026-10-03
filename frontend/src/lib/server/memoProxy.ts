@@ -46,6 +46,9 @@ const RESPONSE_HEADERS_TO_STRIP = [
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
 const INVALID_BACKEND_URL_RAW_CHARACTER = /[\\\u0000-\u0020\u007f]/;
+const MEMO_COLLECTION_METHODS: readonly string[] = ['GET', 'HEAD', 'POST'];
+const MEMO_SEARCH_METHODS: readonly string[] = ['GET', 'HEAD'];
+const MEMO_ITEM_METHODS: readonly string[] = ['GET', 'HEAD', 'PATCH', 'DELETE'];
 
 export const MEMO_BFF_MAX_REQUEST_BODY_BYTES = 512 * 1024;
 
@@ -224,7 +227,7 @@ function parseBackendOrigin(value: string): URL {
   return target;
 }
 
-function encodeProxyPath(path: string | undefined): string {
+function parseProxyPath(path: string | undefined): string[] {
   if (!path) {
     throw new InvalidProxyPathError();
   }
@@ -246,7 +249,24 @@ function encodeProxyPath(path: string | undefined): string {
     throw new InvalidProxyPathError();
   }
 
-  return segments.map((segment) => encodeURIComponent(segment)).join('/');
+  return segments;
+}
+
+function encodeProxyPath(path: string | undefined): string {
+  return parseProxyPath(path)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
+export function allowedMemoProxyMethods(path: string | undefined): readonly string[] {
+  const segments = parseProxyPath(path);
+  if (segments.length === 1) {
+    return MEMO_COLLECTION_METHODS;
+  }
+  if (segments[1] === 'search') {
+    return MEMO_SEARCH_METHODS;
+  }
+  return MEMO_ITEM_METHODS;
 }
 
 export function buildBackendUrl(backendUrl: string, path: string | undefined, search: string): URL {
