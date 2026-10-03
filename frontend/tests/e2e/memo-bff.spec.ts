@@ -73,6 +73,20 @@ test('does not expose backend health routes through the memo BFF', async ({ requ
   await expect(response.json()).resolves.toEqual({ message: 'Invalid memo API path' });
 });
 
+test('rejects unsupported memo BFF method and route combinations locally', async ({ request }) => {
+  for (const [method, path, allow] of [
+    ['PUT', '/api/v1/memos', 'GET, HEAD, POST'],
+    ['POST', '/api/v1/memos/018f0c7a-8b7d-7f25-b239-36e6d9f9b001', 'GET, HEAD, PATCH, DELETE'],
+    ['PATCH', '/api/v1/memos', 'GET, HEAD, POST'],
+    ['POST', '/api/v1/memos/search', 'GET, HEAD']
+  ] as const) {
+    const response = await request.fetch(path, { method });
+
+    expect(response.status(), `${method} ${path}`).toBe(405);
+    expect(response.headers()['allow'], `${method} ${path}`).toBe(allow);
+  }
+});
+
 test('rejects a same-origin raw mutation that bypasses the shared API helper', async ({ page }) => {
   await page.goto('/memos');
 
