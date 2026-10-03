@@ -3,6 +3,11 @@ import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 
 import {
+  buildMemoBackendFailureResponse,
+  fetchMemoBackend,
+  MemoBackendTimeoutError
+} from '$lib/server/memoBackendRequest';
+import {
   buildBackendRequestHeaders,
   buildBackendUrl,
   buildFrontendResponseHeaders,
@@ -53,7 +58,7 @@ const proxyRequest: RequestHandler = async ({ request, params, url, fetch, local
   );
 
   try {
-    const response = await fetch(target, {
+    const response = await fetchMemoBackend(fetch, target, {
       method,
       headers,
       body,
@@ -66,8 +71,12 @@ const proxyRequest: RequestHandler = async ({ request, params, url, fetch, local
       headers: buildFrontendResponseHeaders(response.headers)
     });
   } catch (error) {
-    console.error('Memo backend proxy request failed', error);
-    return Response.json({ message: 'Memo backend is unavailable' }, { status: 502 });
+    if (error instanceof MemoBackendTimeoutError) {
+      console.warn('Memo backend proxy request timed out');
+    } else {
+      console.error('Memo backend proxy request failed', error);
+    }
+    return buildMemoBackendFailureResponse(error);
   }
 };
 
