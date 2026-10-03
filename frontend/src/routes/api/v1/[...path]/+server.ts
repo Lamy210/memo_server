@@ -17,6 +17,7 @@ import {
   MemoProxyBodyTooLargeError,
   readMemoProxyRequestBody
 } from '$lib/server/memoProxy';
+import { InvalidProxyQueryError } from '$lib/server/memoProxyQuery';
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8080';
 
@@ -57,6 +58,9 @@ const proxyRequest: RequestHandler = async ({ request, params, url, fetch, local
   } catch (error) {
     if (error instanceof InvalidProxyPathError) {
       return Response.json({ message: 'Invalid memo API path' }, { status: 400 });
+    }
+    if (error instanceof InvalidProxyQueryError) {
+      return Response.json({ message: 'Invalid memo API query' }, { status: 400 });
     }
 
     console.error('Memo backend proxy target is invalid', error);
