@@ -7,6 +7,7 @@ describe('memo proxy Connection header semantics', () => {
     const headers = buildBackendRequestHeaders(
       new Headers({
         Connection: 'X-Hop-Only, X-Second-Hop',
+        'Proxy-Connection': 'keep-alive',
         'X-Hop-Only': 'request-secret',
         'X-Second-Hop': 'request-secret-2',
         'X-End-To-End': 'preserve-me'
@@ -15,6 +16,7 @@ describe('memo proxy Connection header semantics', () => {
     );
 
     expect(headers.get('connection')).toBeNull();
+    expect(headers.get('proxy-connection')).toBeNull();
     expect(headers.get('x-hop-only')).toBeNull();
     expect(headers.get('x-second-hop')).toBeNull();
     expect(headers.get('x-end-to-end')).toBe('preserve-me');
@@ -24,6 +26,7 @@ describe('memo proxy Connection header semantics', () => {
     const headers = buildFrontendResponseHeaders(
       new Headers({
         Connection: 'X-Hop-Only, X-Second-Hop',
+        'Proxy-Connection': 'keep-alive',
         'X-Hop-Only': 'response-secret',
         'X-Second-Hop': 'response-secret-2',
         'X-End-To-End': 'preserve-me'
@@ -31,6 +34,7 @@ describe('memo proxy Connection header semantics', () => {
     );
 
     expect(headers.get('connection')).toBeNull();
+    expect(headers.get('proxy-connection')).toBeNull();
     expect(headers.get('x-hop-only')).toBeNull();
     expect(headers.get('x-second-hop')).toBeNull();
     expect(headers.get('x-end-to-end')).toBe('preserve-me');
