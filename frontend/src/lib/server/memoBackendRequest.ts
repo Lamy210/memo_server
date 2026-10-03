@@ -29,3 +29,11 @@ export async function fetchMemoBackend(
     throw error;
   }
 }
+
+export function buildMemoBackendFailureResponse(error: unknown): Response {
+  if (error instanceof MemoBackendTimeoutError) {
+    return Response.json({ message: 'Memo backend request timed out' }, { status: 504 });
+  }
+
+  return Response.json({ message: 'Memo backend is unavailable' }, { status: 502 });
+}
