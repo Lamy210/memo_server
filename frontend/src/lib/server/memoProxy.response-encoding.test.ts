@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   UnexpectedBackendContentEncodingError,
   validateMemoBackendResponseEncoding
-} from '$lib/server/memoProxy';
+} from '$lib/server/memoBackendResponse';
 
 describe('memo backend response encoding boundary', () => {
   it('accepts the identity backend response shape', () => {
