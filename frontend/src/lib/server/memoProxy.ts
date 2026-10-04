@@ -44,6 +44,7 @@ const RESPONSE_HEADERS_TO_STRIP = [
   'alt-svc',
   'clear-site-data',
   'connection',
+  'content-encoding',
   'content-length',
   'content-security-policy',
   'content-security-policy-report-only',
