@@ -19,4 +19,23 @@ describe('buildFrontendResponseHeaders browser-origin policy boundary', () => {
     expect(headers.get('cache-control')).toBe('no-store');
     expect(headers.get('content-type')).toBe('application/json');
   });
+
+  it('strips backend X-Accel control headers before the outer proxy can interpret them', () => {
+    const headers = buildFrontendResponseHeaders(
+      new Headers({
+        'Content-Type': 'application/json',
+        'X-Accel-Buffering': 'no',
+        'X-Accel-Expires': '3600',
+        'X-Accel-Limit-Rate': '1',
+        'X-Accel-Redirect': '/internal/private-file'
+      })
+    );
+
+    expect(headers.get('x-accel-buffering')).toBeNull();
+    expect(headers.get('x-accel-expires')).toBeNull();
+    expect(headers.get('x-accel-limit-rate')).toBeNull();
+    expect(headers.get('x-accel-redirect')).toBeNull();
+    expect(headers.get('cache-control')).toBe('no-store');
+    expect(headers.get('content-type')).toBe('application/json');
+  });
 });
