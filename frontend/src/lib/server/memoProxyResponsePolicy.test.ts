@@ -20,6 +20,31 @@ describe('buildFrontendResponseHeaders browser-origin policy boundary', () => {
     expect(headers.get('content-type')).toBe('application/json');
   });
 
+  it('strips backend-controlled document isolation and reporting policy headers', () => {
+    const headers = buildFrontendResponseHeaders(
+      new Headers({
+        'Content-Security-Policy': "default-src 'none'; report-to backend-csp",
+        'Content-Security-Policy-Report-Only': "default-src 'none'; report-to backend-csp",
+        'Content-Type': 'application/json',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
+        NEL: '{"report_to":"backend","max_age":86400}',
+        'Origin-Agent-Cluster': '?1',
+        'Report-To': '{"group":"backend","max_age":86400,"endpoints":[{"url":"https://backend.example/reports"}]}',
+        'Reporting-Endpoints': 'backend="https://backend.example/reports"'
+      })
+    );
+
+    expect(headers.get('content-security-policy')).toBeNull();
+    expect(headers.get('content-security-policy-report-only')).toBeNull();
+    expect(headers.get('cross-origin-embedder-policy')).toBeNull();
+    expect(headers.get('nel')).toBeNull();
+    expect(headers.get('origin-agent-cluster')).toBeNull();
+    expect(headers.get('report-to')).toBeNull();
+    expect(headers.get('reporting-endpoints')).toBeNull();
+    expect(headers.get('cache-control')).toBe('no-store');
+    expect(headers.get('content-type')).toBe('application/json');
+  });
+
   it('strips backend X-Accel control headers before the outer proxy can interpret them', () => {
     const headers = buildFrontendResponseHeaders(
       new Headers({
