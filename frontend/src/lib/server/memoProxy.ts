@@ -54,7 +54,7 @@ const RESPONSE_HEADERS_TO_STRIP = [
   'upgrade'
 ] as const;
 
-const RESPONSE_HEADER_PREFIXES_TO_STRIP = ['access-control-'] as const;
+const RESPONSE_HEADER_PREFIXES_TO_STRIP = ['access-control-', 'x-accel-'] as const;
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
 const INVALID_BACKEND_URL_RAW_CHARACTER = /[\\\u0000-\u0020\u007f]/;
