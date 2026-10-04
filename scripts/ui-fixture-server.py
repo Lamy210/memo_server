@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import gzip
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -44,16 +45,22 @@ MEMOS = [
 
 UNAUTHORIZED = False
 REQUIRE_IDENTITY_ENCODING = False
+ENCODED_RESPONSE = False
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
     def send_json(self, status, payload):
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        encoded = ENCODED_RESPONSE and urlparse(self.path).path.startswith("/api/v1/")
+        wire_body = gzip.compress(body) if encoded else body
+
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        if encoded:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(wire_body)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(wire_body)
 
     def require_identity_encoding(self, path):
         if (
@@ -106,7 +113,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.send_json(404, {"message": "Visual fixture route not found"})
 
     def do_POST(self):
-        global UNAUTHORIZED
+        global UNAUTHORIZED, ENCODED_RESPONSE
         path = urlparse(self.path).path
 
         if not self.require_identity_encoding(path):
@@ -117,8 +124,14 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"scenario": "unauthorized"})
             return
 
+        if path == "/__visual__/scenario/encoded":
+            ENCODED_RESPONSE = True
+            self.send_json(200, {"scenario": "encoded"})
+            return
+
         if path == "/__visual__/scenario/success":
             UNAUTHORIZED = False
+            ENCODED_RESPONSE = False
             self.send_json(200, {"scenario": "success"})
             return
 

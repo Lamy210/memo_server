@@ -7,6 +7,7 @@ import {
   fetchMemoBackend,
   MemoBackendTimeoutError
 } from '$lib/server/memoBackendRequest';
+import { validateMemoBackendResponseEncoding } from '$lib/server/memoBackendResponse';
 import {
   allowedMemoProxyMethods,
   buildBackendRequestHeaders,
@@ -91,6 +92,13 @@ const proxyRequest: RequestHandler = async ({ request, params, url, fetch, local
       body,
       redirect: 'manual'
     });
+
+    try {
+      validateMemoBackendResponseEncoding(response.headers);
+    } catch (error) {
+      await response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
 
     return new Response(response.body, {
       status: response.status,
