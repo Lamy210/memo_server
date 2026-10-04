@@ -29,7 +29,12 @@ const REQUEST_HEADERS_TO_STRIP = [
   'upgrade',
   'via',
   'x-development-user-id',
+  'x-http-method',
+  'x-http-method-override',
+  'x-method-override',
+  'x-original-url',
   'x-real-ip',
+  'x-rewrite-url',
   'x-schnee-memo-request'
 ] as const;
 
