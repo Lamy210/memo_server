@@ -36,6 +36,8 @@ const REQUEST_HEADERS_TO_STRIP = [
 const REQUEST_HEADER_PREFIXES_TO_STRIP = ['sec-fetch-', 'x-forwarded-'] as const;
 
 const RESPONSE_HEADERS_TO_STRIP = [
+  'alt-svc',
+  'clear-site-data',
   'connection',
   'content-length',
   'keep-alive',
@@ -45,6 +47,7 @@ const RESPONSE_HEADERS_TO_STRIP = [
   'proxy-connection',
   'refresh',
   'set-cookie',
+  'strict-transport-security',
   'te',
   'trailer',
   'transfer-encoding',
