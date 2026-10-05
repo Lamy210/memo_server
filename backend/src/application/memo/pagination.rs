@@ -1,3 +1,39 @@
+use uuid::Uuid;
+
+use crate::error::{AppError, AppResult};
+
+const CURSOR_V1_PREFIX: &str = "v1.";
+pub const MEMO_LIST_DEFAULT_LIMIT: usize = 20;
+pub const MEMO_LIST_MAX_LIMIT: usize = 100;
+
+pub fn parse_cursor_v1(value: &str) -> AppResult<Uuid> {
+    let raw = value
+        .strip_prefix(CURSOR_V1_PREFIX)
+        .ok_or_else(|| AppError::BadRequest("Invalid memo list cursor".into()))?;
+    let cursor = Uuid::parse_str(raw)
+        .map_err(|_| AppError::BadRequest("Invalid memo list cursor".into()))?;
+
+    if cursor.get_version_num() != 4 || cursor.to_string() != raw {
+        return Err(AppError::BadRequest("Invalid memo list cursor".into()));
+    }
+
+    Ok(cursor)
+}
+
+pub fn format_cursor_v1(cursor: Uuid) -> String {
+    format!("{CURSOR_V1_PREFIX}{cursor}")
+}
+
+pub fn resolve_memo_list_limit(limit: Option<usize>) -> AppResult<usize> {
+    let limit = limit.unwrap_or(MEMO_LIST_DEFAULT_LIMIT);
+    if !(1..=MEMO_LIST_MAX_LIMIT).contains(&limit) {
+        return Err(AppError::BadRequest(
+            "Memo list limit must be between 1 and 100".into(),
+        ));
+    }
+    Ok(limit)
+}
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
