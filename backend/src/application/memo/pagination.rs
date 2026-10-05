@@ -29,7 +29,10 @@ mod tests {
             "v1.550e8400-e29b-41d4-a716-446655440000.trailing",
             "v1.550e8400-e29b-41d4-a716-446655440000\n",
         ] {
-            assert!(matches!(parse_cursor_v1(value), Err(AppError::BadRequest(_))), "{value}");
+            assert!(
+                matches!(parse_cursor_v1(value), Err(AppError::BadRequest(_))),
+                "{value}"
+            );
         }
     }
 
