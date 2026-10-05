@@ -5,40 +5,7 @@ import {
 } from '$lib/security/memoBff';
 import { validateMemoProxyQuery } from '$lib/server/memoProxyQuery';
 
-const REQUEST_HEADERS_TO_STRIP = [
-  'accept-encoding',
-  'authorization',
-  'cf-connecting-ip',
-  'client-ip',
-  'connection',
-  'content-length',
-  'cookie',
-  'fastly-client-ip',
-  'forwarded',
-  'host',
-  'keep-alive',
-  'origin',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'proxy-connection',
-  'referer',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'true-client-ip',
-  'upgrade',
-  'via',
-  'x-development-user-id',
-  'x-http-method',
-  'x-http-method-override',
-  'x-method-override',
-  'x-original-url',
-  'x-real-ip',
-  'x-rewrite-url',
-  'x-schnee-memo-request'
-] as const;
-
-const REQUEST_HEADER_PREFIXES_TO_STRIP = ['sec-fetch-', 'x-forwarded-'] as const;
+const REQUEST_HEADERS_TO_FORWARD = ['content-type', 'x-request-id'] as const;
 
 const RESPONSE_HEADERS_TO_STRIP = [
   'alt-svc',
@@ -187,21 +154,17 @@ export function buildBackendRequestHeaders(
   source: Headers,
   auth: BackendAuthContext
 ): Headers {
-  const headers = new Headers(source);
-  const connectionValue = headers.get('connection');
+  const headers = new Headers();
 
-  for (const name of REQUEST_HEADERS_TO_STRIP) {
-    headers.delete(name);
-  }
-  stripConnectionOptionHeaders(headers, connectionValue);
-
-  const sourceHeaderNames: string[] = [];
-  headers.forEach((_value, name) => sourceHeaderNames.push(name));
-  for (const name of sourceHeaderNames) {
-    if (REQUEST_HEADER_PREFIXES_TO_STRIP.some((prefix) => name.startsWith(prefix))) {
-      headers.delete(name);
+  for (const name of REQUEST_HEADERS_TO_FORWARD) {
+    const value = source.get(name);
+    if (value !== null) {
+      headers.set(name, value);
     }
   }
+  stripConnectionOptionHeaders(headers, source.get('connection'));
+
+  headers.set('Accept', 'application/json');
 
   // Node fetch adds compression negotiation automatically when this header is absent.
   // Keep the trusted backend hop representation-stable so a decoded body cannot be
