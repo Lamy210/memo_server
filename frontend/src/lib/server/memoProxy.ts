@@ -162,6 +162,7 @@ export function buildBackendRequestHeaders(
       headers.set(name, value);
     }
   }
+  stripConnectionOptionHeaders(headers, source.get('connection'));
 
   headers.set('Accept', 'application/json');
 
