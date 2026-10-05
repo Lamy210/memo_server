@@ -22,21 +22,21 @@ describe('memo proxy Connection header semantics', () => {
     expect(headers.get('x-end-to-end')).toBe('preserve-me');
   });
 
-  it('strips response headers named by Connection options before returning to the browser', () => {
+  it('strips allowlisted response headers named by Connection options', () => {
     const headers = buildFrontendResponseHeaders(
       new Headers({
-        Connection: 'X-Hop-Only, X-Second-Hop',
+        Connection: 'X-Request-Id, X-Hop-Only',
+        'Content-Type': 'application/json',
         'Proxy-Connection': 'keep-alive',
         'X-Hop-Only': 'response-secret',
-        'X-Second-Hop': 'response-secret-2',
-        'X-End-To-End': 'preserve-me'
+        'X-Request-Id': 'request-123'
       })
     );
 
     expect(headers.get('connection')).toBeNull();
     expect(headers.get('proxy-connection')).toBeNull();
     expect(headers.get('x-hop-only')).toBeNull();
-    expect(headers.get('x-second-hop')).toBeNull();
-    expect(headers.get('x-end-to-end')).toBe('preserve-me');
+    expect(headers.get('x-request-id')).toBeNull();
+    expect(headers.get('content-type')).toBe('application/json');
   });
 });

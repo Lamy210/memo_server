@@ -67,6 +67,13 @@ const RESPONSE_HEADERS_TO_STRIP = [
 ] as const;
 
 const RESPONSE_HEADER_PREFIXES_TO_STRIP = ['access-control-', 'x-accel-'] as const;
+const RESPONSE_HEADERS_TO_FORWARD = new Set([
+  'allow',
+  'content-language',
+  'content-type',
+  'retry-after',
+  'x-request-id'
+]);
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
 const INVALID_BACKEND_URL_RAW_CHARACTER = /[\\\u0000-\u0020\u007f]/;
@@ -222,7 +229,10 @@ export function buildFrontendResponseHeaders(source: Headers): Headers {
   const sourceHeaderNames: string[] = [];
   headers.forEach((_value, name) => sourceHeaderNames.push(name));
   for (const name of sourceHeaderNames) {
-    if (RESPONSE_HEADER_PREFIXES_TO_STRIP.some((prefix) => name.startsWith(prefix))) {
+    if (
+      RESPONSE_HEADER_PREFIXES_TO_STRIP.some((prefix) => name.startsWith(prefix)) ||
+      !RESPONSE_HEADERS_TO_FORWARD.has(name)
+    ) {
       headers.delete(name);
     }
   }
