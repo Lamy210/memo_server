@@ -376,7 +376,7 @@ impl MongoDbAuthoritativeStore {
         self.encrypted_memos
             .create_index(
                 IndexModel::builder()
-                    .keys(doc! { "owner_partition": 1 })
+                    .keys(doc! { "owner_partition": 1, "_id": -1 })
                     .build(),
             )
             .await
@@ -1078,6 +1078,37 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
             .try_collect()
             .await
             .map_err(|error| mongo_error("read encrypted MongoDB memo cursor", error))?;
+
+        documents
+            .into_iter()
+            .map(EncryptedMemoDocument::try_into_envelope)
+            .collect()
+    }
+
+    async fn page_envelopes_by_owner(
+        &self,
+        owner_partition: Uuid,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+        let limit = i64::try_from(limit).map_err(|_| {
+            AppError::DatabaseError("MongoDB encrypted memo page size is too large".into())
+        })?;
+        let mut filter = doc! { "owner_partition": owner_partition.to_string() };
+        if let Some(after) = after {
+            filter.insert("_id", doc! { "$lt": after.to_string() });
+        }
+
+        let documents: Vec<EncryptedMemoDocument> = self
+            .encrypted_memos
+            .find(filter)
+            .sort(doc! { "_id": -1 })
+            .limit(limit)
+            .await
+            .map_err(|error| mongo_error("page encrypted MongoDB memos", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read encrypted MongoDB memo page", error))?;
 
         documents
             .into_iter()
