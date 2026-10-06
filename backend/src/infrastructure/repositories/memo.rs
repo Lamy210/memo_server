@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    domain::memo::{entity::Memo, repository::MemoRepository},
+    domain::memo::{
+        entity::Memo,
+        repository::{MemoListPage, MemoRepository},
+    },
     error::AppResult,
     infrastructure::{
         persistence::ports::{MemoAuthoritativeStore, MemoCache, MemoSearchProjection},
@@ -64,6 +67,17 @@ impl MemoRepository for MemoRepositoryImpl {
 
     async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
         self.authoritative_store.find_all_by_user_id(user_id).await
+    }
+
+    async fn list_page_by_user_id(
+        &self,
+        user_id: Uuid,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<MemoListPage> {
+        self.authoritative_store
+            .list_page_by_user_id(user_id, after, limit)
+            .await
     }
 
     async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>> {
