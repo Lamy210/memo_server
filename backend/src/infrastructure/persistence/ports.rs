@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    application::crypto::HighEncryptedMemoEnvelope, domain::memo::entity::Memo, error::AppResult,
+    application::crypto::HighEncryptedMemoEnvelope,
+    domain::memo::{entity::Memo, repository::MemoListPage},
+    error::{AppError, AppResult},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +126,16 @@ pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
 pub trait MemoAuthoritativeStore: Send + Sync {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>>;
     async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>>;
+    async fn list_page_by_user_id(
+        &self,
+        _user_id: Uuid,
+        _after: Option<Uuid>,
+        _limit: usize,
+    ) -> AppResult<MemoListPage> {
+        Err(AppError::ServiceUnavailable(
+            "Bounded memo list pagination is not implemented for this authoritative store".into(),
+        ))
+    }
 
     /// Load authoritative memos in the same order as the requested IDs.
     ///
