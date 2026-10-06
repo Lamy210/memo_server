@@ -29,90 +29,49 @@ jobs:
           path = Path("backend/src/infrastructure/persistence/mongodb.rs")
           source = path.read_text()
 
-          old_index = '''    async fn ensure_encrypted_memo_indexes(&self) -> AppResult<()> {
-              self.encrypted_memos
-                  .create_index(
-                      IndexModel::builder()
-                          .keys(doc! { "owner_partition": 1 })
-                          .build(),
-                  )
-                  .await
-                  .map_err(|error| mongo_error("create MongoDB encrypted memo indexes", error))?;
-              Ok(())
-          }
-          '''
-          new_index = '''    async fn ensure_encrypted_memo_indexes(&self) -> AppResult<()> {
-              self.encrypted_memos
-                  .create_index(
-                      IndexModel::builder()
-                          .keys(doc! { "owner_partition": 1, "_id": -1 })
-                          .build(),
-                  )
-                  .await
-                  .map_err(|error| {
-                      mongo_error("create MongoDB encrypted memo pagination index", error)
-                  })?;
-              Ok(())
-          }
-          '''
+          old_index = '.keys(doc! { "owner_partition": 1 })'
+          new_index = '.keys(doc! { "owner_partition": 1, "_id": -1 })'
           if source.count(old_index) != 1:
-              raise SystemExit("encrypted memo index block did not match exactly once")
+              raise SystemExit("encrypted owner index expression did not match exactly once")
           source = source.replace(old_index, new_index, 1)
 
-          anchor = '''    async fn find_all_envelopes_by_owner(
-              &self,
-              owner_partition: Uuid,
-          ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
-              let documents: Vec<EncryptedMemoDocument> = self
-                  .encrypted_memos
-                  .find(doc! { "owner_partition": owner_partition.to_string() })
-                  .await
-                  .map_err(|error| mongo_error("find encrypted MongoDB memos", error))?
-                  .try_collect()
-                  .await
-                  .map_err(|error| mongo_error("read encrypted MongoDB memo cursor", error))?;
-
-              documents
-                  .into_iter()
-                  .map(EncryptedMemoDocument::try_into_envelope)
-                  .collect()
-          }
-          '''
-          replacement = anchor + '''
-              async fn page_envelopes_by_owner(
-                  &self,
-                  owner_partition: Uuid,
-                  after: Option<Uuid>,
-                  limit: usize,
-              ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
-                  let limit = i64::try_from(limit).map_err(|_| {
-                      AppError::DatabaseError("MongoDB encrypted memo page size is too large".into())
-                  })?;
-                  let mut filter = doc! { "owner_partition": owner_partition.to_string() };
-                  if let Some(after) = after {
-                      filter.insert("_id", doc! { "$lt": after.to_string() });
-                  }
-
-                  let documents: Vec<EncryptedMemoDocument> = self
-                      .encrypted_memos
-                      .find(filter)
-                      .sort(doc! { "_id": -1 })
-                      .limit(limit)
-                      .await
-                      .map_err(|error| mongo_error("page encrypted MongoDB memos", error))?
-                      .try_collect()
-                      .await
-                      .map_err(|error| mongo_error("read encrypted MongoDB memo page", error))?;
-
-                  documents
-                      .into_iter()
-                      .map(EncryptedMemoDocument::try_into_envelope)
-                      .collect()
-              }
-          '''
-          if source.count(anchor) != 1:
-              raise SystemExit("encrypted authoritative store anchor did not match exactly once")
-          source = source.replace(anchor, replacement, 1)
+          marker = "    async fn find_many_envelopes_by_ids(\n"
+          if source.count(marker) != 1:
+              raise SystemExit("encrypted find-many marker did not match exactly once")
+          method = (
+              "    async fn page_envelopes_by_owner(\n"
+              "        &self,\n"
+              "        owner_partition: Uuid,\n"
+              "        after: Option<Uuid>,\n"
+              "        limit: usize,\n"
+              "    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {\n"
+              "        let limit = i64::try_from(limit).map_err(|_| {\n"
+              "            AppError::DatabaseError(\"MongoDB encrypted memo page size is too large\".into())\n"
+              "        })?;\n"
+              "        let mut filter = doc! { \"owner_partition\": owner_partition.to_string() };\n"
+              "        if let Some(after) = after {\n"
+              "            filter.insert(\"_id\", doc! { \"$lt\": after.to_string() });\n"
+              "        }\n"
+              "\n"
+              "        let documents: Vec<EncryptedMemoDocument> = self\n"
+              "            .encrypted_memos\n"
+              "            .find(filter)\n"
+              "            .sort(doc! { \"_id\": -1 })\n"
+              "            .limit(limit)\n"
+              "            .await\n"
+              "            .map_err(|error| mongo_error(\"page encrypted MongoDB memos\", error))?\n"
+              "            .try_collect()\n"
+              "            .await\n"
+              "            .map_err(|error| mongo_error(\"read encrypted MongoDB memo page\", error))?;\n"
+              "\n"
+              "        documents\n"
+              "            .into_iter()\n"
+              "            .map(EncryptedMemoDocument::try_into_envelope)\n"
+              "            .collect()\n"
+              "    }\n"
+              "\n"
+          )
+          source = source.replace(marker, method + marker, 1)
           path.write_text(source)
           PY
 
