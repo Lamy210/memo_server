@@ -5,6 +5,12 @@ use super::entity::Memo;
 use crate::error::AppResult;
 
 #[derive(Debug)]
+pub struct MemoListPage {
+    pub items: Vec<Memo>,
+    pub has_more: bool,
+}
+
+#[derive(Debug)]
 pub struct MemoSearchPage {
     pub items: Vec<Memo>,
     pub total: usize,
