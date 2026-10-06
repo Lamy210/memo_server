@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     application::health::HealthProbe,
-    domain::memo::entity::Memo,
+    domain::memo::{entity::Memo, repository::MemoListPage},
     error::{AppError, AppResult},
 };
 
@@ -40,6 +40,8 @@ pub struct ScyllaDB {
 struct PreparedStatements {
     find_by_id: PreparedStatement,
     find_all_by_user_id: PreparedStatement,
+    list_first_page_by_user_id: PreparedStatement,
+    list_page_after_by_user_id: PreparedStatement,
     save_memo: PreparedStatement,
     update_memo_if_version: PreparedStatement,
     delete_memo: PreparedStatement,
@@ -193,6 +195,28 @@ impl ScyllaDB {
             .map_err(|error| {
                 AppError::DatabaseError(format!("Failed to prepare find_all_by_user_id: {error}"))
             })?;
+        let list_first_page_by_user_id = session
+            .prepare(
+                "SELECT id, title, content, tags, user_id, created_at, updated_at, version \
+                 FROM memo_app.memos WHERE user_id = ? LIMIT ?",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to prepare list_first_page_by_user_id: {error}"
+                ))
+            })?;
+        let list_page_after_by_user_id = session
+            .prepare(
+                "SELECT id, title, content, tags, user_id, created_at, updated_at, version \
+                 FROM memo_app.memos WHERE user_id = ? AND id < ? LIMIT ?",
+            )
+            .await
+            .map_err(|error| {
+                AppError::DatabaseError(format!(
+                    "Failed to prepare list_page_after_by_user_id: {error}"
+                ))
+            })?;
         let save_memo = session
             .prepare(
                 "INSERT INTO memo_app.memos \
@@ -260,6 +284,8 @@ impl ScyllaDB {
         Ok(PreparedStatements {
             find_by_id,
             find_all_by_user_id,
+            list_first_page_by_user_id,
+            list_page_after_by_user_id,
             save_memo,
             update_memo_if_version,
             delete_memo,
@@ -306,6 +332,60 @@ impl ScyllaDB {
                 })
             })
             .collect()
+    }
+
+    pub async fn list_page_by_user_id(
+        &self,
+        user_id: Uuid,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<MemoListPage> {
+        let physical_limit = limit
+            .checked_add(1)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| AppError::DatabaseError("Memo list page limit is too large".into()))?;
+
+        let result = match after {
+            Some(after) => self
+                .session
+                .execute_unpaged(
+                    &self.prepared_statements.list_page_after_by_user_id,
+                    (user_id, after, physical_limit),
+                )
+                .await,
+            None => self
+                .session
+                .execute_unpaged(
+                    &self.prepared_statements.list_first_page_by_user_id,
+                    (user_id, physical_limit),
+                )
+                .await,
+        }
+        .map_err(|error| {
+            AppError::DatabaseError(format!("Failed to fetch bounded memo page: {error}"))
+        })?;
+
+        let rows = result.into_rows_result().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to read bounded memo page: {error}"))
+        })?;
+        let typed_rows = rows.rows::<MemoRow>().map_err(|error| {
+            AppError::DatabaseError(format!("Failed to type-check bounded memo page: {error}"))
+        })?;
+        let mut items = typed_rows
+            .map(|row| {
+                row.map(Self::memo_from_row).map_err(|error| {
+                    AppError::DatabaseError(format!(
+                        "Failed to deserialize bounded memo page: {error}"
+                    ))
+                })
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+        let has_more = items.len() > limit;
+        if has_more {
+            items.truncate(limit);
+        }
+
+        Ok(MemoListPage { items, has_more })
     }
 
     pub async fn save(&self, memo: &Memo) -> AppResult<()> {
@@ -517,6 +597,15 @@ impl MemoAuthoritativeStore for ScyllaDB {
 
     async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
         ScyllaDB::find_all_by_user_id(self, user_id).await
+    }
+
+    async fn list_page_by_user_id(
+        &self,
+        user_id: Uuid,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<MemoListPage> {
+        ScyllaDB::list_page_by_user_id(self, user_id, after, limit).await
     }
 
     async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>> {
