@@ -46,7 +46,10 @@ impl MemoAuthoritativeStore for RecordingStore {
         after: Option<Uuid>,
         limit: usize,
     ) -> AppResult<MemoListPage> {
-        self.page_calls.lock().unwrap().push((user_id, after, limit));
+        self.page_calls
+            .lock()
+            .unwrap()
+            .push((user_id, after, limit));
         Ok(MemoListPage {
             items: self.items.clone(),
             has_more: self.has_more,
@@ -70,7 +73,11 @@ impl MemoAuthoritativeStore for RecordingStore {
         user_id: Uuid,
         id: Uuid,
     ) -> AppResult<ProjectionIntent> {
-        Ok(ProjectionIntent::new(user_id, id, ProjectionTarget::Deleted))
+        Ok(ProjectionIntent::new(
+            user_id,
+            id,
+            ProjectionTarget::Deleted,
+        ))
     }
 
     async fn exists(&self, _user_id: Uuid, _id: Uuid) -> AppResult<bool> {
@@ -178,6 +185,9 @@ async fn repository_delegates_list_page_without_unbounded_owner_read() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].id, item.id);
     assert!(page.has_more);
-    assert_eq!(&*store.page_calls.lock().unwrap(), &[(owner, Some(after), 2)]);
+    assert_eq!(
+        &*store.page_calls.lock().unwrap(),
+        &[(owner, Some(after), 2)]
+    );
     assert_eq!(store.unbounded_calls.load(Ordering::Relaxed), 0);
 }
