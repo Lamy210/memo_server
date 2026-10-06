@@ -3,8 +3,7 @@ use memo_app_backend::{
         HighEncryptedMemoEnvelope, MEMO_HIGH_SCHEMA_VERSION, MEMO_HIGH_SUITE_ID,
     },
     infrastructure::persistence::{
-        mongodb::MongoDbAuthoritativeStore,
-        ports::HighEncryptedMemoAuthoritativeStore,
+        mongodb::MongoDbAuthoritativeStore, ports::HighEncryptedMemoAuthoritativeStore,
     },
 };
 use mongodb::Client;
@@ -63,11 +62,10 @@ async fn mongodb_encrypted_authoritative_store_preserves_atomic_outbox_and_versi
         .await
         .unwrap();
 
-    let first = HighEncryptedMemoAuthoritativeStore::page_envelopes_by_owner(
-        &store, owner, None, 2,
-    )
-    .await
-    .unwrap();
+    let first =
+        HighEncryptedMemoAuthoritativeStore::page_envelopes_by_owner(&store, owner, None, 2)
+            .await
+            .unwrap();
     assert_eq!(
         first
             .iter()
