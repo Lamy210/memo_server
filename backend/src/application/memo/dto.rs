@@ -30,6 +30,14 @@ pub struct MemoResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct MemoListResponse {
+    pub pagination: &'static str,
+    pub items: Vec<MemoResponse>,
+    pub limit: usize,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SearchResponse {
     pub items: Vec<MemoResponse>,
     pub total: usize,
