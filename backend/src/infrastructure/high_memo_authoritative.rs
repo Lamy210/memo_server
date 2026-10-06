@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     application::crypto::{HighEncryptedMemoEnvelope, HighMemoCryptography},
-    domain::memo::entity::Memo,
+    domain::memo::{entity::Memo, repository::MemoListPage},
     error::{AppError, AppResult},
     infrastructure::persistence::ports::{
         HighEncryptedMemoAuthoritativeStore, MemoAuthoritativeStore, ProjectionIntent,
@@ -111,6 +111,30 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
         // persistence adapter cannot sort on it without leaking new metadata.
         memos.sort_by_key(|memo| Reverse(memo.updated_at));
         Ok(memos)
+    }
+
+    async fn list_page_by_user_id(
+        &self,
+        user_id: Uuid,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<MemoListPage> {
+        let physical_limit = limit.checked_add(1).ok_or_else(|| {
+            AppError::DatabaseError("HIGH authoritative memo page size is too large".into())
+        })?;
+        let mut envelopes = self
+            .encrypted_store
+            .page_envelopes_by_owner(user_id, after, physical_limit)
+            .await?;
+        let has_more = envelopes.len() > limit;
+        envelopes.truncate(limit);
+
+        let mut items = Vec::with_capacity(envelopes.len());
+        for envelope in envelopes {
+            items.push(self.decrypt_checked(&envelope).await?);
+        }
+
+        Ok(MemoListPage { items, has_more })
     }
 
     async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>> {
