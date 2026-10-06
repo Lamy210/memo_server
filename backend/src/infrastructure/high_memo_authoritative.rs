@@ -480,11 +480,8 @@ mod tests {
                 1,
                 1_700_000_001_000 + index as i64,
             );
-            store
-                .envelopes
-                .lock()
-                .unwrap()
-                .push(crypto.encrypt_memo(&memo).await.unwrap());
+            let envelope = crypto.encrypt_memo(&memo).await.unwrap();
+            store.envelopes.lock().unwrap().push(envelope);
         }
         let other = memo(
             other_owner,
@@ -492,11 +489,8 @@ mod tests {
             1,
             1_700_000_010_000,
         );
-        store
-            .envelopes
-            .lock()
-            .unwrap()
-            .push(crypto.encrypt_memo(&other).await.unwrap());
+        let other_envelope = crypto.encrypt_memo(&other).await.unwrap();
+        store.envelopes.lock().unwrap().push(other_envelope);
 
         let first = adapter.list_page_by_user_id(owner, None, 2).await.unwrap();
         assert!(first.has_more);
