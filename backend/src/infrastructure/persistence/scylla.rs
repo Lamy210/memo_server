@@ -346,20 +346,22 @@ impl ScyllaDB {
             .ok_or_else(|| AppError::DatabaseError("Memo list page limit is too large".into()))?;
 
         let result = match after {
-            Some(after) => self
-                .session
-                .execute_unpaged(
-                    &self.prepared_statements.list_page_after_by_user_id,
-                    (user_id, after, physical_limit),
-                )
-                .await,
-            None => self
-                .session
-                .execute_unpaged(
-                    &self.prepared_statements.list_first_page_by_user_id,
-                    (user_id, physical_limit),
-                )
-                .await,
+            Some(after) => {
+                self.session
+                    .execute_unpaged(
+                        &self.prepared_statements.list_page_after_by_user_id,
+                        (user_id, after, physical_limit),
+                    )
+                    .await
+            }
+            None => {
+                self.session
+                    .execute_unpaged(
+                        &self.prepared_statements.list_first_page_by_user_id,
+                        (user_id, physical_limit),
+                    )
+                    .await
+            }
         }
         .map_err(|error| {
             AppError::DatabaseError(format!("Failed to fetch bounded memo page: {error}"))
