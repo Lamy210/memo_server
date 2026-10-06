@@ -84,6 +84,20 @@ pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
         owner_partition: Uuid,
     ) -> AppResult<Vec<HighEncryptedMemoEnvelope>>;
 
+    /// Load an owner-scoped page of encrypted envelopes in UUID-descending order.
+    /// `after` is an exclusive cursor and `limit` is the physical read bound.
+    async fn page_envelopes_by_owner(
+        &self,
+        _owner_partition: Uuid,
+        _after: Option<Uuid>,
+        _limit: usize,
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+        Err(AppError::ServiceUnavailable(
+            "Bounded encrypted memo pagination is not implemented for this authoritative store"
+                .into(),
+        ))
+    }
+
     /// Load encrypted envelopes in the same order as the requested IDs.
     /// Missing IDs are omitted.
     async fn find_many_envelopes_by_ids(
