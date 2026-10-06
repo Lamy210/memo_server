@@ -98,16 +98,8 @@ fn service(repository: Arc<PagingRepository>) -> MemoService {
 #[tokio::test]
 async fn memo_list_page_defaults_to_first_page_and_builds_next_cursor() {
     let user_id = Uuid::new_v4();
-    let first = memo(
-        user_id,
-        "550e8400-e29b-41d4-a716-446655440002",
-        "first",
-    );
-    let second = memo(
-        user_id,
-        "550e8400-e29b-41d4-a716-446655440001",
-        "second",
-    );
+    let first = memo(user_id, "550e8400-e29b-41d4-a716-446655440002", "first");
+    let second = memo(user_id, "550e8400-e29b-41d4-a716-446655440001", "second");
     let repository = Arc::new(PagingRepository {
         calls: Mutex::new(Vec::new()),
         items: vec![first.clone(), second.clone()],
@@ -175,14 +167,18 @@ async fn memo_list_page_rejects_invalid_input_before_repository_access() {
         "v1.550e8400-e29b-11d4-a716-446655440000",
     ] {
         assert!(matches!(
-            service.get_user_memos_page(user_id, Some(cursor), None).await,
+            service
+                .get_user_memos_page(user_id, Some(cursor), None)
+                .await,
             Err(AppError::BadRequest(_))
         ));
     }
 
     for limit in [0, 101] {
         assert!(matches!(
-            service.get_user_memos_page(user_id, None, Some(limit)).await,
+            service
+                .get_user_memos_page(user_id, None, Some(limit))
+                .await,
             Err(AppError::BadRequest(_))
         ));
     }
