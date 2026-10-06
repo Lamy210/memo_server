@@ -2,7 +2,10 @@ use std::{cmp::Reverse, sync::Arc};
 
 use uuid::Uuid;
 
-use super::dto::{CreateMemoDto, MemoResponse, SearchResponse, UpdateMemoDto};
+use super::{
+    dto::{CreateMemoDto, MemoListResponse, MemoResponse, SearchResponse, UpdateMemoDto},
+    pagination::{format_cursor_v1, parse_cursor_v1, resolve_memo_list_limit},
+};
 use crate::{
     application::{
         crypto_search_orchestration::HighSearchQueryReader,
@@ -202,6 +205,40 @@ impl MemoService {
             let mut memos = repository.find_all_by_user_id(user_id).await?;
             memos.sort_by_key(|memo| Reverse(memo.updated_at));
             Ok(memos.into_iter().map(MemoResponse::from).collect())
+        }
+        .await;
+
+        Self::finish_access(result, access).await
+    }
+
+    pub async fn get_user_memos_page(
+        &self,
+        user_id: Uuid,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<MemoListResponse> {
+        let after = cursor.map(parse_cursor_v1).transpose()?;
+        let limit = resolve_memo_list_limit(limit)?;
+
+        let access = self.high_memo_access_guard.acquire_access().await?;
+        let route = access.route_snapshot();
+        let result = async {
+            let repository = self.repository_for_route(route.route)?;
+            let page = repository
+                .list_page_by_user_id(user_id, after, limit)
+                .await?;
+            let next_cursor = if page.has_more {
+                page.items.last().map(|memo| format_cursor_v1(memo.id))
+            } else {
+                None
+            };
+
+            Ok(MemoListResponse {
+                pagination: "cursor-v1",
+                items: page.items.into_iter().map(MemoResponse::from).collect(),
+                limit,
+                next_cursor,
+            })
         }
         .await;
 
