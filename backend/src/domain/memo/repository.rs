@@ -27,3 +27,26 @@ pub trait MemoRepository: Send + Sync {
     ) -> AppResult<MemoSearchPage>;
     async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool>;
 }
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::MemoListPage;
+    use crate::domain::memo::entity::Memo;
+
+    #[test]
+    fn memo_list_page_tracks_items_and_has_more() {
+        let user_id = Uuid::new_v4();
+        let first = Memo::new("first".into(), "content".into(), Vec::new(), user_id);
+        let second = Memo::new("second".into(), "content".into(), Vec::new(), user_id);
+
+        let page = MemoListPage {
+            items: vec![first, second],
+            has_more: true,
+        };
+
+        assert_eq!(page.items.len(), 2);
+        assert!(page.has_more);
+    }
+}
