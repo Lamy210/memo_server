@@ -139,12 +139,12 @@ async fn encrypted_page_contract_is_owner_scoped_descending_and_exclusive() {
         envelopes.push(envelope(other_owner, OTHER_OWNER_ID));
     }
 
-    let first = store
-        .page_envelopes_by_owner(owner, None, 3)
-        .await
-        .unwrap();
+    let first = store.page_envelopes_by_owner(owner, None, 3).await.unwrap();
     assert_eq!(
-        first.iter().map(|envelope| envelope.memo_id).collect::<Vec<_>>(),
+        first
+            .iter()
+            .map(|envelope| envelope.memo_id)
+            .collect::<Vec<_>>(),
         OWNER_IDS[..3]
             .iter()
             .map(|id| Uuid::parse_str(id).unwrap())
