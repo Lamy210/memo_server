@@ -66,6 +66,7 @@ async fn mongodb_encrypted_authoritative_store_preserves_atomic_outbox_and_versi
         HighEncryptedMemoAuthoritativeStore::page_envelopes_by_owner(&store, owner, None, 2)
             .await
             .unwrap();
+    assert_eq!(first.len(), 2);
     assert_eq!(
         first
             .iter()
@@ -85,6 +86,7 @@ async fn mongodb_encrypted_authoritative_store_preserves_atomic_outbox_and_versi
     )
     .await
     .unwrap();
+    assert_eq!(second.len(), 2);
     assert_eq!(
         second
             .iter()
