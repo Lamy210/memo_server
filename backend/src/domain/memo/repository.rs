@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::entity::Memo;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 #[derive(Debug)]
 pub struct MemoListPage {
@@ -20,6 +20,16 @@ pub struct MemoSearchPage {
 pub trait MemoRepository: Send + Sync {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>>;
     async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>>;
+    async fn list_page_by_user_id(
+        &self,
+        _user_id: Uuid,
+        _after: Option<Uuid>,
+        _limit: usize,
+    ) -> AppResult<MemoListPage> {
+        Err(AppError::ServiceUnavailable(
+            "Bounded memo list pagination is not implemented for this repository".into(),
+        ))
+    }
     async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>>;
     async fn save(&self, memo: &Memo) -> AppResult<()>;
     async fn delete(&self, user_id: Uuid, id: Uuid) -> AppResult<()>;
