@@ -193,7 +193,10 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
 
     use chrono::{TimeZone, Utc};
 
@@ -206,6 +209,8 @@ mod tests {
     struct FakeEncryptedStore {
         envelopes: Mutex<Vec<HighEncryptedMemoEnvelope>>,
         intents: Mutex<Vec<ProjectionIntent>>,
+        unbounded_reads: AtomicUsize,
+        page_limits: Mutex<Vec<usize>>,
     }
 
     #[async_trait]
@@ -230,6 +235,7 @@ mod tests {
             &self,
             owner_partition: Uuid,
         ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+            self.unbounded_reads.fetch_add(1, Ordering::SeqCst);
             Ok(self
                 .envelopes
                 .lock()
@@ -238,6 +244,27 @@ mod tests {
                 .filter(|envelope| envelope.owner_partition == owner_partition)
                 .cloned()
                 .collect())
+        }
+
+        async fn page_envelopes_by_owner(
+            &self,
+            owner_partition: Uuid,
+            after: Option<Uuid>,
+            limit: usize,
+        ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+            self.page_limits.lock().unwrap().push(limit);
+            let mut envelopes = self
+                .envelopes
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|envelope| envelope.owner_partition == owner_partition)
+                .filter(|envelope| after.is_none_or(|cursor| envelope.memo_id < cursor))
+                .cloned()
+                .collect::<Vec<_>>();
+            envelopes.sort_by_key(|envelope| Reverse(envelope.memo_id));
+            envelopes.truncate(limit);
+            Ok(envelopes)
         }
 
         async fn find_many_envelopes_by_ids(
@@ -314,7 +341,10 @@ mod tests {
         }
     }
 
-    struct FakeCrypto;
+    #[derive(Default)]
+    struct FakeCrypto {
+        decrypts: AtomicUsize,
+    }
 
     #[async_trait]
     impl HighMemoCryptography for FakeCrypto {
@@ -342,6 +372,7 @@ mod tests {
         }
 
         async fn decrypt_memo(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo> {
+            self.decrypts.fetch_add(1, Ordering::SeqCst);
             let (title, content, tags, created_at_ms, updated_at_ms): (
                 String,
                 String,
@@ -377,7 +408,7 @@ mod tests {
     }
 
     fn adapter(store: Arc<FakeEncryptedStore>) -> HighMemoAuthoritativeAdapter {
-        HighMemoAuthoritativeAdapter::new(store, Arc::new(FakeCrypto))
+        HighMemoAuthoritativeAdapter::new(store, Arc::new(FakeCrypto::default()))
     }
 
     #[tokio::test]
@@ -426,6 +457,72 @@ mod tests {
             listed.iter().map(|memo| memo.id).collect::<Vec<_>>(),
             vec![newer.id, older.id]
         );
+    }
+
+    #[tokio::test]
+    async fn bounded_page_uses_limit_plus_one_without_unbounded_reads_or_probe_decryption() {
+        let owner = Uuid::new_v4();
+        let other_owner = Uuid::new_v4();
+        let store = Arc::new(FakeEncryptedStore::default());
+        let crypto = Arc::new(FakeCrypto::default());
+        let adapter = HighMemoAuthoritativeAdapter::new(store.clone(), crypto.clone());
+        let ids = [
+            "550e8400-e29b-41d4-a716-446655440004",
+            "550e8400-e29b-41d4-a716-446655440003",
+            "550e8400-e29b-41d4-a716-446655440002",
+            "550e8400-e29b-41d4-a716-446655440001",
+        ];
+
+        for (index, id) in ids.iter().enumerate() {
+            let memo = memo(
+                owner,
+                Uuid::parse_str(id).unwrap(),
+                1,
+                1_700_000_001_000 + index as i64,
+            );
+            store
+                .envelopes
+                .lock()
+                .unwrap()
+                .push(crypto.encrypt_memo(&memo).await.unwrap());
+        }
+        let other = memo(
+            other_owner,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-4466554400ff").unwrap(),
+            1,
+            1_700_000_010_000,
+        );
+        store
+            .envelopes
+            .lock()
+            .unwrap()
+            .push(crypto.encrypt_memo(&other).await.unwrap());
+
+        let first = adapter.list_page_by_user_id(owner, None, 2).await.unwrap();
+        assert!(first.has_more);
+        assert_eq!(
+            first.items.iter().map(|memo| memo.id).collect::<Vec<_>>(),
+            ids[..2]
+                .iter()
+                .map(|id| Uuid::parse_str(id).unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        let second = adapter
+            .list_page_by_user_id(owner, Some(first.items[1].id), 2)
+            .await
+            .unwrap();
+        assert!(!second.has_more);
+        assert_eq!(
+            second.items.iter().map(|memo| memo.id).collect::<Vec<_>>(),
+            ids[2..]
+                .iter()
+                .map(|id| Uuid::parse_str(id).unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(*store.page_limits.lock().unwrap(), vec![3, 3]);
+        assert_eq!(store.unbounded_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(crypto.decrypts.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test]
