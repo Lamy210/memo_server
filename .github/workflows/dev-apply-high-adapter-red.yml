@@ -1,0 +1,219 @@
+name: Apply HIGH adapter pagination RED test
+
+on:
+  push:
+    branches:
+      - feat/memo-list-pagination-v1
+    paths:
+      - .github/workflows/dev-apply-high-adapter-red.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/memo-list-pagination-v1
+          fetch-depth: 0
+
+      - name: Apply verified RED test patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/src/infrastructure/high_memo_authoritative.rs")
+          source = path.read_text()
+          tests_at = source.index("#[cfg(test)]\nmod tests {")
+          prod, tests = source[:tests_at], source[tests_at:]
+
+          old_import = "    use std::sync::Mutex;\n"
+          new_import = "    use std::sync::{\n        atomic::{AtomicUsize, Ordering},\n        Mutex,\n    };\n"
+          if tests.count(old_import) != 1:
+              raise SystemExit("test sync import did not match exactly once")
+          tests = tests.replace(old_import, new_import, 1)
+
+          old_store = '''    #[derive(Default)]
+              struct FakeEncryptedStore {
+                  envelopes: Mutex<Vec<HighEncryptedMemoEnvelope>>,
+                  intents: Mutex<Vec<ProjectionIntent>>,
+              }
+          '''
+          new_store = '''    #[derive(Default)]
+              struct FakeEncryptedStore {
+                  envelopes: Mutex<Vec<HighEncryptedMemoEnvelope>>,
+                  intents: Mutex<Vec<ProjectionIntent>>,
+                  unbounded_reads: AtomicUsize,
+                  page_limits: Mutex<Vec<usize>>,
+              }
+          '''
+          if tests.count(old_store) != 1:
+              raise SystemExit("fake encrypted store did not match exactly once")
+          tests = tests.replace(old_store, new_store, 1)
+
+          old_find_all = '''        async fn find_all_envelopes_by_owner(
+                  &self,
+                  owner_partition: Uuid,
+              ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+                  Ok(self
+          '''
+          new_find_all = '''        async fn find_all_envelopes_by_owner(
+                  &self,
+                  owner_partition: Uuid,
+              ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+                  self.unbounded_reads.fetch_add(1, Ordering::SeqCst);
+                  Ok(self
+          '''
+          if tests.count(old_find_all) != 1:
+              raise SystemExit("fake find-all method did not match exactly once")
+          tests = tests.replace(old_find_all, new_find_all, 1)
+
+          marker = "        async fn find_many_envelopes_by_ids(\n"
+          if tests.count(marker) != 1:
+              raise SystemExit("fake find-many marker did not match exactly once")
+          page_method = '''        async fn page_envelopes_by_owner(
+              &self,
+              owner_partition: Uuid,
+              after: Option<Uuid>,
+              limit: usize,
+          ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+              self.page_limits.lock().unwrap().push(limit);
+              let mut envelopes = self
+                  .envelopes
+                  .lock()
+                  .unwrap()
+                  .iter()
+                  .filter(|envelope| envelope.owner_partition == owner_partition)
+                  .filter(|envelope| after.is_none_or(|cursor| envelope.memo_id < cursor))
+                  .cloned()
+                  .collect::<Vec<_>>();
+              envelopes.sort_by_key(|envelope| Reverse(envelope.memo_id));
+              envelopes.truncate(limit);
+              Ok(envelopes)
+          }
+
+'''
+          tests = tests.replace(marker, page_method + marker, 1)
+
+          old_crypto = "    struct FakeCrypto;\n"
+          new_crypto = '''    #[derive(Default)]
+              struct FakeCrypto {
+                  decrypts: AtomicUsize,
+              }
+          '''
+          if tests.count(old_crypto) != 1:
+              raise SystemExit("fake crypto declaration did not match exactly once")
+          tests = tests.replace(old_crypto, new_crypto, 1)
+
+          decrypt_anchor = '''        async fn decrypt_memo(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo> {
+              let (title, content, tags, created_at_ms, updated_at_ms): (
+          '''
+          decrypt_replacement = '''        async fn decrypt_memo(&self, envelope: &HighEncryptedMemoEnvelope) -> AppResult<Memo> {
+              self.decrypts.fetch_add(1, Ordering::SeqCst);
+              let (title, content, tags, created_at_ms, updated_at_ms): (
+          '''
+          if tests.count(decrypt_anchor) != 1:
+              raise SystemExit("fake decrypt method did not match exactly once")
+          tests = tests.replace(decrypt_anchor, decrypt_replacement, 1)
+
+          old_adapter = "        HighMemoAuthoritativeAdapter::new(store, Arc::new(FakeCrypto))\n"
+          new_adapter = "        HighMemoAuthoritativeAdapter::new(store, Arc::new(FakeCrypto::default()))\n"
+          if tests.count(old_adapter) != 1:
+              raise SystemExit("adapter helper did not match exactly once")
+          tests = tests.replace(old_adapter, new_adapter, 1)
+
+          test_marker = "    #[tokio::test]\n    async fn ordered_bulk_hydration_and_delete_preserve_existing_contracts() {\n"
+          if tests.count(test_marker) != 1:
+              raise SystemExit("ordered bulk test marker did not match exactly once")
+          new_test = '''    #[tokio::test]
+    async fn bounded_page_uses_limit_plus_one_without_unbounded_reads_or_probe_decryption() {
+        let owner = Uuid::new_v4();
+        let other_owner = Uuid::new_v4();
+        let store = Arc::new(FakeEncryptedStore::default());
+        let crypto = Arc::new(FakeCrypto::default());
+        let adapter = HighMemoAuthoritativeAdapter::new(store.clone(), crypto.clone());
+        let ids = [
+            "550e8400-e29b-41d4-a716-446655440004",
+            "550e8400-e29b-41d4-a716-446655440003",
+            "550e8400-e29b-41d4-a716-446655440002",
+            "550e8400-e29b-41d4-a716-446655440001",
+        ];
+
+        for (index, id) in ids.iter().enumerate() {
+            let memo = memo(
+                owner,
+                Uuid::parse_str(id).unwrap(),
+                1,
+                1_700_000_001_000 + index as i64,
+            );
+            store
+                .envelopes
+                .lock()
+                .unwrap()
+                .push(crypto.encrypt_memo(&memo).await.unwrap());
+        }
+        let other = memo(
+            other_owner,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-4466554400ff").unwrap(),
+            1,
+            1_700_000_010_000,
+        );
+        store
+            .envelopes
+            .lock()
+            .unwrap()
+            .push(crypto.encrypt_memo(&other).await.unwrap());
+
+        let first = adapter.list_page_by_user_id(owner, None, 2).await.unwrap();
+        assert!(first.has_more);
+        assert_eq!(
+            first.items.iter().map(|memo| memo.id).collect::<Vec<_>>(),
+            ids[..2]
+                .iter()
+                .map(|id| Uuid::parse_str(id).unwrap())
+                .collect::<Vec<_>>()
+        );
+
+        let second = adapter
+            .list_page_by_user_id(owner, Some(first.items[1].id), 2)
+            .await
+            .unwrap();
+        assert!(!second.has_more);
+        assert_eq!(
+            second.items.iter().map(|memo| memo.id).collect::<Vec<_>>(),
+            ids[2..]
+                .iter()
+                .map(|id| Uuid::parse_str(id).unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(*store.page_limits.lock().unwrap(), vec![3, 3]);
+        assert_eq!(store.unbounded_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(crypto.decrypts.load(Ordering::SeqCst), 4);
+    }
+
+'''
+          tests = tests.replace(test_marker, new_test + test_marker, 1)
+
+          path.write_text(prod + tests)
+          PY
+
+          cd backend
+          cargo fmt
+          cd ..
+          git diff --check
+
+      - name: Commit RED test and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/src/infrastructure/high_memo_authoritative.rs
+          git rm .github/workflows/dev-apply-high-adapter-red.yml
+          git diff --cached --check
+          git commit -m "test: require bounded HIGH authoritative paging"
+          git push origin HEAD:feat/memo-list-pagination-v1
