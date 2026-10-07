@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use actix_web::{body::to_bytes, web::{Data, Query}};
+use actix_web::{
+    body::to_bytes,
+    web::{Data, Query},
+};
 use async_trait::async_trait;
 use memo_app_backend::{
     application::{
