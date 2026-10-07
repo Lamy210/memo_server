@@ -141,7 +141,10 @@ async fn legacy_list_is_bounded_to_one_hundred_and_preserves_recency_order() {
         "550e8400-e29b-41d4-a716-446655440002",
         1_700_000_010_000,
     );
-    let repository = Arc::new(PagingRepository::new(vec![older.clone(), newer.clone()], false));
+    let repository = Arc::new(PagingRepository::new(
+        vec![older.clone(), newer.clone()],
+        false,
+    ));
     let service = service(repository.clone());
 
     let response = service.get_user_memos(owner).await.unwrap();
@@ -194,7 +197,10 @@ async fn cursor_v1_page_returns_exclusive_next_cursor_from_last_visible_item() {
         "550e8400-e29b-41d4-a716-446655440003",
         1_700_000_003_000,
     );
-    let repository = Arc::new(PagingRepository::new(vec![first.clone(), second.clone()], true));
+    let repository = Arc::new(PagingRepository::new(
+        vec![first.clone(), second.clone()],
+        true,
+    ));
     let service = service(repository.clone());
 
     let response = service
@@ -205,7 +211,11 @@ async fn cursor_v1_page_returns_exclusive_next_cursor_from_last_visible_item() {
     assert_eq!(response.pagination, "cursor-v1");
     assert_eq!(response.limit, 2);
     assert_eq!(
-        response.items.iter().map(|memo| memo.id).collect::<Vec<_>>(),
+        response
+            .items
+            .iter()
+            .map(|memo| memo.id)
+            .collect::<Vec<_>>(),
         vec![first.id, second.id]
     );
     assert_eq!(
