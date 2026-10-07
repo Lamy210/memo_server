@@ -202,7 +202,13 @@ impl MemoService {
         let route = access.route_snapshot();
         let result = async {
             let repository = self.repository_for_route(route.route)?;
-            let mut memos = repository.find_all_by_user_id(user_id).await?;
+            let page = repository.list_page_by_user_id(user_id, None, 100).await?;
+            if page.has_more {
+                return Err(AppError::BadRequest(
+                    "Memo list pagination is required; use pagination=cursor-v1".into(),
+                ));
+            }
+            let mut memos = page.items;
             memos.sort_by_key(|memo| Reverse(memo.updated_at));
             Ok(memos.into_iter().map(MemoResponse::from).collect())
         }
