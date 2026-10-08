@@ -19,6 +19,7 @@ pub struct MemoSearchPage {
 #[async_trait]
 pub trait MemoRepository: Send + Sync {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>>;
+    #[deprecated(note = "unbounded owner scans are forbidden on request paths; use list_page_by_user_id")]
     async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>>;
     async fn list_page_by_user_id(
         &self,
