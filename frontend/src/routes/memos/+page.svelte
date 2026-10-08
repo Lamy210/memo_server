@@ -3,18 +3,22 @@
   import { goto } from '$app/navigation';
 
   import MemoCard from '@/components/features/memo/MemoCard.svelte';
-  import { fetchMemos, getApiErrorMessage, isUnauthorizedApiError } from '@/lib/api/memo';
+  import { fetchMemosPage, getApiErrorMessage, isUnauthorizedApiError } from '@/lib/api/memo';
   import type { Memo } from '@/lib/api/types';
 
   let memos: Memo[] = [];
   let loading = true;
+  let loadingMore = false;
   let errorMessage = '';
   let authRequired = false;
   let query = '';
+  let nextCursor: string | null = null;
 
   onMount(async () => {
     try {
-      memos = await fetchMemos();
+      const page = await fetchMemosPage();
+      memos = page.items;
+      nextCursor = page.next_cursor;
     } catch (error) {
       authRequired = isUnauthorizedApiError(error);
       errorMessage = getApiErrorMessage(error, 'メモ一覧の取得に失敗しました');
@@ -22,6 +26,24 @@
       loading = false;
     }
   });
+
+  async function loadMore(): Promise<void> {
+    if (!nextCursor || loadingMore) return;
+
+    loadingMore = true;
+    errorMessage = '';
+    authRequired = false;
+    try {
+      const page = await fetchMemosPage({ cursor: nextCursor });
+      memos = [...memos, ...page.items];
+      nextCursor = page.next_cursor;
+    } catch (error) {
+      authRequired = isUnauthorizedApiError(error);
+      errorMessage = getApiErrorMessage(error, 'メモの続きを取得できませんでした');
+    } finally {
+      loadingMore = false;
+    }
+  }
 
   function submitSearch(): void {
     const trimmed = query.trim();
@@ -71,7 +93,7 @@
         <div class="h-48 animate-pulse rounded-2xl border border-slate-200 bg-white"></div>
       {/each}
     </div>
-  {:else if errorMessage}
+  {:else if errorMessage && memos.length === 0}
     <div
       class="mt-8 rounded-2xl border px-5 py-4 text-sm {authRequired
         ? 'border-amber-200 bg-amber-50 text-amber-800'
@@ -99,5 +121,30 @@
         <MemoCard {memo} />
       {/each}
     </div>
+
+    {#if errorMessage}
+      <div
+        class="mt-6 rounded-2xl border px-5 py-4 text-sm {authRequired
+          ? 'border-amber-200 bg-amber-50 text-amber-800'
+          : 'border-rose-200 bg-rose-50 text-rose-700'}"
+        role="alert"
+      >
+        {errorMessage}
+      </div>
+    {/if}
+
+    {#if nextCursor}
+      <div class="mt-8 flex justify-center">
+        <button
+          type="button"
+          class="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={loadingMore}
+          aria-busy={loadingMore}
+          onclick={() => void loadMore()}
+        >
+          {loadingMore ? '読み込み中…' : 'さらに読み込む'}
+        </button>
+      </div>
+    {/if}
   {/if}
 </section>
