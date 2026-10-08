@@ -27,6 +27,16 @@
     }
   });
 
+  function appendUniqueMemos(current: Memo[], incoming: Memo[]): Memo[] {
+    const seen = new Set(current.map((memo) => memo.id));
+    const uniqueIncoming = incoming.filter((memo) => {
+      if (seen.has(memo.id)) return false;
+      seen.add(memo.id);
+      return true;
+    });
+    return [...current, ...uniqueIncoming];
+  }
+
   async function loadMore(): Promise<void> {
     if (!nextCursor || loadingMore) return;
 
@@ -35,7 +45,7 @@
     authRequired = false;
     try {
       const page = await fetchMemosPage({ cursor: nextCursor });
-      memos = [...memos, ...page.items];
+      memos = appendUniqueMemos(memos, page.items);
       nextCursor = page.next_cursor;
     } catch (error) {
       authRequired = isUnauthorizedApiError(error);
