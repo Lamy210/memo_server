@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import * as memoApi from './memo';
 import {
   ApiError,
   AUTH_REQUIRED_MESSAGE,
@@ -12,6 +13,12 @@ import {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('memo list client contract', () => {
+  it('does not expose the legacy unpaginated memo-list helper', () => {
+    expect('fetchMemos' in memoApi).toBe(false);
+  });
 });
 
 describe('buildMemoListQuery', () => {
