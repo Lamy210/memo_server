@@ -67,10 +67,6 @@ export function buildSearchQuery(params: SearchParams): string {
   return searchParams.toString();
 }
 
-export function fetchMemos(): Promise<Memo[]> {
-  return request<Memo[]>(`${API_BASE}/memos`);
-}
-
 export function fetchMemosPage(params: MemoListParams = {}): Promise<MemoListPage> {
   return request<MemoListPage>(`${API_BASE}/memos?${buildMemoListQuery(params)}`);
 }
