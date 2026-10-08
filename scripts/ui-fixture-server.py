@@ -3,7 +3,7 @@ import argparse
 import gzip
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 MEMO_ID = "018f0c7a-8b7d-7f25-b239-36e6d9f9b001"
 USER_ID = "12345678-1234-1234-1234-123456789012"
@@ -21,7 +21,7 @@ MEMOS = [
         "version": 3,
     },
     {
-        "id": "018f0c7a-8b7d-7f25-b239-36e6d9f9b002",
+        "id": "018f0c7a-8b7d-4f25-b239-36e6d9f9b002",
         "title": "Release checklist",
         "content": "Run checks, inspect visual diffs, review the smoke test, then merge.",
         "tags": ["release", "quality"],
@@ -31,7 +31,7 @@ MEMOS = [
         "version": 2,
     },
     {
-        "id": "018f0c7a-8b7d-7f25-b239-36e6d9f9b003",
+        "id": "018f0c7a-8b7d-4f25-b239-36e6d9f9b003",
         "title": "Architecture notes",
         "content": "ScyllaDB is authoritative. Redis and Elasticsearch are rebuildable projections.",
         "tags": ["architecture", "backend"],
@@ -78,7 +78,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query, keep_blank_values=True)
 
         if not self.require_identity_encoding(path):
             return
@@ -106,6 +108,37 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/memos":
             if UNAUTHORIZED:
                 self.send_json(401, {"message": "Unauthorized visual fixture"})
+            elif query.get("pagination") == ["cursor-v1"]:
+                try:
+                    limit = int(query.get("limit", ["20"])[0])
+                except ValueError:
+                    self.send_json(400, {"message": "Invalid memo list limit"})
+                    return
+
+                cursor = query.get("cursor", [None])[0]
+                ordered = sorted(MEMOS, key=lambda memo: memo["id"], reverse=True)
+                if cursor:
+                    prefix = "v1."
+                    if not cursor.startswith(prefix):
+                        self.send_json(400, {"message": "Invalid memo list cursor"})
+                        return
+                    after_id = cursor[len(prefix) :]
+                    ordered = [memo for memo in ordered if memo["id"] < after_id]
+
+                page_items = ordered[:limit]
+                has_more = len(ordered) > limit
+                next_cursor = (
+                    f"v1.{page_items[-1]['id']}" if has_more and page_items else None
+                )
+                self.send_json(
+                    200,
+                    {
+                        "pagination": "cursor-v1",
+                        "items": page_items,
+                        "limit": limit,
+                        "next_cursor": next_cursor,
+                    },
+                )
             else:
                 self.send_json(200, MEMOS)
             return
