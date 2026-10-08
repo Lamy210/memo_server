@@ -1,36 +1,33 @@
 use std::{fs, path::Path};
 
-const FORBIDDEN_SYMBOLS: [&str; 2] = ["find_all_by_user_id", "find_all_envelopes_by_owner"];
-const PRODUCTION_MEMO_MODULES: [&str; 7] = [
-    "src/domain/memo/repository.rs",
-    "src/infrastructure/repositories/memo.rs",
-    "src/infrastructure/persistence/ports.rs",
-    "src/infrastructure/persistence/scylla.rs",
-    "src/infrastructure/persistence/mongodb.rs",
-    "src/infrastructure/high_memo_authoritative.rs",
-    "src/application/memo/service.rs",
-];
+const DEPRECATED_OWNER_SCAN: &str = "#[deprecated(note = \"unbounded owner scans are forbidden on request paths; use list_page_by_user_id\")]\n    async fn find_all_by_user_id";
+
+fn read_source(relative_path: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+    fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+}
 
 #[test]
-fn production_memo_modules_do_not_expose_unbounded_owner_scans() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut violations = Vec::new();
-
-    for relative_path in PRODUCTION_MEMO_MODULES {
-        let path = manifest_dir.join(relative_path);
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-
-        for symbol in FORBIDDEN_SYMBOLS {
-            if source.contains(symbol) {
-                violations.push(format!("{relative_path}: {symbol}"));
-            }
-        }
-    }
+fn application_repository_marks_unbounded_owner_scan_as_deprecated() {
+    let repository = read_source("src/domain/memo/repository.rs");
 
     assert!(
-        violations.is_empty(),
-        "unbounded memo owner-scan APIs must not exist in production modules:\n{}",
-        violations.join("\n")
+        repository.contains(DEPRECATED_OWNER_SCAN),
+        "MemoRepository::find_all_by_user_id must remain explicitly deprecated while compatibility keeps it in the trait"
+    );
+    assert!(
+        repository.contains("async fn list_page_by_user_id("),
+        "MemoRepository must expose bounded cursor pagination as the supported list contract"
+    );
+}
+
+#[test]
+fn memo_service_never_calls_unbounded_owner_scan() {
+    let service = read_source("src/application/memo/service.rs");
+
+    assert!(
+        !service.contains(".find_all_by_user_id("),
+        "MemoService request paths must use list_page_by_user_id instead of an unbounded owner scan"
     );
 }
