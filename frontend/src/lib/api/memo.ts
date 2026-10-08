@@ -3,12 +3,15 @@ import { buildMemoRequestInit } from '$lib/security/memoBff';
 import type {
   CreateMemoInput,
   Memo,
+  MemoListPage,
+  MemoListParams,
   SearchParams,
   SearchResult,
   UpdateMemoInput
 } from './types';
 
 const API_BASE = '/api/v1';
+const MEMO_LIST_DEFAULT_LIMIT = 20;
 export const AUTH_REQUIRED_MESSAGE = '認証セッションが無効です。再ログインしてください。';
 
 export class ApiError extends Error {
@@ -47,6 +50,14 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+export function buildMemoListQuery(params: MemoListParams = {}): string {
+  const searchParams = new URLSearchParams();
+  searchParams.set('pagination', 'cursor-v1');
+  searchParams.set('limit', (params.limit ?? MEMO_LIST_DEFAULT_LIMIT).toString());
+  if (params.cursor) searchParams.set('cursor', params.cursor);
+  return searchParams.toString();
+}
+
 export function buildSearchQuery(params: SearchParams): string {
   const searchParams = new URLSearchParams();
   if (params.query) searchParams.set('query', params.query);
@@ -58,6 +69,10 @@ export function buildSearchQuery(params: SearchParams): string {
 
 export function fetchMemos(): Promise<Memo[]> {
   return request<Memo[]>(`${API_BASE}/memos`);
+}
+
+export function fetchMemosPage(params: MemoListParams = {}): Promise<MemoListPage> {
+  return request<MemoListPage>(`${API_BASE}/memos?${buildMemoListQuery(params)}`);
 }
 
 export function fetchMemoById(id: string): Promise<Memo> {
