@@ -1,5 +1,14 @@
 import { expect, test } from '@playwright/test';
 
+const PAGE_MEMO_BASE = {
+  content: 'Cursor pagination keeps normal list reads bounded.',
+  tags: ['pagination'],
+  user_id: '12345678-1234-1234-1234-123456789012',
+  created_at: '2026-09-19T08:30:00.000Z',
+  updated_at: '2026-09-19T08:30:00.000Z',
+  version: 1
+};
+
 test('creates a memo through the protected browser BFF', async ({ page }) => {
   await page.goto('/memos/new');
 
@@ -24,6 +33,79 @@ test('creates a memo through the protected browser BFF', async ({ page }) => {
 
   await expect(page).toHaveURL(/\/memos\/018f0c7a-8b7d-7f25-b239-36e6d9f9b001\/edit$/);
   await expect(page.getByRole('heading', { name: 'メモを編集' })).toBeVisible();
+});
+
+test('loads additional memo pages with the cursor-v1 browser contract', async ({ page }) => {
+  const firstId = '550e8400-e29b-41d4-a716-446655440003';
+  const secondId = '550e8400-e29b-41d4-a716-446655440002';
+  const cursor = `v1.${firstId}`;
+  const requestedUrls: string[] = [];
+
+  await page.route('**/api/v1/memos?*', async (route) => {
+    const url = new URL(route.request().url());
+    requestedUrls.push(`${url.pathname}?${url.searchParams.toString()}`);
+
+    if (url.searchParams.get('cursor') === cursor) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          pagination: 'cursor-v1',
+          items: [{ ...PAGE_MEMO_BASE, id: secondId, title: 'Second cursor page' }],
+          limit: 20,
+          next_cursor: null
+        })
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        pagination: 'cursor-v1',
+        items: [{ ...PAGE_MEMO_BASE, id: firstId, title: 'First cursor page' }],
+        limit: 20,
+        next_cursor: cursor
+      })
+    });
+  });
+
+  await page.goto('/memos');
+
+  await expect(page.getByRole('heading', { name: 'First cursor page' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'さらに読み込む' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'さらに読み込む' }).click();
+
+  await expect(page.getByRole('heading', { name: 'First cursor page' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Second cursor page' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'さらに読み込む' })).toHaveCount(0);
+  expect(requestedUrls).toEqual([
+    '/api/v1/memos?pagination=cursor-v1&limit=20',
+    `/api/v1/memos?pagination=cursor-v1&limit=20&cursor=${cursor}`
+  ]);
+});
+
+test('forwards cursor-v1 list queries through the memo BFF', async ({ request }) => {
+  const first = await request.get('/api/v1/memos?pagination=cursor-v1&limit=2');
+  expect(first.status()).toBe(200);
+  expect(first.headers()['cache-control']).toBe('no-store');
+
+  const firstBody = await first.json();
+  expect(firstBody.pagination).toBe('cursor-v1');
+  expect(firstBody.limit).toBe(2);
+  expect(firstBody.items).toHaveLength(2);
+  expect(firstBody.next_cursor).toMatch(/^v1\.[0-9a-f-]{36}$/);
+
+  const second = await request.get(
+    `/api/v1/memos?pagination=cursor-v1&limit=2&cursor=${encodeURIComponent(firstBody.next_cursor)}`
+  );
+  expect(second.status()).toBe(200);
+  const secondBody = await second.json();
+  expect(secondBody.pagination).toBe('cursor-v1');
+  expect(secondBody.items).toHaveLength(1);
+  expect(secondBody.next_cursor).toBeNull();
 });
 
 test('declares Japanese document semantics', async ({ page }) => {

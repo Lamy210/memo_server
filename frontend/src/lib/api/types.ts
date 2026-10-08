@@ -22,6 +22,18 @@ export interface UpdateMemoInput {
   version: number;
 }
 
+export interface MemoListParams {
+  cursor?: string;
+  limit?: number;
+}
+
+export interface MemoListPage {
+  pagination: 'cursor-v1';
+  items: Memo[];
+  limit: number;
+  next_cursor: string | null;
+}
+
 export interface SearchParams {
   query?: string;
   tag?: string;

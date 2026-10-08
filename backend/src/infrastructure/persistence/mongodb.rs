@@ -21,7 +21,7 @@ use crate::{
         crypto_migration_batch::PlaintextMemoMigrationSource,
         health::HealthProbe,
     },
-    domain::memo::entity::Memo,
+    domain::memo::{entity::Memo, repository::MemoListPage},
     error::{AppError, AppResult},
 };
 
@@ -355,6 +355,14 @@ impl MongoDbAuthoritativeStore {
             )
             .await
             .map_err(|error| mongo_error("create MongoDB memo indexes", error))?;
+        self.memos
+            .create_index(
+                IndexModel::builder()
+                    .keys(doc! { "user_id": 1, "_id": -1 })
+                    .build(),
+            )
+            .await
+            .map_err(|error| mongo_error("create MongoDB memo pagination index", error))?;
 
         self.projection_intents
             .create_index(IndexModel::builder().keys(doc! { "memo_id": 1 }).build())
@@ -368,7 +376,7 @@ impl MongoDbAuthoritativeStore {
         self.encrypted_memos
             .create_index(
                 IndexModel::builder()
-                    .keys(doc! { "owner_partition": 1 })
+                    .keys(doc! { "owner_partition": 1, "_id": -1 })
                     .build(),
             )
             .await
@@ -797,7 +805,6 @@ impl MongoDbAuthoritativeStore {
                         .insert_one(context.intent.clone())
                         .session(&mut *session)
                         .await?;
-
                     Ok(())
                 }
                 .boxed()
@@ -1078,6 +1085,37 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
             .collect()
     }
 
+    async fn page_envelopes_by_owner(
+        &self,
+        owner_partition: Uuid,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
+        let limit = i64::try_from(limit).map_err(|_| {
+            AppError::DatabaseError("MongoDB encrypted memo page size is too large".into())
+        })?;
+        let mut filter = doc! { "owner_partition": owner_partition.to_string() };
+        if let Some(after) = after {
+            filter.insert("_id", doc! { "$lt": after.to_string() });
+        }
+
+        let documents: Vec<EncryptedMemoDocument> = self
+            .encrypted_memos
+            .find(filter)
+            .sort(doc! { "_id": -1 })
+            .limit(limit)
+            .await
+            .map_err(|error| mongo_error("page encrypted MongoDB memos", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read encrypted MongoDB memo page", error))?;
+
+        documents
+            .into_iter()
+            .map(EncryptedMemoDocument::try_into_envelope)
+            .collect()
+    }
+
     async fn find_many_envelopes_by_ids(
         &self,
         owner_partition: Uuid,
@@ -1180,6 +1218,43 @@ impl MemoAuthoritativeStore for MongoDbAuthoritativeStore {
             .into_iter()
             .map(MemoDocument::try_into_memo)
             .collect()
+    }
+
+    async fn list_page_by_user_id(
+        &self,
+        user_id: Uuid,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<MemoListPage> {
+        let physical_limit = limit
+            .checked_add(1)
+            .and_then(|value| i64::try_from(value).ok())
+            .ok_or_else(|| AppError::DatabaseError("MongoDB memo page size is too large".into()))?;
+        let mut filter = doc! { "user_id": user_id.to_string() };
+        if let Some(after) = after {
+            filter.insert("_id", doc! { "$lt": after.to_string() });
+        }
+
+        let documents: Vec<MemoDocument> = self
+            .memos
+            .find(filter)
+            .sort(doc! { "_id": -1 })
+            .limit(physical_limit)
+            .await
+            .map_err(|error| mongo_error("page MongoDB memos", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read MongoDB memo page", error))?;
+        let mut items = documents
+            .into_iter()
+            .map(MemoDocument::try_into_memo)
+            .collect::<AppResult<Vec<_>>>()?;
+        let has_more = items.len() > limit;
+        if has_more {
+            items.truncate(limit);
+        }
+
+        Ok(MemoListPage { items, has_more })
     }
 
     async fn find_many_by_ids(&self, user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>> {
