@@ -4,6 +4,7 @@ import {
   MEMO_BFF_MUTATION_VALUE
 } from '$lib/security/memoBff';
 import { validateMemoProxyQuery } from '$lib/server/memoProxyQuery';
+import { parseTrustedServiceOrigin } from '$lib/server/serviceOrigin';
 
 const REQUEST_HEADERS_TO_FORWARD = ['content-type', 'x-request-id'] as const;
 
@@ -43,7 +44,6 @@ const RESPONSE_HEADERS_TO_FORWARD = new Set([
 ]);
 
 const INVALID_PROXY_PATH_CHARACTER = /[\\\u0000-\u001f\u007f]/;
-const INVALID_BACKEND_URL_RAW_CHARACTER = /[\\\u0000-\u0020\u007f]/;
 const CONNECTION_OPTION_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const MEMO_COLLECTION_METHODS: readonly string[] = ['GET', 'HEAD', 'POST'];
 const MEMO_SEARCH_METHODS: readonly string[] = ['GET', 'HEAD'];
@@ -207,48 +207,12 @@ export function buildFrontendResponseHeaders(source: Headers): Headers {
   return headers;
 }
 
-function hasOriginOnlyRawShape(value: string): boolean {
-  if (INVALID_BACKEND_URL_RAW_CHARACTER.test(value)) {
-    return false;
-  }
-
-  const schemeEnd = value.indexOf('://');
-  if (schemeEnd < 0) {
-    return false;
-  }
-
-  const remainder = value.slice(schemeEnd + 3);
-  const authorityEnd = remainder.search(/[/?#]/);
-  const splitAt = authorityEnd < 0 ? remainder.length : authorityEnd;
-  const authority = remainder.slice(0, splitAt);
-  const suffix = remainder.slice(splitAt);
-
-  return authority.length > 0 && !authority.includes('@') && (suffix === '' || suffix === '/');
-}
-
 function parseBackendOrigin(value: string): URL {
-  let target: URL;
   try {
-    target = new URL(value);
+    return parseTrustedServiceOrigin(value);
   } catch {
     throw new InvalidBackendUrlError();
   }
-
-  const valid =
-    (target.protocol === 'http:' || target.protocol === 'https:') &&
-    target.hostname.length > 0 &&
-    hasOriginOnlyRawShape(value) &&
-    target.username === '' &&
-    target.password === '' &&
-    target.pathname === '/' &&
-    target.search === '' &&
-    target.hash === '';
-
-  if (!valid) {
-    throw new InvalidBackendUrlError();
-  }
-
-  return target;
 }
 
 function parseProxyPath(path: string | undefined): string[] {
