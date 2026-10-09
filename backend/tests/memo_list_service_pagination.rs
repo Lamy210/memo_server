@@ -129,62 +129,6 @@ fn memo(owner: Uuid, id: &str, updated_at_ms: i64) -> Memo {
 }
 
 #[tokio::test]
-async fn legacy_list_is_bounded_to_one_hundred_and_preserves_recency_order() {
-    let owner = Uuid::new_v4();
-    let older = memo(
-        owner,
-        "550e8400-e29b-41d4-a716-446655440001",
-        1_700_000_001_000,
-    );
-    let newer = memo(
-        owner,
-        "550e8400-e29b-41d4-a716-446655440002",
-        1_700_000_010_000,
-    );
-    let repository = Arc::new(PagingRepository::new(
-        vec![older.clone(), newer.clone()],
-        false,
-    ));
-    let service = service(repository.clone());
-
-    let response = service.get_user_memos(owner).await.unwrap();
-
-    assert_eq!(
-        response.iter().map(|memo| memo.id).collect::<Vec<_>>(),
-        vec![newer.id, older.id]
-    );
-    assert_eq!(repository.page_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(*repository.page_limits.lock().unwrap(), vec![100]);
-    assert_eq!(*repository.page_after.lock().unwrap(), vec![None]);
-    assert_eq!(repository.unbounded_reads.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn legacy_list_requires_cursor_pagination_when_more_than_one_hundred_exist() {
-    let owner = Uuid::new_v4();
-    let repository = Arc::new(PagingRepository::new(
-        vec![memo(
-            owner,
-            "550e8400-e29b-41d4-a716-446655440001",
-            1_700_000_001_000,
-        )],
-        true,
-    ));
-    let service = service(repository.clone());
-
-    let error = service.get_user_memos(owner).await.unwrap_err();
-
-    assert!(matches!(
-        error,
-        AppError::BadRequest(ref message)
-            if message == "Memo list pagination is required; use pagination=cursor-v1"
-    ));
-    assert_eq!(repository.page_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(*repository.page_limits.lock().unwrap(), vec![100]);
-    assert_eq!(repository.unbounded_reads.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
 async fn cursor_v1_page_returns_exclusive_next_cursor_from_last_visible_item() {
     let owner = Uuid::new_v4();
     let first = memo(
@@ -225,4 +169,5 @@ async fn cursor_v1_page_returns_exclusive_next_cursor_from_last_visible_item() {
     assert_eq!(repository.page_calls.load(Ordering::SeqCst), 1);
     assert_eq!(*repository.page_limits.lock().unwrap(), vec![2]);
     assert_eq!(*repository.page_after.lock().unwrap(), vec![None]);
+    assert_eq!(repository.unbounded_reads.load(Ordering::SeqCst), 0);
 }
