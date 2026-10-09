@@ -188,8 +188,8 @@ fi
 
 other_user_list="$(curl -fsS \
   -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
-  http://localhost:8083/api/v1/memos)"
-jq -e --arg id "$memo_id" 'all(.id != $id)' <<<"$other_user_list" >/dev/null
+  'http://localhost:8083/api/v1/memos?pagination=cursor-v1&limit=20')"
+jq -e --arg id "$memo_id" '.items | all(.id != $id)' <<<"$other_user_list" >/dev/null
 
 other_user_update_status="$(curl -sS \
   -H "X-Development-User-Id: $OTHER_DEVELOPMENT_USER_ID" \
