@@ -143,3 +143,25 @@ pub async fn search_memos(
         .await?;
     Ok(HttpResponse::Ok().json(result))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unversioned_memo_list_is_rejected() {
+        let params = ListParams {
+            pagination: None,
+            cursor: None,
+            limit: None,
+        };
+
+        let error = params.uses_cursor_v1().unwrap_err();
+
+        assert!(matches!(
+            error,
+            AppError::BadRequest(ref message)
+                if message == "Memo list pagination requires pagination=cursor-v1"
+        ));
+    }
+}
