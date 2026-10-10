@@ -48,13 +48,6 @@ impl HighEncryptedMemoAuthoritativeStore for FakeEncryptedStore {
         Ok(None)
     }
 
-    async fn find_all_envelopes_by_owner(
-        &self,
-        _owner_partition: Uuid,
-    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
-        panic!("bounded pagination must not use the all-owner loader")
-    }
-
     async fn page_envelopes_by_owner(
         &self,
         owner_partition: Uuid,

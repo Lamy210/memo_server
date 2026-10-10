@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use memo_app_backend::{
@@ -24,7 +21,6 @@ use uuid::Uuid;
 
 struct RecordingStore {
     page_calls: Mutex<Vec<(Uuid, Option<Uuid>, usize)>>,
-    unbounded_calls: AtomicUsize,
     items: Vec<Memo>,
     has_more: bool,
 }
@@ -33,11 +29,6 @@ struct RecordingStore {
 impl MemoAuthoritativeStore for RecordingStore {
     async fn find_by_id(&self, _user_id: Uuid, _id: Uuid) -> AppResult<Option<Memo>> {
         Ok(None)
-    }
-
-    async fn find_all_by_user_id(&self, _user_id: Uuid) -> AppResult<Vec<Memo>> {
-        self.unbounded_calls.fetch_add(1, Ordering::Relaxed);
-        panic!("bounded repository paging must not call find_all_by_user_id")
     }
 
     async fn list_page_by_user_id(
@@ -155,7 +146,7 @@ impl MemoSearchProjection for EmptySearch {
 }
 
 #[tokio::test]
-async fn repository_delegates_list_page_without_unbounded_owner_read() {
+async fn repository_delegates_bounded_list_page() {
     let owner = Uuid::new_v4();
     let after = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440010").unwrap();
     let mut item = Memo::new("memo".into(), "content".into(), Vec::new(), owner);
@@ -163,7 +154,6 @@ async fn repository_delegates_list_page_without_unbounded_owner_read() {
 
     let store = Arc::new(RecordingStore {
         page_calls: Mutex::new(Vec::new()),
-        unbounded_calls: AtomicUsize::new(0),
         items: vec![item.clone()],
         has_more: true,
     });
@@ -189,5 +179,4 @@ async fn repository_delegates_list_page_without_unbounded_owner_read() {
         &*store.page_calls.lock().unwrap(),
         &[(owner, Some(after), 2)]
     );
-    assert_eq!(store.unbounded_calls.load(Ordering::Relaxed), 0);
 }

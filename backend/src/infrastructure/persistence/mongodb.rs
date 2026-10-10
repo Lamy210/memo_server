@@ -945,9 +945,6 @@ impl HighEncryptedMemoStagingAdmin for MongoDbAuthoritativeStore {
             .delete_many(doc! {})
             .await
             .map_err(|error| mongo_error("reset encrypted MongoDB migration staging", error))?;
-        // Keep the encrypted collection completely absent during normal
-        // plaintext-only startup. The guarded migration is the first boundary
-        // allowed to materialize the staging collection and its owner index.
         self.ensure_encrypted_memo_indexes().await
     }
 }
@@ -971,10 +968,6 @@ impl HighEncryptedMemoStagingStore for MongoDbAuthoritativeStore {
         if self.insert_encrypted_memo_if_absent(&document).await? {
             Ok(EncryptedMemoStageResult::Inserted)
         } else {
-            // A concurrent migration may have staged a different valid
-            // envelope for the same plaintext because each writer uses a fresh
-            // DEK and nonce. The application service owns decrypt-and-compare
-            // verification before AlreadyPresent is accepted.
             Ok(EncryptedMemoStageResult::AlreadyPresent)
         }
     }
@@ -1064,25 +1057,6 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
         document
             .map(EncryptedMemoDocument::try_into_envelope)
             .transpose()
-    }
-
-    async fn find_all_envelopes_by_owner(
-        &self,
-        owner_partition: Uuid,
-    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
-        let documents: Vec<EncryptedMemoDocument> = self
-            .encrypted_memos
-            .find(doc! { "owner_partition": owner_partition.to_string() })
-            .await
-            .map_err(|error| mongo_error("find encrypted MongoDB memos", error))?
-            .try_collect()
-            .await
-            .map_err(|error| mongo_error("read encrypted MongoDB memo cursor", error))?;
-
-        documents
-            .into_iter()
-            .map(EncryptedMemoDocument::try_into_envelope)
-            .collect()
     }
 
     async fn page_envelopes_by_owner(
@@ -1201,23 +1175,6 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
 impl MemoAuthoritativeStore for MongoDbAuthoritativeStore {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
         self.find_by_id_inner(user_id, id).await
-    }
-
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        let documents: Vec<MemoDocument> = self
-            .memos
-            .find(doc! { "user_id": user_id.to_string() })
-            .sort(doc! { "updated_at_ms": -1 })
-            .await
-            .map_err(|error| mongo_error("find MongoDB memos", error))?
-            .try_collect()
-            .await
-            .map_err(|error| mongo_error("read MongoDB memo cursor", error))?;
-
-        documents
-            .into_iter()
-            .map(MemoDocument::try_into_memo)
-            .collect()
     }
 
     async fn list_page_by_user_id(
