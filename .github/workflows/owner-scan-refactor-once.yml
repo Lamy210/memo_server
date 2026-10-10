@@ -1,0 +1,141 @@
+name: Owner Scan Refactor Once
+
+on:
+  push:
+    branches:
+      - refactor/remove-unbounded-memo-owner-read
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: ${{ !contains(github.event.head_commit.message, '[owner-scan-refactor-done]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v7
+        with:
+          ref: refactor/remove-unbounded-memo-owner-read
+          fetch-depth: 0
+
+      - name: Remove unbounded owner-read implementations
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          targets = [
+              Path('backend/src/application/memo/service.rs'),
+              Path('backend/src/infrastructure/reconciliation.rs'),
+              Path('backend/src/infrastructure/repositories/memo.rs'),
+              Path('backend/src/infrastructure/high_memo_authoritative.rs'),
+              Path('backend/src/infrastructure/persistence/mongodb.rs'),
+              Path('backend/src/infrastructure/persistence/scylla.rs'),
+              Path('backend/tests/memo_list_pagination.rs'),
+              Path('backend/tests/memo_list_rest_pagination.rs'),
+              Path('backend/tests/memo_list_service_pagination.rs'),
+              Path('backend/tests/memo_repository_pagination.rs'),
+          ]
+
+          def remove_async_fn(text: str, name: str) -> tuple[str, int]:
+              lines = text.splitlines(keepends=True)
+              removed = 0
+              i = 0
+              pattern = re.compile(rf'^(\s*)(?:pub\s+)?async fn {re.escape(name)}\b')
+              while i < len(lines):
+                  match = pattern.match(lines[i])
+                  if not match:
+                      i += 1
+                      continue
+                  indent = match.group(1)
+                  start = i
+                  end = None
+                  for j in range(i + 1, len(lines)):
+                      if lines[j].rstrip('\r\n') == indent + '}':
+                          end = j
+                          break
+                  if end is None:
+                      raise RuntimeError(f'could not find end of {name} starting at line {i + 1}')
+                  if start > 0 and lines[start - 1].strip() == '#[allow(deprecated)]':
+                      start -= 1
+                  if end + 1 < len(lines) and lines[end + 1].strip() == '':
+                      end += 1
+                  del lines[start:end + 1]
+                  removed += 1
+                  i = max(0, start - 1)
+              return ''.join(lines), removed
+
+          total_removed = 0
+          for path in targets:
+              text = path.read_text()
+              updated, count = remove_async_fn(text, 'find_all_by_user_id')
+              if count:
+                  path.write_text(updated)
+                  total_removed += count
+                  print(f'{path}: removed {count} find_all_by_user_id implementation(s)')
+
+          scylla = Path('backend/src/infrastructure/persistence/scylla.rs')
+          text = scylla.read_text()
+          text = text.replace('    find_all_by_user_id: PreparedStatement,\n', '')
+          text = text.replace('            find_all_by_user_id,\n', '')
+          start_marker = '        let find_all_by_user_id = session\n'
+          end_marker = '        let list_first_page_by_user_id = session\n'
+          if start_marker in text:
+              start = text.index(start_marker)
+              end = text.index(end_marker, start)
+              text = text[:start] + text[end:]
+              print(f'{scylla}: removed obsolete prepared statement')
+          scylla.write_text(text)
+
+          high = Path('backend/src/infrastructure/high_memo_authoritative.rs')
+          text = high.read_text()
+          lines = text.splitlines(keepends=True)
+          marker = 'async fn list_sorts_after_decrypt_without_plaintext_sort_metadata()'
+          for i, line in enumerate(lines):
+              if marker not in line:
+                  continue
+              indent = line[:len(line) - len(line.lstrip())]
+              start = i
+              if start > 0 and lines[start - 1].strip().startswith('#['):
+                  start -= 1
+              end = None
+              for j in range(i + 1, len(lines)):
+                  if lines[j].rstrip('\r\n') == indent + '}':
+                      end = j
+                      break
+              if end is None:
+                  raise RuntimeError('could not find end of legacy HIGH list test')
+              if end + 1 < len(lines) and lines[end + 1].strip() == '':
+                  end += 1
+              del lines[start:end + 1]
+              text = ''.join(lines)
+              print(f'{high}: removed obsolete whole-owner list test')
+              break
+          if 'Reverse(' not in text:
+              text = text.replace('use std::{cmp::Reverse, sync::Arc};', 'use std::sync::Arc;')
+          high.write_text(text)
+
+          if total_removed == 0:
+              raise RuntimeError('no find_all_by_user_id implementations were removed')
+          PY
+
+          cd backend
+          cargo fmt
+          cd ..
+          rm .github/workflows/owner-scan-refactor-once.yml
+          git diff --check
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git config user.name 'Lamy210'
+          git config user.email '90091196+Lamy210@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: remove unbounded memo owner-read implementations [owner-scan-refactor-done]'
+          git push origin HEAD:refactor/remove-unbounded-memo-owner-read
