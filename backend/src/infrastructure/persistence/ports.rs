@@ -139,7 +139,6 @@ pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
 #[async_trait]
 pub trait MemoAuthoritativeStore: Send + Sync {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>>;
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>>;
     async fn list_page_by_user_id(
         &self,
         _user_id: Uuid,
