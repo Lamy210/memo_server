@@ -1,100 +1,29 @@
 # Provider-Neutral Identity Boundary Design
 
 **Date:** 2026-10-11  
-**Status:** approved architecture design  
-**Scope:** memo_server authentication integration boundary
+**Status:** architecture approved; awaiting written-spec review  
+**Scope:** `memo_server` authentication integration boundary
 
 ## Goal
 
-Define an authentication integration boundary that lets `memo_server` interoperate with an independently operated identity platform without coupling the application to any identity-provider implementation, vendor SDK, provider-specific claim, internal hostname, database, session API, or product naming.
+Define an authentication boundary that lets `memo_server` interoperate with an independently operated identity platform without coupling the application to any particular identity product, vendor SDK, internal repository, internal hostname, database, session API, or provider-specific claim.
 
-The public and application-facing contract must remain stable even when the underlying identity implementation is replaced, federates to additional upstream identity providers, changes internal topology, or changes authentication products.
+The application-facing contract must remain stable when the identity implementation is replaced, its internal topology changes, or additional upstream identity providers are federated behind it.
 
 Success means:
 
 - `memo_server` validates only standards-based access-token metadata and claims;
-- the browser and public API never require provider-specific APIs or fields;
-- provider implementation details do not appear in `memo_server` public interfaces, runtime errors, cookies, headers, logs intended for clients, documentation, or configuration names;
-- replacing the upstream identity implementation does not require a memo-domain migration;
-- local development remains possible without a production identity dependency;
-- authentication remains secure even if the underlying implementation becomes publicly known.
+- browser and public API flows do not require implementation-specific APIs or fields;
+- implementation details do not intentionally appear in public interfaces, runtime errors, public cookies/headers, current public documentation, or stable configuration names;
+- replacing the identity implementation does not require memo-domain or memo-persistence migration;
+- local development remains independent of production identity infrastructure;
+- authentication remains secure even if an observer identifies the underlying implementation.
 
-This is an implementation-abstraction requirement, not a security-by-obscurity requirement. The security model must not depend on concealing which software or service provides authentication.
+This is implementation abstraction, not security by obscurity. Concealing a product name is never a trust control.
 
-## Design principles
+## Chosen architecture
 
-### 1. Standards are the integration contract
-
-`memo_server` integrates through OAuth/OIDC/JWT/JWKS semantics only.
-
-The resource server may depend on:
-
-- issuer identity (`iss`);
-- audience (`aud`);
-- subject (`sub`);
-- issued-at and expiry (`iat`, `exp`);
-- optional not-before (`nbf`);
-- token identifier (`jti`) when strict access-token profile mode is enabled;
-- client identifier (`client_id`) when strict access-token profile mode is enabled;
-- JOSE metadata required for signature verification (`alg`, `kid`, `typ`);
-- the configured JWKS endpoint.
-
-The resource server must not depend on:
-
-- vendor SDKs;
-- vendor-specific token fields;
-- vendor-specific session endpoints;
-- vendor-specific tenant or organization claim names;
-- vendor database identifiers;
-- upstream login challenge identifiers;
-- internal authorization-server APIs;
-- provider-specific error payloads.
-
-### 2. Identity implementation is replaceable
-
-The identity layer is treated as an independently deployable authorization server and identity system.
-
-From `memo_server`, the only required deployment contract is conceptually:
-
-```text
-AUTH_ISSUER=https://<identity-public-origin>
-AUTH_JWKS_URI=https://<identity-public-origin>/.well-known/jwks.json
-AUTH_AUDIENCE=memo-api
-```
-
-The implementation behind that origin is outside the `memo_server` contract.
-
-### 3. Public naming is implementation-neutral
-
-Public and repository-visible names use generic terminology such as:
-
-- `IdentityProvider`
-- `AuthorizationServer`
-- `IdentityConnection`
-- `OIDCIssuer`
-- `AccessTokenVerifier`
-- `SessionProvider`
-
-Names of a specific authentication product, component, internal repository, or internal deployment unit must not become part of `memo_server`'s public API or stable configuration contract.
-
-### 4. No hidden trust extension
-
-Abstracting the provider must not broaden trust.
-
-`memo_server` continues to fail closed on:
-
-- invalid or unexpected algorithms;
-- invalid issuer or audience;
-- invalid token lifetime;
-- malformed JWS compact tokens;
-- missing or invalid `kid`;
-- unsupported JOSE critical headers;
-- invalid JWKS metadata;
-- duplicate or ambiguous keys;
-- insecure or redirected JWKS transport;
-- provider-specific claims being absent.
-
-## Logical architecture
+Use an **opaque, provider-neutral identity boundary**.
 
 ```text
 Browser
@@ -103,162 +32,51 @@ Browser
 SvelteKit frontend / BFF
   |
   +--> Public Identity Boundary
-  |      - browser login/session flow
-  |      - refresh/session lifecycle
+  |      - login/session/refresh
   |      - standards-based authorization endpoints
+  |      - provider-neutral public origin
   |
   +--> memo_server
          Authorization: Bearer <short-lived access token>
          |
-         +--> validate issuer/audience/time/signature
-         +--> resolve sub -> memo user UUID
-         +--> enforce memo authorization
+         +--> signature / issuer / audience / time validation
+         +--> sub -> memo user UUID
+         +--> memo authorization
 ```
 
-The identity system may itself federate to one or more upstream providers. That federation is not observable through the `memo_server` contract and must not require changes to memo authorization logic.
+The identity platform may internally federate to local, social, enterprise OIDC, SAML, passkey, or another standards-compliant identity system. Those details are outside the `memo_server` contract.
 
-## Resource-server contract
+## Stable integration contract
 
-### Access tokens
+`memo_server` integrates through OAuth/OIDC/JWT/JWKS semantics only.
 
-Production uses short-lived signed JWT access tokens.
+It may depend on:
 
-`memo_server` remains responsible for local verification and must not require runtime introspection for every request.
-
-The target production profile is RFC 9068-style JWT access tokens with:
-
-- explicit access-token media type (`at+jwt` or equivalent accepted profile value);
 - `iss`;
 - `aud`;
 - `sub`;
-- `iat`;
-- `exp`;
-- `client_id`;
-- `jti`;
-- `kid` in the JOSE header.
+- `iat` and `exp`;
+- optional `nbf`;
+- `jti` and `client_id` in strict access-token profile mode;
+- JOSE metadata required for verification (`alg`, `kid`, `typ`);
+- the configured JWKS endpoint.
 
-The currently supported bounded signature-algorithm migration mechanism remains valid. Provider neutrality does not change the requirement for an explicit algorithm allowlist.
+It must not depend on:
 
-### Subject handling
+- vendor SDKs;
+- provider-specific token fields;
+- provider-specific tenant/organization claim names;
+- provider session APIs;
+- provider database identifiers;
+- upstream login challenge identifiers;
+- internal authorization-server APIs;
+- raw upstream error payloads.
 
-`sub` is the only identity key required by memo ownership.
+Provider-specific custom claims must be safely ignored by memo ownership logic; their absence must not make an otherwise valid memo access token invalid.
 
-`memo_server` must not infer ownership from:
+## Generic configuration
 
-- email address;
-- username;
-- display name;
-- tenant-specific external identifiers;
-- organization membership claims;
-- provider-specific account IDs.
-
-The identity platform is responsible for mapping any upstream identity to the stable subject it issues to `memo_server`.
-
-The preferred long-term rule is that a memo subject is an opaque UUID under the identity issuer's namespace.
-
-### Audience isolation
-
-Access tokens accepted by `memo_server` must include the memo API audience.
-
-A token issued for another Schnee service must not be accepted solely because it has the same issuer or subject.
-
-Audience isolation is part of the stable boundary and is not an implementation detail.
-
-## Public identity origin
-
-A single provider-neutral public identity origin should be used for production integration, for example:
-
-```text
-https://id.<public-domain>
-```
-
-Exact naming is deployment policy, but the hostname must not encode a specific provider or internal component name.
-
-Public metadata may expose standards-defined endpoints such as:
-
-```text
-/.well-known/openid-configuration
-/.well-known/jwks.json
-/authorize
-/token
-/userinfo
-/logout
-```
-
-`memo_server` does not require every endpoint above; its resource-server dependency is limited to issuer semantics and JWKS verification.
-
-## Browser/BFF boundary
-
-The browser must not receive or depend on identity implementation internals.
-
-### Session transport
-
-Preferred production browser model:
-
-- long-lived browser session or refresh credential in `Secure`, `HttpOnly`, `SameSite` cookies;
-- no access token in `localStorage`;
-- no refresh token in `localStorage`;
-- short-lived access token resolved server-side;
-- SvelteKit stores the resulting short-lived access token only in server-controlled request context;
-- the memo BFF attaches the Bearer token when forwarding to `memo_server`.
-
-### Cookie naming
-
-Cookies exposed at the public application boundary use application-neutral names.
-
-They must not expose an internal product, component, repository, or upstream provider name.
-
-Recommended form:
-
-```text
-__Host-schnee_session
-```
-
-The exact final cookie name is an implementation decision, but it must follow host-prefix security requirements where applicable and must remain provider-neutral.
-
-### Error normalization
-
-Provider-specific authentication errors must be translated at the public boundary.
-
-Public clients receive stable categories such as:
-
-- `login_required`;
-- `invalid_session`;
-- `access_denied`;
-- `temporarily_unavailable`;
-- generic HTTP 401/403/502 behavior as applicable.
-
-The browser or API must not receive:
-
-- internal login challenge identifiers;
-- internal component names;
-- upstream stack traces;
-- internal hostnames;
-- raw provider error payloads;
-- internal session identifiers unless they are explicitly part of the public session protocol.
-
-Detailed diagnostics remain server-side.
-
-## HTTP metadata normalization
-
-The public boundary should strip or normalize implementation-revealing transport metadata where doing so does not violate protocol semantics.
-
-Examples include:
-
-- framework/product `Server` headers;
-- `X-Powered-By`;
-- provider-specific `X-*` headers;
-- internal `Via` chains exposed to public clients;
-- internal reverse-proxy hostnames;
-- provider-specific cookies not intended for public use.
-
-This normalization is defense-in-depth for implementation abstraction. Authentication security must continue to hold even when a determined observer identifies the underlying implementation.
-
-## Configuration naming
-
-`memo_server` production configuration remains generic.
-
-Preferred names:
+Stable application configuration remains provider-neutral:
 
 ```text
 AUTH_MODE
@@ -270,321 +88,316 @@ AUTH_JWT_SIGNATURE_MODE
 AUTH_JWT_TYPE_MODE
 ```
 
-Do not introduce stable `memo_server` configuration names containing:
+Conceptually:
 
-- an authentication product name;
-- an internal authentication repository name;
-- an upstream social/enterprise provider name unless configuring an explicitly user-visible first-party feature outside the resource-server boundary.
+```text
+AUTH_ISSUER=https://<identity-public-origin>
+AUTH_JWKS_URI=https://<identity-public-origin>/.well-known/jwks.json
+AUTH_AUDIENCE=memo-api
+```
 
-## Logging and observability
+Do not add stable `memo_server` configuration names containing a concrete identity product, internal authentication repository, or upstream provider name.
 
-### Application logs
+## Token contract
 
-`memo_server` may log authentication verification categories, but production logs should use neutral classifications such as:
+Production continues to use short-lived signed JWT access tokens verified locally by `memo_server`; normal memo requests do not require runtime token introspection.
+
+The target strict profile remains RFC 9068-style access tokens with:
+
+- access-token `typ` profile;
+- `iss`;
+- `aud`;
+- `sub`;
+- `iat`;
+- `exp`;
+- `client_id`;
+- `jti`;
+- JOSE `kid`.
+
+Existing explicit signature-algorithm migration policy remains in force. The resource server must never infer accepted algorithms merely from the keys published in JWKS.
+
+### Subject ownership
+
+`sub` is the only identity key required by memo ownership.
+
+`memo_server` must not infer ownership from email, username, display name, organization membership, external account IDs, or provider-specific claims.
+
+The identity layer is responsible for mapping any upstream identity to a stable subject. The preferred long-term subject is an opaque UUID under the public issuer namespace.
+
+### Audience isolation
+
+Tokens accepted by `memo_server` must include the memo API audience. A token for another Schnee service is not accepted solely because it has the same issuer or subject.
+
+## Public identity origin
+
+Production should use one provider-neutral public identity origin, for example:
+
+```text
+https://id.<public-domain>
+```
+
+The public hostname must not encode a concrete provider, internal repository, or internal component name.
+
+Standards-defined public metadata may include:
+
+```text
+/.well-known/openid-configuration
+/.well-known/jwks.json
+/authorize
+/token
+/userinfo
+/logout
+```
+
+`memo_server` itself requires only the issuer/JWKS resource-server contract.
+
+## Browser and BFF boundary
+
+Production browser authentication should use:
+
+- `Secure` + `HttpOnly` + appropriate `SameSite` cookies for long-lived browser session/refresh state;
+- no access token in `localStorage`;
+- no refresh credential in `localStorage`;
+- short-lived access tokens resolved server-side;
+- `App.Locals.accessToken` or equivalent server-controlled request context;
+- the existing SvelteKit BFF as the only browser-to-`memo_server` forwarding path.
+
+### Cookie naming
+
+Public cookies use implementation-neutral names. They must not expose an internal product, repository, component, or upstream provider name.
+
+A suitable form is:
+
+```text
+__Host-schnee_session
+```
+
+The exact cookie name is an implementation decision, but its security attributes and provider-neutral naming are architectural requirements.
+
+### Error normalization
+
+Provider-specific failures are translated at the public boundary into stable categories such as:
+
+- `login_required`;
+- `invalid_session`;
+- `access_denied`;
+- `temporarily_unavailable`;
+- generic HTTP 401/403/502 behavior where applicable.
+
+Never intentionally expose to browser/API clients:
+
+- internal login challenge identifiers;
+- internal component names;
+- internal hostnames;
+- upstream stack traces;
+- raw upstream error payloads;
+- private session identifiers that are not part of the public protocol.
+
+Detailed diagnostics remain server-side.
+
+## Transport metadata normalization
+
+At the public identity/application boundary, strip or normalize implementation-revealing metadata when protocol semantics allow it, including:
+
+- product/framework `Server` headers;
+- `X-Powered-By`;
+- implementation-specific `X-*` headers;
+- internal `Via` chains;
+- internal reverse-proxy hostnames;
+- implementation-specific cookies not intended for public use.
+
+This reduces incidental fingerprinting only. Security must remain correct even when fingerprinting succeeds.
+
+## Logging, metrics, and tracing
+
+Application observability uses neutral names such as:
 
 ```text
 auth.jwt.signature_invalid
 auth.jwt.audience_invalid
 auth.jwks.refresh_failed
 auth.subject.invalid
-auth.session.unavailable
 ```
 
-The application must not log raw access tokens, refresh credentials, passwords, authorization codes, or session secrets.
-
-### Metrics
-
-Metrics use generic names and labels.
-
-Recommended examples:
+and metrics such as:
 
 ```text
 auth_verification_total{result="success|failure",reason="..."}
 auth_jwks_refresh_total{result="success|failure"}
 auth_jwks_cache_age_seconds
-auth_unauthorized_total{reason="..."}
 ```
 
-Avoid high-cardinality labels containing subject IDs, token IDs, issuer URLs, or upstream provider names unless metrics are explicitly isolated to a private operational system and justified.
+Never log raw access tokens, refresh credentials, passwords, authorization codes, or session secrets.
 
-### Tracing
-
-Authentication spans should stop at the logical identity boundary in public/shared telemetry.
-
-Internally trusted observability may contain deeper topology, but it must be access-controlled and must not be exported to browser-visible telemetry or public status APIs.
+Avoid high-cardinality/public telemetry labels containing subject IDs, token IDs, upstream provider names, or internal topology. Deeper implementation telemetry may exist only inside access-controlled operational systems.
 
 ## Documentation boundary
 
-Public `memo_server` documentation describes authentication in terms of:
+Current public `memo_server` documentation describes authentication using only implementation-neutral concepts:
 
 - resource server;
 - authorization server;
-- OIDC/OAuth;
-- JWT access tokens;
+- OAuth/OIDC;
+- JWT access token;
 - JWKS;
 - browser session/BFF behavior.
 
-It must not require the reader to know the upstream implementation.
+Current documentation must not require knowledge of the concrete upstream implementation.
 
-Historical repository data cannot be assumed to disappear merely because current files are edited. Therefore this design only guarantees that new and current public contracts remain provider-neutral; repository-history rewriting, if ever required, is a separate operational decision with its own risk and review.
+Editing current files does not erase source-control history. Historical references, if any, are a separate operational/history-management concern and are not a security dependency of this design.
 
-## Federation compatibility
+## Federation and account linking
 
-The identity implementation may authenticate users through:
+The identity implementation may authenticate users through local credentials, passkeys/WebAuthn, social OAuth/OIDC, enterprise OIDC, enterprise SAML, or another standards-compliant identity broker.
 
-- local credentials;
-- passkeys/WebAuthn;
-- social OAuth/OIDC providers;
-- enterprise OIDC;
-- enterprise SAML;
-- another standards-compliant identity broker.
-
-`memo_server` is unaffected as long as the public issuer continues to produce tokens satisfying the stable resource-server contract.
-
-Federation-specific account linking, tenant discovery, home-realm discovery, SAML handling, upstream refresh credentials, and external-provider callbacks belong to the identity layer, not `memo_server`.
-
-## Account-linking boundary
+Federation-specific account linking, tenant discovery, home-realm discovery, SAML handling, upstream refresh credentials, and external callbacks remain inside the identity layer.
 
 `memo_server` never links external accounts.
 
-The identity layer may associate multiple upstream identities with one stable subject, but automatic linking must not rely solely on matching email addresses unless the identity layer has a separately reviewed, secure policy that proves the required ownership relationship.
+If multiple upstream identities map to one identity account, the identity layer emits the same stable `sub`. Automatic account linking must not be performed merely because two providers report the same email address unless that policy has its own explicit security review.
 
-From `memo_server`'s perspective, multiple upstream identities linked to the same account are indistinguishable because they resolve to the same stable `sub`.
+## Failure behavior
 
-## Service-to-service authentication
+### Identity service unavailable
 
-This design does not require service-to-service workloads to reuse browser sessions.
+Existing valid access tokens may continue to work while their keys remain valid and available under the bounded JWKS cache policy. New login, refresh, or session renewal may fail.
 
-Future machine identities should use a dedicated standards-based grant or workload-identity mechanism and receive audience-scoped tokens.
+Identity unavailability must never degrade into authorization bypass.
 
-The resource-server validation boundary should remain reusable for those tokens where their profile is intentionally compatible.
+### JWKS unavailable
 
-Token exchange or delegation is explicitly deferred until a concrete cross-service requirement exists.
+Retain the existing bounded fresh-cache/stale-if-error policy. Unknown or unverifiable keys fail closed.
+
+### Key rotation
+
+Use overlapping key publication and explicit algorithm policy. Do not remove old verification keys until no still-valid token can require them.
+
+### Provider replacement
+
+A provider replacement is transparent to memo-domain code when these remain stable:
+
+- issuer contract, or an explicitly planned issuer migration;
+- audience;
+- stable subject mapping;
+- access-token profile;
+- JWKS semantics;
+- BFF-visible login/session contract.
+
+An issuer URL change is a security-sensitive migration, not an invisible implementation swap.
 
 ## Local development
 
-Local development remains independent of the production identity platform.
-
-Current development behavior may continue using:
+Local development stays independent of production identity infrastructure:
 
 ```text
 AUTH_MODE=development
 DEVELOPMENT_USER_ID=<UUID>
 ```
 
-with the frontend BFF adding the development identity header only from private server configuration.
-
-Requirements:
+Requirements remain:
 
 - development identity transport is disabled in production;
 - production JWT mode rejects development identity headers;
-- development mode rejects production Bearer identity to avoid ambiguous dual-identity requests;
-- no browser-controlled value can select an arbitrary development user in production.
+- development mode rejects Bearer identity to avoid ambiguous dual identity;
+- browser-controlled values cannot select arbitrary development users in production.
 
-## Failure behavior
+## Migration plan boundary
 
-### Identity platform unavailable
+Implementation planning will split the work into auditable stages.
 
-Existing valid access tokens continue to be accepted while their signature keys remain valid and locally cached within the bounded JWKS policy.
+### Stage 1 — neutralize current application-facing documentation
 
-New login, refresh, or session renewal may fail until the identity service recovers.
+Describe the stable authentication contract without naming or requiring a concrete identity implementation. Keep all security/protocol requirements explicit.
 
-The memo API must not convert identity-platform unavailability into authorization bypass.
+### Stage 2 — provider-coupling audit
 
-### JWKS unavailable
+Audit code, tests, configuration, frontend, container definitions, CI, docs, and sample environment files for:
 
-Use the existing bounded fresh-cache and stale-if-error policy.
-
-Failure rules remain fail-closed for unknown or unverifiable keys.
-
-### Key rotation
-
-Key rotation uses overlapping JWKS publication and explicit algorithm policy.
-
-The resource server must not derive accepted algorithms from whatever keys happen to appear in JWKS.
-
-### Provider replacement
-
-A provider replacement is successful when all of the following remain stable from the memo application's perspective:
-
-- issuer contract or an explicitly planned issuer migration;
-- audience;
-- stable subject mapping;
-- token profile;
-- JWKS semantics;
-- login/session behavior visible to the BFF.
-
-If the issuer URL itself must change, treat that as a security-sensitive migration rather than a transparent implementation swap.
-
-## Migration from current documentation and integration
-
-Implementation should proceed in small, auditable stages.
-
-### Stage 1: neutralize application-facing documentation
-
-Update authentication documentation so the stable contract is described without naming or requiring a concrete provider implementation.
-
-Keep protocol and security requirements explicit; only implementation-specific references are removed from the public contract.
-
-### Stage 2: audit provider-specific coupling
-
-Search application code, tests, configuration, frontend code, container definitions, CI, documentation, and sample environment files for:
-
-- product/component names;
-- provider-specific endpoint paths;
-- provider-specific headers and cookies;
+- implementation/product names;
+- provider-specific endpoints;
+- provider-specific headers/cookies;
 - provider-specific claims;
 - provider SDK imports;
 - internal identity hostnames;
-- raw upstream error bodies.
+- raw upstream error forwarding.
 
-Every finding is classified as:
+Classify each finding as public contract coupling, private deployment configuration, test-only naming, or legitimate standards terminology.
 
-1. public contract coupling — must be removed;
-2. private deployment configuration — allowed only if not part of the application API and not committed as sensitive infrastructure detail;
-3. test fixture naming — rename when it creates unnecessary coupling;
-4. legitimate standards term — retain.
+### Stage 3 — production browser session integration
 
-### Stage 3: browser session integration
+Implement server-side login/session/refresh handling that resolves a short-lived access token into server-controlled frontend context without exposing long-lived credentials to browser JavaScript.
 
-Implement the server-side production session/login flow that populates `App.Locals.accessToken` without exposing refresh credentials to browser JavaScript.
+### Stage 4 — provider-neutral verification
 
-### Stage 4: integration verification
+Use a provider-neutral test authorization server/fixture for portable CI. Environment-level tests may separately validate the deployed identity platform without making it part of the application contract.
 
-Verify the application using a provider-neutral test authorization server or fixture so CI does not depend on a concrete production identity implementation.
+## Required tests
 
-A separate environment-level integration test may validate the actual deployed identity platform, but that test belongs outside the application's portable contract where practical.
+Architecture/regression coverage should verify:
 
-## Testing requirements
+- no provider SDK dependency is added to backend/frontend manifests;
+- memo authorization does not read provider-specific claims;
+- selected public docs/config/code paths remain free of concrete implementation identifiers;
+- raw upstream authentication errors/headers/cookies are not forwarded to browser clients.
 
-### Architecture tests
+Backend coverage retains issuer, audience, subject UUID, lifetime, JOSE algorithm/type, JWKS rotation, duplicate `kid`, unknown `kid`, stale-if-error, and custom-claim-ignorance cases.
 
-Add regression checks that prevent obvious provider coupling from entering stable `memo_server` boundaries.
+BFF/E2E coverage adds session cookie attributes, login/logout/session behavior, refresh/expiry behavior, error normalization, safe return targets, and verification that browser-provided identity headers cannot override server-controlled identity.
 
-Possible checks:
-
-- forbidden provider/product identifiers in selected public docs/config/code paths;
-- no provider SDK dependencies in backend/frontend manifests;
-- no provider-specific claim access in memo authorization;
-- no raw authentication upstream payload forwarding through BFF routes.
-
-The forbidden-name mechanism must be scoped carefully so historical migration documents or vendored standards material do not create brittle global tests.
-
-### Backend tests
-
-Cover:
-
-- issuer validation;
-- audience validation;
-- subject UUID validation;
-- access-token maximum lifetime;
-- JOSE algorithm policy;
-- strict access-token `typ` profile;
-- `client_id` and `jti` requirements in strict mode;
-- JWKS key rotation;
-- duplicate `kid` rejection;
-- unknown `kid` refresh behavior;
-- bounded stale-if-error behavior;
-- provider-specific custom claims being ignored.
-
-### Frontend/BFF tests
-
-Cover:
-
-- browser authorization headers cannot override server identity;
-- development identity remains server-only;
-- session cookie security attributes;
-- authentication errors are normalized;
-- raw upstream headers are not forwarded;
-- raw upstream cookies are not exposed unintentionally;
-- logout invalidates the browser session;
-- expired access tokens trigger the designed refresh/session path;
-- authentication failure preserves the existing safe return-target rules.
-
-### End-to-end tests
-
-Use an implementation-neutral identity fixture capable of:
-
-- login success;
-- login failure;
-- access-token issuance;
-- token expiry;
-- refresh/session rotation;
-- logout;
-- JWKS rotation;
-- invalid audience;
-- invalid issuer;
-- invalid signature.
-
-CI must not require knowledge of the production identity provider.
+Forbidden-name architecture checks must be scoped to stable/current boundaries rather than the entire Git history or intentionally archival material.
 
 ## Security properties
 
-This architecture provides:
+This design provides:
 
 - provider implementation replaceability;
-- reduced application attack surface from provider-specific SDKs;
-- stable token validation semantics;
+- stable standards-based token validation;
 - audience isolation;
-- no runtime authentication-database dependency for normal memo requests;
-- minimized provider fingerprinting through the application contract;
+- no normal-request dependency on an authentication database;
+- reduced accidental provider fingerprinting through application contracts;
 - continued fail-closed verification.
 
-It does **not** claim:
-
-- that an advanced external observer can never fingerprint the underlying identity implementation;
-- that DNS, TLS, timing, historical source control, deployment metadata, or operational mistakes can never reveal implementation details;
-- that hiding implementation details is itself a security control sufficient to protect authentication.
+It does not claim that a determined external observer can never fingerprint implementation software through DNS, TLS, timing, historical source control, deployment metadata, or operational mistakes.
 
 ## Operational boundary
 
-The identity platform and `memo_server` should be independently deployable and independently rollbackable.
+The identity platform and `memo_server` remain independently deployable and rollbackable.
 
-`memo_server` release safety depends only on the documented token/JWKS contract.
+Before a production identity change, verify:
 
-Before a production identity change:
+1. discovery/JWKS behavior;
+2. issuer and audience;
+3. token claim profile;
+4. signing algorithm compatibility;
+5. key-rotation overlap;
+6. BFF login/session integration;
+7. rollback while existing tokens remain valid;
+8. 401 reason and JWKS-refresh monitoring during rollout.
 
-1. verify discovery/JWKS endpoints;
-2. verify issuer and audience values;
-3. verify access-token claim profile;
-4. verify signing algorithm compatibility;
-5. verify key-rotation overlap;
-6. verify BFF login/session integration;
-7. verify rollback while existing tokens remain valid;
-8. monitor 401 reasons and JWKS refresh failures during rollout.
-
-## Rollback
-
-Application rollback must not require reverting the identity implementation.
-
-Identity rollback must not require memo data migration.
-
-During a signing-key or algorithm migration, rollback follows the existing explicit dual-acceptance window. Do not remove old verification keys or algorithms until no valid token relying on them can remain.
+Application rollback must not require identity implementation rollback, and identity rollback must not require memo data migration.
 
 ## Non-goals
 
 This design does not:
 
-- select a specific authentication product;
+- select or publicly identify a concrete authentication product;
 - define the identity platform's internal database schema;
-- define upstream IdP federation implementation;
-- define enterprise SAML internals;
+- define federation/SAML internals;
 - define SCIM provisioning;
-- define cross-service token exchange;
-- move authorization policy out of `memo_server`;
-- move memo ownership into identity-provider claims;
+- define token exchange/delegation;
+- move memo authorization into identity-provider claims;
 - require runtime token introspection;
-- guarantee that source-control history contains no old implementation references.
+- guarantee removal of historical implementation references from source-control history.
 
 ## Acceptance criteria
 
-The design is ready for implementation planning when all of the following are accepted:
+The written design is accepted when all are agreed:
 
-1. `memo_server` depends only on the standards-based identity contract documented here.
-2. Stable application configuration remains provider-neutral.
-3. Memo ownership depends only on stable subject identity, not provider-specific fields.
-4. Browser session and refresh credentials remain server-controlled.
-5. Public errors, cookies, headers, and documentation do not intentionally reveal identity implementation internals.
+1. `memo_server` depends only on the standards-based identity contract defined here.
+2. Stable application configuration is provider-neutral.
+3. Memo ownership depends only on stable `sub`, not provider-specific fields.
+4. Browser session/refresh credentials remain server-controlled.
+5. Current public errors, cookies, headers, configuration, and documentation do not intentionally reveal implementation internals.
 6. CI can test authentication without depending on the production identity implementation.
-7. Provider replacement can occur without memo-domain or persistence changes.
-8. The security model remains valid even if the underlying identity implementation becomes known.
+7. Provider replacement does not require memo-domain or persistence changes.
+8. Authentication security remains valid even when the underlying implementation is known.
