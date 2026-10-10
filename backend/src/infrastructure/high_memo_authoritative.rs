@@ -5,7 +5,7 @@
 // to legacy plaintext, so composition alone does not make this store authoritative.
 #![allow(dead_code)]
 
-use std::{cmp::Reverse, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -201,9 +201,12 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Mutex,
+    use std::{
+        cmp::Reverse,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Mutex,
+        },
     };
 
     use chrono::{TimeZone, Utc};
