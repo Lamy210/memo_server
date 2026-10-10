@@ -5,7 +5,7 @@
 // to legacy plaintext, so composition alone does not make this store authoritative.
 #![allow(dead_code)]
 
-use std::{cmp::Reverse, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -95,22 +95,6 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
             Some(envelope) => self.decrypt_checked(&envelope).await.map(Some),
             None => Ok(None),
         }
-    }
-
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        let envelopes = self
-            .encrypted_store
-            .find_all_envelopes_by_owner(user_id)
-            .await?;
-        let mut memos = Vec::with_capacity(envelopes.len());
-        for envelope in envelopes {
-            memos.push(self.decrypt_checked(&envelope).await?);
-        }
-
-        // updated_at is intentionally encrypted inside the payload, so the
-        // persistence adapter cannot sort on it without leaking new metadata.
-        memos.sort_by_key(|memo| Reverse(memo.updated_at));
-        Ok(memos)
     }
 
     async fn list_page_by_user_id(
@@ -233,7 +217,6 @@ mod tests {
     struct FakeEncryptedStore {
         envelopes: Mutex<Vec<HighEncryptedMemoEnvelope>>,
         intents: Mutex<Vec<ProjectionIntent>>,
-        unbounded_reads: AtomicUsize,
         page_limits: Mutex<Vec<usize>>,
     }
 
@@ -255,21 +238,6 @@ mod tests {
                 .cloned())
         }
 
-        async fn find_all_envelopes_by_owner(
-            &self,
-            owner_partition: Uuid,
-        ) -> AppResult<Vec<HighEncryptedMemoEnvelope>> {
-            self.unbounded_reads.fetch_add(1, Ordering::SeqCst);
-            Ok(self
-                .envelopes
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|envelope| envelope.owner_partition == owner_partition)
-                .cloned()
-                .collect())
-        }
-
         async fn page_envelopes_by_owner(
             &self,
             owner_partition: Uuid,
@@ -286,7 +254,7 @@ mod tests {
                 .filter(|envelope| after.is_none_or(|cursor| envelope.memo_id < cursor))
                 .cloned()
                 .collect::<Vec<_>>();
-            envelopes.sort_by_key(|envelope| Reverse(envelope.memo_id));
+            envelopes.sort_by_key(|envelope| std::cmp::Reverse(envelope.memo_id));
             envelopes.truncate(limit);
             Ok(envelopes)
         }
@@ -466,25 +434,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_sorts_after_decrypt_without_plaintext_sort_metadata() {
-        let owner = Uuid::new_v4();
-        let store = Arc::new(FakeEncryptedStore::default());
-        let adapter = adapter(store.clone());
-
-        let older = memo(owner, Uuid::new_v4(), 1, 1_700_000_001_000);
-        let newer = memo(owner, Uuid::new_v4(), 1, 1_700_000_010_000);
-        adapter.save_with_projection_intent(&older).await.unwrap();
-        adapter.save_with_projection_intent(&newer).await.unwrap();
-
-        let listed = adapter.find_all_by_user_id(owner).await.unwrap();
-        assert_eq!(
-            listed.iter().map(|memo| memo.id).collect::<Vec<_>>(),
-            vec![newer.id, older.id]
-        );
-    }
-
-    #[tokio::test]
-    async fn bounded_page_uses_limit_plus_one_without_unbounded_reads_or_probe_decryption() {
+    async fn bounded_page_uses_limit_plus_one_without_probe_decryption() {
         let owner = Uuid::new_v4();
         let other_owner = Uuid::new_v4();
         let store = Arc::new(FakeEncryptedStore::default());
@@ -539,7 +489,6 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(*store.page_limits.lock().unwrap(), vec![3, 3]);
-        assert_eq!(store.unbounded_reads.load(Ordering::SeqCst), 0);
         assert_eq!(crypto.decrypts.load(Ordering::SeqCst), 4);
     }
 
