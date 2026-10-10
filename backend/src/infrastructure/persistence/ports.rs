@@ -79,11 +79,6 @@ pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
         memo_id: Uuid,
     ) -> AppResult<Option<HighEncryptedMemoEnvelope>>;
 
-    async fn find_all_envelopes_by_owner(
-        &self,
-        owner_partition: Uuid,
-    ) -> AppResult<Vec<HighEncryptedMemoEnvelope>>;
-
     /// Load an owner-scoped page of encrypted envelopes in UUID-descending order.
     /// `after` is an exclusive cursor and `limit` is the physical read bound.
     async fn page_envelopes_by_owner(
@@ -139,7 +134,6 @@ pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
 #[async_trait]
 pub trait MemoAuthoritativeStore: Send + Sync {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>>;
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>>;
     async fn list_page_by_user_id(
         &self,
         _user_id: Uuid,
