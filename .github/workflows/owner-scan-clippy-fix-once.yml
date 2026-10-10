@@ -1,0 +1,50 @@
+name: Owner Scan Clippy Fix Once
+
+on:
+  push:
+    branches:
+      - refactor/remove-unbounded-memo-owner-read
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[owner-scan-clippy-done]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refactor/remove-unbounded-memo-owner-read
+          fetch-depth: 0
+      - name: Move Reverse import into test module
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('backend/src/infrastructure/high_memo_authoritative.rs')
+          text = path.read_text()
+          old = 'use std::{cmp::Reverse, sync::Arc};'
+          if old not in text:
+              raise SystemExit('expected top-level Reverse import not found')
+          text = text.replace(old, 'use std::sync::Arc;', 1)
+          marker = 'mod tests {\n    use std::sync::{'
+          if marker not in text:
+              raise SystemExit('test module import marker not found')
+          text = text.replace(marker, 'mod tests {\n    use std::{\n        cmp::Reverse,\n        sync::{', 1)
+          text = text.replace('        Mutex,\n    };\n\n    use chrono', '            Mutex,\n        },\n    };\n\n    use chrono', 1)
+          path.write_text(text)
+          PY
+          cd backend
+          cargo fmt
+          cd ..
+          rm .github/workflows/owner-scan-clippy-fix-once.yml
+          git diff --check
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name 'Lamy210'
+          git config user.email '90091196+Lamy210@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: scope HIGH memo sort import to tests [owner-scan-clippy-done]'
+          git push origin HEAD:refactor/remove-unbounded-memo-owner-read
