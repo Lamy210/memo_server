@@ -22,6 +22,16 @@ fn production_repository_contracts_do_not_expose_unbounded_owner_scans() {
             "{relative_path} must expose bounded cursor pagination as the supported list contract"
         );
     }
+
+    let ports = read_source("src/infrastructure/persistence/ports.rs");
+    assert!(
+        !ports.contains("find_all_envelopes_by_owner"),
+        "encrypted authoritative store contract must not expose an all-owner envelope loader"
+    );
+    assert!(
+        ports.contains("page_envelopes_by_owner"),
+        "encrypted authoritative store contract must expose bounded owner pagination"
+    );
 }
 
 #[test]
