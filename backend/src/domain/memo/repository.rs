@@ -50,12 +50,7 @@ mod tests {
     #[test]
     fn memo_list_page_tracks_items_and_has_more() {
         let owner = Uuid::new_v4();
-        let memo = Memo::new(
-            "title".into(),
-            "content".into(),
-            vec!["tag".into()],
-            owner,
-        );
+        let memo = Memo::new("title".into(), "content".into(), vec!["tag".into()], owner);
 
         let page = MemoListPage {
             items: vec![memo.clone()],
