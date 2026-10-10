@@ -17,7 +17,7 @@ use memo_app_backend::{
         entity::Memo,
         repository::{MemoListPage, MemoRepository, MemoSearchPage},
     },
-    error::{AppError, AppResult},
+    error::AppResult,
 };
 use uuid::Uuid;
 
@@ -27,7 +27,6 @@ struct PagingRepository {
     page_calls: AtomicUsize,
     page_limits: Mutex<Vec<usize>>,
     page_after: Mutex<Vec<Option<Uuid>>>,
-    unbounded_reads: AtomicUsize,
 }
 
 impl PagingRepository {
@@ -38,7 +37,6 @@ impl PagingRepository {
             page_calls: AtomicUsize::new(0),
             page_limits: Mutex::new(Vec::new()),
             page_after: Mutex::new(Vec::new()),
-            unbounded_reads: AtomicUsize::new(0),
         }
     }
 }
@@ -47,13 +45,6 @@ impl PagingRepository {
 impl MemoRepository for PagingRepository {
     async fn find_by_id(&self, _user_id: Uuid, _id: Uuid) -> AppResult<Option<Memo>> {
         Ok(None)
-    }
-
-    async fn find_all_by_user_id(&self, _user_id: Uuid) -> AppResult<Vec<Memo>> {
-        self.unbounded_reads.fetch_add(1, Ordering::SeqCst);
-        Err(AppError::ServiceUnavailable(
-            "unbounded memo list read invoked".into(),
-        ))
     }
 
     async fn list_page_by_user_id(
@@ -169,5 +160,4 @@ async fn cursor_v1_page_returns_exclusive_next_cursor_from_last_visible_item() {
     assert_eq!(repository.page_calls.load(Ordering::SeqCst), 1);
     assert_eq!(*repository.page_limits.lock().unwrap(), vec![2]);
     assert_eq!(*repository.page_after.lock().unwrap(), vec![None]);
-    assert_eq!(repository.unbounded_reads.load(Ordering::SeqCst), 0);
 }
