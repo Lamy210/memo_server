@@ -16,7 +16,8 @@
 - Stable application configuration and public naming remain provider-neutral.
 - Memo ownership depends only on stable `sub`; provider-specific custom claims are ignored.
 - Browser JavaScript never receives access tokens, refresh credentials, authorization codes after callback processing, or session secrets.
-- Production browser auth uses Authorization Code + PKCE S256; redirect targets use the existing safe-return-target resolver.
+- Production browser auth uses Authorization Code + PKCE S256 plus a one-time browser-bound `state`; redirect targets use the existing safe-return-target resolver.
+- The BFF requests `scope=openid offline_access`; the initial token response must include a refresh token. ID tokens, when returned, are not used for memo identity or authorization decisions.
 - Public session cookie name is `__Host-schnee_session`; it is `Secure`, `HttpOnly`, `Path=/`, and `SameSite=Lax` in production.
 - No provider SDK dependency is added to backend/frontend manifests.
 - Existing JWT issuer/audience/lifetime/JOSE/JWKS fail-closed behavior remains unchanged.
@@ -28,7 +29,7 @@
 
 - Callback with mismatched/replayed `state`: reject the callback, consume/clear transaction state, and do not create a session.
 - Discovery or token endpoint that redirects or resolves outside the configured HTTPS issuer contract: fail closed with a generic public error.
-- Refresh returns a rotated refresh token: atomically replace the prior credential in the sealed session before the request proceeds.
+- Refresh returns a rotated refresh token: atomically replace the prior credential in the sealed session before the request proceeds; if refresh succeeds without a new refresh token, retain the existing one.
 - Sealed session payload exceeds the cookie budget: reject session creation/refresh rather than emitting a truncated or multi-part secret.
 - Production request supplies browser-controlled `Authorization` or development identity headers: existing BFF stripping wins; only `locals.accessToken` reaches `memo_server`.
 
@@ -214,7 +215,9 @@ Assert:
 - returned `issuer` exactly equals configured issuer;
 - authorization/token endpoints are absolute HTTPS URLs;
 - `code_challenge_methods_supported` contains `S256`;
-- authorization request uses `response_type=code`, `scope=openid`, transaction-specific `state`, `nonce`, and `code_challenge_method=S256`;
+- authorization request uses `response_type=code`, `scope=openid offline_access`, a transaction-specific `state`, and `code_challenge_method=S256`;
+- the initial successful token exchange includes non-empty `access_token`, positive `expires_in`, and non-empty `refresh_token`;
+- a successful refresh may rotate `refresh_token`; absence of a replacement means retain the existing refresh token;
 - discovery and token fetches use `redirect: 'error'`;
 - raw upstream error bodies are not returned from public helper errors.
 
@@ -226,7 +229,7 @@ Expected: FAIL because the OIDC client does not exist.
 
 - [ ] **Step 6: Implement OIDC primitives with native Fetch/Web Crypto**
 
-Do not add a third-party/provider SDK. Keep returned errors typed into stable internal categories (`configuration`, `temporarily_unavailable`, `access_denied`, `invalid_response`).
+Do not add a third-party/provider SDK. Keep returned errors typed into stable internal categories (`configuration`, `temporarily_unavailable`, `access_denied`, `invalid_response`). Ignore ID tokens for memo identity/authorization; the resource access identity remains the access token consumed by `memo_server`.
 
 - [ ] **Step 7: Run identity primitive tests**
 
@@ -244,7 +247,7 @@ Expected: PASS.
 
 ```bash
 git add frontend/src/lib/server/identity
- git commit -m "feat: add provider-neutral OIDC client primitives"
+git commit -m "feat: add provider-neutral OIDC client primitives"
 ```
 
 ### Task 3: Add sealed BFF session and request hook
@@ -272,7 +275,6 @@ export type IdentitySession = {
 
 export type LoginTransaction = {
   state: string;
-  nonce: string;
   codeVerifier: string;
   returnTarget: string;
   expiresAt: number;
@@ -307,6 +309,7 @@ Cover:
 - valid unexpired session -> `locals.authenticated === true` and exact `locals.accessToken`;
 - expired access token + valid refresh -> refresh once and rotate session cookie;
 - refresh response containing a new refresh token replaces the old one;
+- refresh response without a new refresh token retains the old one;
 - refresh failure -> clear session, `authenticated=false`, no access token;
 - malformed/tampered cookie -> clear session and continue unauthenticated;
 - production never creates identity from browser request headers or `DEVELOPMENT_USER_ID`.
@@ -362,16 +365,16 @@ git commit -m "feat: resolve provider-neutral BFF sessions"
 Assert login:
 
 - resolves `return_to` through `resolveSafeReturnTarget`;
-- creates random `state`, `nonce`, and PKCE verifier;
+- creates random `state` and PKCE verifier;
 - writes only the sealed login transaction to `__Host-schnee_login`;
-- redirects to the discovered authorization endpoint.
+- redirects to the discovered authorization endpoint with `scope=openid offline_access`.
 
 Assert callback:
 
 - rejects missing/mismatched/replayed state;
 - rejects missing code;
 - exchanges code with the original verifier and exact registered callback URI;
-- validates ID-token nonce if an ID token is returned and the implementation chooses to consume it;
+- rejects an initial successful token response that lacks a usable refresh token;
 - clears transaction cookie on success and terminal failure;
 - writes `__Host-schnee_session` and redirects only to the stored safe return target.
 
@@ -447,7 +450,7 @@ Expected: FAIL because identity fixture is absent.
 
 - [ ] **Step 3: Implement `identity-fixture-server.py`**
 
-Use Python stdlib only. Fixture terminology and endpoints are generic; do not emulate or name a production vendor. Make authorization codes one-time, bind them to state-independent PKCE challenge data, support `S256`, and rotate refresh credentials deterministically for assertions.
+Use Python stdlib only. Fixture terminology and endpoints are generic; do not emulate or name a production vendor. Make authorization codes one-time, bind them to the PKCE challenge, support `S256`, issue an initial refresh token for `offline_access`, and rotate refresh credentials deterministically for assertions.
 
 - [ ] **Step 4: Require server-injected Bearer auth in memo fixture scenario**
 
