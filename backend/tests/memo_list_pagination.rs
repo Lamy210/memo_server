@@ -29,10 +29,6 @@ impl MemoRepository for PagingRepository {
         Ok(None)
     }
 
-    async fn find_all_by_user_id(&self, _user_id: Uuid) -> AppResult<Vec<Memo>> {
-        panic!("paged list must not fall back to an unbounded owner read")
-    }
-
     async fn list_page_by_user_id(
         &self,
         user_id: Uuid,
