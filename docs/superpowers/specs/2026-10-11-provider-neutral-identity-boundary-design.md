@@ -1,7 +1,7 @@
 # Provider-Neutral Identity Boundary Design
 
 **Date:** 2026-10-11  
-**Status:** architecture approved; awaiting written-spec review  
+**Status:** approved  
 **Scope:** `memo_server` authentication integration boundary
 
 ## Goal
