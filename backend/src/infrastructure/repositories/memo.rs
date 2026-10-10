@@ -65,10 +65,6 @@ impl MemoRepository for MemoRepositoryImpl {
         Ok(None)
     }
 
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        self.authoritative_store.find_all_by_user_id(user_id).await
-    }
-
     async fn list_page_by_user_id(
         &self,
         user_id: Uuid,
