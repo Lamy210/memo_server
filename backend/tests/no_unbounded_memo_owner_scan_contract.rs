@@ -26,6 +26,23 @@ fn production_memo_traits_do_not_expose_unbounded_owner_scan() {
 }
 
 #[test]
+fn production_memo_implementations_do_not_restore_unbounded_owner_scan() {
+    for relative_path in [
+        "src/infrastructure/repositories/memo.rs",
+        "src/infrastructure/high_memo_authoritative.rs",
+        "src/infrastructure/persistence/mongodb.rs",
+        "src/infrastructure/persistence/scylla.rs",
+    ] {
+        let source = read_source(relative_path);
+
+        assert!(
+            !source.contains("async fn find_all_by_user_id("),
+            "{relative_path} must not implement an unbounded owner-scan API"
+        );
+    }
+}
+
+#[test]
 fn memo_service_never_calls_unbounded_owner_scan() {
     let service = read_source("src/application/memo/service.rs");
 
