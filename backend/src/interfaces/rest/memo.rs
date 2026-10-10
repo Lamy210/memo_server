@@ -24,12 +24,6 @@ pub struct ListParams {
 
 impl ListParams {
     fn uses_cursor_v1(&self) -> AppResult<bool> {
-        let has_pagination_fields =
-            self.pagination.is_some() || self.cursor.is_some() || self.limit.is_some();
-        if !has_pagination_fields {
-            return Ok(false);
-        }
-
         if self.pagination.as_deref() != Some("cursor-v1") {
             return Err(AppError::BadRequest(
                 "Memo list pagination requires pagination=cursor-v1".into(),
@@ -112,19 +106,15 @@ pub async fn list_memos(
     authenticated_user: AuthenticatedUser,
     query_params: Query<ListParams>,
 ) -> AppResult<HttpResponse> {
-    if query_params.uses_cursor_v1()? {
-        let page = service
-            .get_user_memos_page(
-                authenticated_user.0.user_id,
-                query_params.cursor.as_deref(),
-                query_params.limit,
-            )
-            .await?;
-        return Ok(HttpResponse::Ok().json(page));
-    }
-
-    let memos = service.get_user_memos(authenticated_user.0.user_id).await?;
-    Ok(HttpResponse::Ok().json(memos))
+    query_params.uses_cursor_v1()?;
+    let page = service
+        .get_user_memos_page(
+            authenticated_user.0.user_id,
+            query_params.cursor.as_deref(),
+            query_params.limit,
+        )
+        .await?;
+    Ok(HttpResponse::Ok().json(page))
 }
 
 pub async fn search_memos(
