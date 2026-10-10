@@ -148,16 +148,15 @@ async fn cursor_v1_rest_request_returns_versioned_shape() {
 }
 
 #[tokio::test]
-async fn query_free_rest_request_preserves_legacy_array_shape() {
+async fn query_free_rest_request_requires_cursor_v1_before_repository_access() {
     let owner = Uuid::new_v4();
-    let item = memo(owner, "550e8400-e29b-41d4-a716-446655440001");
     let repository = Arc::new(PagingRepository {
-        items: vec![item],
+        items: Vec::new(),
         has_more: false,
         calls: Mutex::new(Vec::new()),
     });
 
-    let response = list_memos(
+    let error = list_memos(
         Data::new(service(repository.clone())),
         user(owner),
         Query(ListParams {
@@ -167,12 +166,14 @@ async fn query_free_rest_request_preserves_legacy_array_shape() {
         }),
     )
     .await
-    .unwrap();
+    .unwrap_err();
 
-    let body = to_bytes(response.into_body()).await.unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert!(json.is_array());
-    assert_eq!(*repository.calls.lock().unwrap(), vec![(None, 100)]);
+    assert!(matches!(
+        error,
+        AppError::BadRequest(ref message)
+            if message == "Memo list pagination requires pagination=cursor-v1"
+    ));
+    assert!(repository.calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, sync::Arc};
+use std::sync::Arc;
 
 use uuid::Uuid;
 
@@ -195,26 +195,6 @@ impl MemoService {
                 "memo mutation failed and maintenance writer lease release also failed; primary={primary}; release={release}"
             ))),
         }
-    }
-
-    pub async fn get_user_memos(&self, user_id: Uuid) -> AppResult<Vec<MemoResponse>> {
-        let access = self.high_memo_access_guard.acquire_access().await?;
-        let route = access.route_snapshot();
-        let result = async {
-            let repository = self.repository_for_route(route.route)?;
-            let page = repository.list_page_by_user_id(user_id, None, 100).await?;
-            if page.has_more {
-                return Err(AppError::BadRequest(
-                    "Memo list pagination is required; use pagination=cursor-v1".into(),
-                ));
-            }
-            let mut memos = page.items;
-            memos.sort_by_key(|memo| Reverse(memo.updated_at));
-            Ok(memos.into_iter().map(MemoResponse::from).collect())
-        }
-        .await;
-
-        Self::finish_access(result, access).await
     }
 
     pub async fn get_user_memos_page(
@@ -647,7 +627,9 @@ mod tests {
         );
 
         assert!(matches!(
-            service.get_user_memos(Uuid::new_v4()).await,
+            service
+                .get_user_memos_page(Uuid::new_v4(), None, None)
+                .await,
             Err(AppError::ServiceUnavailable(_))
         ));
         assert_eq!(
@@ -749,7 +731,9 @@ mod tests {
         );
 
         assert!(matches!(
-            service.get_user_memos(Uuid::new_v4()).await,
+            service
+                .get_user_memos_page(Uuid::new_v4(), None, None)
+                .await,
             Err(AppError::ServiceUnavailable(_))
         ));
         assert_eq!(
