@@ -39,12 +39,6 @@ impl MemoRepository for PagingRepository {
         Ok(None)
     }
 
-    async fn find_all_by_user_id(&self, _user_id: Uuid) -> AppResult<Vec<Memo>> {
-        Err(AppError::ServiceUnavailable(
-            "unbounded memo list read invoked".into(),
-        ))
-    }
-
     async fn list_page_by_user_id(
         &self,
         _user_id: Uuid,
