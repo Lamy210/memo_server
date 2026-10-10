@@ -1203,23 +1203,6 @@ impl MemoAuthoritativeStore for MongoDbAuthoritativeStore {
         self.find_by_id_inner(user_id, id).await
     }
 
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        let documents: Vec<MemoDocument> = self
-            .memos
-            .find(doc! { "user_id": user_id.to_string() })
-            .sort(doc! { "updated_at_ms": -1 })
-            .await
-            .map_err(|error| mongo_error("find MongoDB memos", error))?
-            .try_collect()
-            .await
-            .map_err(|error| mongo_error("read MongoDB memo cursor", error))?;
-
-        documents
-            .into_iter()
-            .map(MemoDocument::try_into_memo)
-            .collect()
-    }
-
     async fn list_page_by_user_id(
         &self,
         user_id: Uuid,

@@ -39,7 +39,6 @@ pub struct ScyllaDB {
 
 struct PreparedStatements {
     find_by_id: PreparedStatement,
-    find_all_by_user_id: PreparedStatement,
     list_first_page_by_user_id: PreparedStatement,
     list_page_after_by_user_id: PreparedStatement,
     save_memo: PreparedStatement,
@@ -186,15 +185,6 @@ impl ScyllaDB {
             .map_err(|error| {
                 AppError::DatabaseError(format!("Failed to prepare find_by_id: {error}"))
             })?;
-        let find_all_by_user_id = session
-            .prepare(
-                "SELECT id, title, content, tags, user_id, created_at, updated_at, version \
-                 FROM memo_app.memos WHERE user_id = ?",
-            )
-            .await
-            .map_err(|error| {
-                AppError::DatabaseError(format!("Failed to prepare find_all_by_user_id: {error}"))
-            })?;
         let list_first_page_by_user_id = session
             .prepare(
                 "SELECT id, title, content, tags, user_id, created_at, updated_at, version \
@@ -283,7 +273,6 @@ impl ScyllaDB {
 
         Ok(PreparedStatements {
             find_by_id,
-            find_all_by_user_id,
             list_first_page_by_user_id,
             list_page_after_by_user_id,
             save_memo,
@@ -310,28 +299,6 @@ impl ScyllaDB {
         })?;
 
         Ok(row.map(Self::memo_from_row))
-    }
-
-    pub async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        let result = self
-            .session
-            .execute_unpaged(&self.prepared_statements.find_all_by_user_id, (user_id,))
-            .await
-            .map_err(|error| AppError::DatabaseError(format!("Failed to fetch memos: {error}")))?;
-        let rows = result.into_rows_result().map_err(|error| {
-            AppError::DatabaseError(format!("Failed to read memos result: {error}"))
-        })?;
-        let typed_rows = rows.rows::<MemoRow>().map_err(|error| {
-            AppError::DatabaseError(format!("Failed to type-check memo rows: {error}"))
-        })?;
-
-        typed_rows
-            .map(|row| {
-                row.map(Self::memo_from_row).map_err(|error| {
-                    AppError::DatabaseError(format!("Failed to deserialize memo: {error}"))
-                })
-            })
-            .collect()
     }
 
     pub async fn list_page_by_user_id(
@@ -595,10 +562,6 @@ impl ScyllaDB {
 impl MemoAuthoritativeStore for ScyllaDB {
     async fn find_by_id(&self, user_id: Uuid, id: Uuid) -> AppResult<Option<Memo>> {
         ScyllaDB::find_by_id(self, user_id, id).await
-    }
-
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        ScyllaDB::find_all_by_user_id(self, user_id).await
     }
 
     async fn list_page_by_user_id(

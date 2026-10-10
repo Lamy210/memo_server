@@ -541,13 +541,6 @@ mod tests {
             Ok(self.memo.lock().unwrap().clone())
         }
 
-        async fn find_all_by_user_id(
-            &self,
-            _user_id: Uuid,
-        ) -> AppResult<Vec<crate::domain::memo::entity::Memo>> {
-            Ok(Vec::new())
-        }
-
         async fn find_many_by_ids(
             &self,
             _user_id: Uuid,

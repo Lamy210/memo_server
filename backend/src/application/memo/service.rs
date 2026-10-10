@@ -407,10 +407,6 @@ mod tests {
             Ok(None)
         }
 
-        async fn find_all_by_user_id(&self, _user_id: Uuid) -> AppResult<Vec<Memo>> {
-            Ok(Vec::new())
-        }
-
         async fn find_many_by_ids(&self, _user_id: Uuid, ids: &[Uuid]) -> AppResult<Vec<Memo>> {
             *self.hydrated_ids.lock().unwrap() = ids.to_vec();
             Ok(self.hydrated_items.clone())

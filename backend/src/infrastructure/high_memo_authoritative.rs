@@ -97,22 +97,6 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
         }
     }
 
-    async fn find_all_by_user_id(&self, user_id: Uuid) -> AppResult<Vec<Memo>> {
-        let envelopes = self
-            .encrypted_store
-            .find_all_envelopes_by_owner(user_id)
-            .await?;
-        let mut memos = Vec::with_capacity(envelopes.len());
-        for envelope in envelopes {
-            memos.push(self.decrypt_checked(&envelope).await?);
-        }
-
-        // updated_at is intentionally encrypted inside the payload, so the
-        // persistence adapter cannot sort on it without leaking new metadata.
-        memos.sort_by_key(|memo| Reverse(memo.updated_at));
-        Ok(memos)
-    }
-
     async fn list_page_by_user_id(
         &self,
         user_id: Uuid,
@@ -463,24 +447,6 @@ mod tests {
         );
         assert!(adapter.exists(owner, id).await.unwrap());
         assert_eq!(store.intents.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn list_sorts_after_decrypt_without_plaintext_sort_metadata() {
-        let owner = Uuid::new_v4();
-        let store = Arc::new(FakeEncryptedStore::default());
-        let adapter = adapter(store.clone());
-
-        let older = memo(owner, Uuid::new_v4(), 1, 1_700_000_001_000);
-        let newer = memo(owner, Uuid::new_v4(), 1, 1_700_000_010_000);
-        adapter.save_with_projection_intent(&older).await.unwrap();
-        adapter.save_with_projection_intent(&newer).await.unwrap();
-
-        let listed = adapter.find_all_by_user_id(owner).await.unwrap();
-        assert_eq!(
-            listed.iter().map(|memo| memo.id).collect::<Vec<_>>(),
-            vec![newer.id, older.id]
-        );
     }
 
     #[tokio::test]
