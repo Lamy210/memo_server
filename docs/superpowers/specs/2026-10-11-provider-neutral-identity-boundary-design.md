@@ -155,12 +155,17 @@ Standards-defined public metadata may include:
 
 Production browser authentication should use:
 
-- `Secure` + `HttpOnly` + appropriate `SameSite` cookies for long-lived browser session/refresh state;
+- Authorization Code + PKCE S256;
+- a one-time browser-bound `state` value for callback correlation;
+- `openid offline_access` so the BFF can maintain the session through refresh;
+- `Secure` + `HttpOnly` + appropriate `SameSite` cookies for browser session/refresh state;
 - no access token in `localStorage`;
 - no refresh credential in `localStorage`;
 - short-lived access tokens resolved server-side;
 - `App.Locals.accessToken` or equivalent server-controlled request context;
 - the existing SvelteKit BFF as the only browser-to-`memo_server` forwarding path.
+
+The BFF does not use an ID token as the source of memo ownership or authorization. Memo identity is derived only from the access token validated by `memo_server`.
 
 ### Cookie naming
 
