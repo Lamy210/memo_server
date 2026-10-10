@@ -4,7 +4,7 @@ This document defines the public list contract and rollout constraints for issue
 
 ## Public cursor contract
 
-Use the versioned list mode for all new clients:
+Use the versioned list mode for every client:
 
 ```http
 GET /api/v1/memos?pagination=cursor-v1
@@ -35,25 +35,21 @@ The normal list path does not provide an exact total count. Each authoritative-s
 
 Memo IDs are immutable, so updates do not move an already-seen item across cursor boundaries. Pagination is not snapshot-consistent across concurrent inserts: a memo inserted after page 1 may fall before or after the current cursor and therefore may require a fresh traversal to observe. Clients that need a refreshed view should restart from the first page rather than reuse an old cursor indefinitely.
 
-## Legacy compatibility
+## Required versioned list contract
 
-An unversioned request remains a temporary compatibility bridge:
+`pagination=cursor-v1` is required for every memo-list request. An unversioned request:
 
 ```http
 GET /api/v1/memos
 ```
 
-For owners with at most 100 memos, it returns the historical complete JSON array and preserves the legacy `updated_at DESC` presentation ordering. The implementation still performs one bounded authoritative read with logical limit 100.
-
-If an additional memo exists, the request fails explicitly instead of silently truncating the array. Clients must migrate to `pagination=cursor-v1`.
-
-The stable error guidance is:
+fails with `400 Bad Request` before the memo-list service or authoritative storage is called. The stable error guidance is:
 
 ```text
-Memo list pagination is required; use pagination=cursor-v1
+Memo list pagination requires pagination=cursor-v1
 ```
 
-New first-party code must not use the unversioned array route.
+Supplying `cursor` or `limit` without `pagination=cursor-v1` is rejected by the same contract. The historical complete-array response is no longer exposed by the HTTP API.
 
 ## HIGH encrypted route
 
@@ -91,10 +87,10 @@ The first-party `/memos` screen uses `cursor-v1`, defaults to 20 items, and expo
 
 Before merging or enabling this behavior in production:
 
-1. Require backend, frontend, browser E2E, Compose/full-stack smoke, UI Diff, and Lighthouse checks to pass on the latest PR head.
+1. Require backend, frontend, browser E2E, Compose/full-stack smoke, and any path-matched frontend quality checks to pass on the latest PR head.
 2. Confirm normal list request paths do not call all-owner materialization methods.
 3. Confirm plaintext and encrypted route tests return the same cursor boundaries.
 4. Confirm encrypted storage schema/index changes contain no plaintext timestamp or sort metadata.
 5. Deploy backend/BFF support before depending on cursor pagination from separately deployed clients, if those components are released independently.
 
-Rollback of the first-party frontend may temporarily return to the legacy route only while every affected owner remains within the 100-item compatibility bound. The preferred rollback is to revert the full pagination change together; do not raise or remove the server-side bound to preserve legacy behavior.
+Rollback must preserve the versioned cursor contract across backend and frontend. Do not reintroduce the unversioned complete-array HTTP route as a partial rollback; revert the API/client pagination change together if `cursor-v1` itself must be rolled back.
