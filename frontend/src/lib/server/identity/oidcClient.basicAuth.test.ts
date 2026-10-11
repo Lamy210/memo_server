@@ -2,8 +2,8 @@ import { Buffer } from 'node:buffer';
 
 import { expect, it, vi } from 'vitest';
 
-import type { IdentityConfig, OidcMetadata } from './oidcClient';
-import { exchangeAuthorizationCode } from './oidcClient';
+import type { IdentityConfig } from './config';
+import { exchangeAuthorizationCode, type OidcMetadata } from './oidcClient';
 
 it('form-encodes client credentials before client_secret_basic authentication', async () => {
   const config: IdentityConfig = {
