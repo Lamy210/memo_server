@@ -3,10 +3,12 @@ import { Buffer } from 'node:buffer';
 import type { Cookies } from '@sveltejs/kit';
 import { describe, expect, it, vi } from 'vitest';
 
-import { completeLogin } from './callback/+server';
-import { startLogin } from './login/+server';
-import { logoutSession } from './logout/+server';
-import { getSessionStatus } from './session/+server';
+import {
+  completeLogin,
+  getSessionStatus,
+  logoutSession,
+  startLogin
+} from '$lib/server/identity/browserAuth';
 import {
   LOGIN_TRANSACTION_COOKIE_NAME,
   openSession,
