@@ -1,0 +1,28 @@
+name: Provider-neutral auth boundary
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-neutral-auth-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  boundary:
+    name: Provider-neutral auth boundary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Scanner unit tests
+        run: python3 -m unittest scripts.test_check_provider_neutral_auth -v
+
+      - name: Current-boundary scan
+        run: python3 scripts/check_provider_neutral_auth.py .
