@@ -46,13 +46,30 @@ describe('discoverIdentity', () => {
     expect(metadata.tokenEndpoint.toString()).toBe('https://id.example.test/token');
   });
 
-  it('rejects issuer mismatch, insecure/cross-origin endpoints, or missing S256 support', async () => {
+  it('accepts HTTPS endpoints declared by discovery on a different origin', async () => {
+    const fetchFn = vi.fn(async () =>
+      Response.json(
+        discovery({
+          authorization_endpoint: 'https://login.example.test/authorize',
+          token_endpoint: 'https://tokens.example.test/token',
+          end_session_endpoint: 'https://logout.example.test/'
+        })
+      )
+    ) as unknown as typeof fetch;
+
+    const metadata = await discoverIdentity(config, fetchFn);
+
+    expect(metadata.authorizationEndpoint.toString()).toBe('https://login.example.test/authorize');
+    expect(metadata.tokenEndpoint.toString()).toBe('https://tokens.example.test/token');
+    expect(metadata.endSessionEndpoint?.toString()).toBe('https://logout.example.test/');
+  });
+
+  it('rejects issuer mismatch, insecure endpoints, unsafe endpoint URLs, or missing S256 support', async () => {
     for (const payload of [
       discovery({ issuer: 'https://other.example.test/' }),
       discovery({ token_endpoint: 'http://id.example.test/token' }),
-      discovery({ token_endpoint: 'https://tokens.example.test/token' }),
-      discovery({ authorization_endpoint: 'https://login.example.test/authorize' }),
-      discovery({ end_session_endpoint: 'https://logout.example.test/' }),
+      discovery({ authorization_endpoint: 'https://user@login.example.test/authorize' }),
+      discovery({ end_session_endpoint: 'https://logout.example.test/#internal' }),
       discovery({ code_challenge_methods_supported: ['plain'] })
     ]) {
       const fetchFn = vi.fn(async () => Response.json(payload)) as unknown as typeof fetch;
@@ -175,7 +192,9 @@ describe('token endpoint', () => {
       config,
       vi.fn(async () => Response.json(discovery())) as unknown as typeof fetch
     );
-    const fetchFn = vi.fn(async () => new Response('super-secret-upstream-error', { status: 500 })) as unknown as typeof fetch;
+    const fetchFn = vi.fn(
+      async () => new Response('super-secret-upstream-error', { status: 500 })
+    ) as unknown as typeof fetch;
 
     try {
       await refreshAccessToken(metadata, config, fetchFn, { refreshToken: 'refresh-1' });
