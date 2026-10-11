@@ -46,10 +46,13 @@ describe('discoverIdentity', () => {
     expect(metadata.tokenEndpoint.toString()).toBe('https://id.example.test/token');
   });
 
-  it('rejects issuer mismatch, insecure endpoints, or missing S256 support', async () => {
+  it('rejects issuer mismatch, insecure/cross-origin endpoints, or missing S256 support', async () => {
     for (const payload of [
       discovery({ issuer: 'https://other.example.test/' }),
       discovery({ token_endpoint: 'http://id.example.test/token' }),
+      discovery({ token_endpoint: 'https://tokens.example.test/token' }),
+      discovery({ authorization_endpoint: 'https://login.example.test/authorize' }),
+      discovery({ end_session_endpoint: 'https://logout.example.test/' }),
       discovery({ code_challenge_methods_supported: ['plain'] })
     ]) {
       const fetchFn = vi.fn(async () => Response.json(payload)) as unknown as typeof fetch;
