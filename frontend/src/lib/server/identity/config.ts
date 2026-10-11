@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 
 export type IdentityConfig = {
   issuer: URL;
+  issuerIdentifier: string;
   clientId: string;
   clientSecret: string;
   sessionKey: Uint8Array;
@@ -60,10 +61,11 @@ function parseSessionKey(value: string): Uint8Array {
 }
 
 export function readIdentityConfig(env: Record<string, string | undefined>): IdentityConfig {
-  const issuer = parseIssuer(requireNonBlank(env.IDENTITY_ISSUER));
+  const issuerIdentifier = requireNonBlank(env.IDENTITY_ISSUER);
+  const issuer = parseIssuer(issuerIdentifier);
   const clientId = requireNonBlank(env.IDENTITY_CLIENT_ID);
   const clientSecret = requireNonBlank(env.IDENTITY_CLIENT_SECRET);
   const sessionKey = parseSessionKey(requireNonBlank(env.IDENTITY_SESSION_KEY));
 
-  return { issuer, clientId, clientSecret, sessionKey };
+  return { issuer, issuerIdentifier, clientId, clientSecret, sessionKey };
 }
