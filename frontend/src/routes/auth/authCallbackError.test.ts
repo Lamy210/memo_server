@@ -102,9 +102,10 @@ it('maps token-endpoint access denial to the same stable public error', async ()
     identityEnv: identityEnv(),
     now: NOW
   });
+  const body = await response.text();
 
   expect(response.status).toBe(401);
-  await expect(response.json()).resolves.toEqual({ error: 'access_denied' });
-  expect(await response.clone().text()).not.toContain('private detail');
+  expect(JSON.parse(body)).toEqual({ error: 'access_denied' });
+  expect(body).not.toContain('private detail');
   expect(values.has(SESSION_COOKIE_NAME)).toBe(false);
 });
