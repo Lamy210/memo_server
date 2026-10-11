@@ -56,5 +56,5 @@ test('keeps return targets internal and normalizes invalid callbacks', async ({ 
   });
   expect(invalid.status()).toBe(400);
   expect(await invalid.json()).toEqual({ error: 'invalid_callback' });
-  expect(await invalid.headerValue('x-fixture-internal')).toBeNull();
+  expect(invalid.headers()['x-fixture-internal']).toBeUndefined();
 });
