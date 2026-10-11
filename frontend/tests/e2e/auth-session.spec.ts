@@ -1,6 +1,13 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const MEMO_BACKEND_FIXTURE = 'http://127.0.0.1:18080';
+
+async function browserSessionStatus(page: Page): Promise<{ authenticated: boolean }> {
+  return page.evaluate(async () => {
+    const response = await fetch('/auth/session', { cache: 'no-store' });
+    return response.json() as Promise<{ authenticated: boolean }>;
+  });
+}
 
 test('runs provider-neutral login, refresh and logout through the BFF', async ({ page }) => {
   const initial = await page.context().request.get('/auth/session');
@@ -11,8 +18,7 @@ test('runs provider-neutral login, refresh and logout through the BFF', async ({
   await expect(page).toHaveURL(/\/memos$/);
   await expect(page.getByText('UI regression baseline')).toBeVisible();
 
-  const authenticated = await page.context().request.get('/auth/session');
-  expect(await authenticated.json()).toEqual({ authenticated: true });
+  expect(await browserSessionStatus(page)).toEqual({ authenticated: true });
 
   const browserCookies = await page.context().cookies();
   const session = browserCookies.find((cookie) => cookie.name === '__Host-schnee_session');
@@ -39,9 +45,7 @@ test('runs provider-neutral login, refresh and logout through the BFF', async ({
   await page.getByRole('button', { name: 'ログアウト' }).click();
   await expect(page).toHaveURL(/\/memos$/);
   await expect(page.getByRole('link', { name: 'ログイン' })).toBeVisible();
-
-  const loggedOut = await page.context().request.get('/auth/session');
-  expect(await loggedOut.json()).toEqual({ authenticated: false });
+  expect(await browserSessionStatus(page)).toEqual({ authenticated: false });
 });
 
 test('keeps return targets internal and normalizes invalid callbacks', async ({ page }) => {
