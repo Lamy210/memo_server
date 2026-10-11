@@ -2,7 +2,10 @@ import { dev } from '$app/environment';
 import { env } from '$env/dynamic/private';
 import type { Cookies, Handle } from '@sveltejs/kit';
 
-import { readIdentityConfig } from '$lib/server/identity/config';
+import {
+  readIdentityConfig,
+  type IdentityConfig
+} from '$lib/server/identity/config';
 import { discoverIdentity, refreshAccessToken } from '$lib/server/identity/oidcClient';
 import {
   openSession,
@@ -13,6 +16,13 @@ import {
 import { applyFrontendSecurityHeaders } from '$lib/server/securityHeaders';
 
 const ACCESS_TOKEN_REFRESH_WINDOW_MS = 30_000;
+
+type RefreshedIdentitySession = {
+  session: IdentitySession;
+  sealed: string;
+};
+
+const refreshFlights = new Map<string, Promise<RefreshedIdentitySession>>();
 
 export type IdentityLocals = {
   authenticated?: boolean;
@@ -43,6 +53,43 @@ function setSessionCookie(cookies: Pick<Cookies, 'set'>, value: string): void {
     secure: true,
     sameSite: 'lax'
   });
+}
+
+async function refreshIdentitySession(
+  sealed: string,
+  session: IdentitySession,
+  config: IdentityConfig,
+  fetchFn: typeof fetch,
+  now: number
+): Promise<RefreshedIdentitySession> {
+  const existing = refreshFlights.get(sealed);
+  if (existing) return existing;
+
+  const flight = (async () => {
+    const metadata = await discoverIdentity(config, fetchFn);
+    const refreshed = await refreshAccessToken(metadata, config, fetchFn, {
+      refreshToken: session.refreshToken
+    });
+    const nextSession: IdentitySession = {
+      accessToken: refreshed.accessToken,
+      accessTokenExpiresAt: now + Math.floor(refreshed.expiresIn * 1000),
+      refreshToken: refreshed.refreshToken ?? session.refreshToken
+    };
+
+    return {
+      session: nextSession,
+      sealed: await sealSession(nextSession, config.sessionKey)
+    };
+  })();
+
+  refreshFlights.set(sealed, flight);
+  try {
+    return await flight;
+  } finally {
+    if (refreshFlights.get(sealed) === flight) {
+      refreshFlights.delete(sealed);
+    }
+  }
 }
 
 export async function restoreIdentitySession({
@@ -78,20 +125,10 @@ export async function restoreIdentitySession({
   }
 
   try {
-    const metadata = await discoverIdentity(config, fetchFn);
-    const refreshed = await refreshAccessToken(metadata, config, fetchFn, {
-      refreshToken: session.refreshToken
-    });
-    const nextSession: IdentitySession = {
-      accessToken: refreshed.accessToken,
-      accessTokenExpiresAt: now + Math.floor(refreshed.expiresIn * 1000),
-      refreshToken: refreshed.refreshToken ?? session.refreshToken
-    };
-    const nextSealed = await sealSession(nextSession, config.sessionKey);
-
-    setSessionCookie(cookies, nextSealed);
+    const refreshed = await refreshIdentitySession(sealed, session, config, fetchFn, now);
+    setSessionCookie(cookies, refreshed.sealed);
     locals.authenticated = true;
-    locals.accessToken = nextSession.accessToken;
+    locals.accessToken = refreshed.session.accessToken;
   } catch {
     deleteSessionCookie(cookies);
     clearIdentityLocals(locals);
