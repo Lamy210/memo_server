@@ -56,7 +56,7 @@ function fakeCookies(initial: Record<string, string> = {}) {
 
 function discoveryPayload() {
   return {
-    issuer: 'https://id.example.test/',
+    issuer: 'https://id.example.test',
     authorization_endpoint: 'https://id.example.test/authorize',
     token_endpoint: 'https://id.example.test/token',
     end_session_endpoint: 'https://id.example.test/logout',
