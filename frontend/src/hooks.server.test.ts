@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 
+import type { Cookies } from '@sveltejs/kit';
 import { describe, expect, it, vi } from 'vitest';
 
 import { restoreIdentitySession } from './hooks.server';
@@ -8,6 +9,9 @@ import { openSession, sealSession, SESSION_COOKIE_NAME } from '$lib/server/ident
 const SESSION_KEY_BYTES = new Uint8Array(32).fill(17);
 const SESSION_KEY = Buffer.from(SESSION_KEY_BYTES).toString('base64');
 const NOW = 1_900_000_000_000;
+
+type SetCookieOptions = Parameters<Cookies['set']>[2];
+type DeleteCookieOptions = Parameters<Cookies['delete']>[1];
 
 function identityEnv() {
   return {
@@ -20,23 +24,25 @@ function identityEnv() {
 
 function fakeCookies(initial?: string) {
   let current = initial;
-  const setCalls: Array<{ name: string; value: string; options: Record<string, unknown> }> = [];
-  const deleteCalls: Array<{ name: string; options: Record<string, unknown> }> = [];
+  const setCalls: Array<{ name: string; value: string; options: SetCookieOptions }> = [];
+  const deleteCalls: Array<{ name: string; options: DeleteCookieOptions }> = [];
+
+  const api: Pick<Cookies, 'get' | 'set' | 'delete'> = {
+    get(name: string) {
+      return name === SESSION_COOKIE_NAME ? current : undefined;
+    },
+    set(name: string, value: string, options: SetCookieOptions) {
+      if (name === SESSION_COOKIE_NAME) current = value;
+      setCalls.push({ name, value, options });
+    },
+    delete(name: string, options: DeleteCookieOptions) {
+      if (name === SESSION_COOKIE_NAME) current = undefined;
+      deleteCalls.push({ name, options });
+    }
+  };
 
   return {
-    api: {
-      get(name: string) {
-        return name === SESSION_COOKIE_NAME ? current : undefined;
-      },
-      set(name: string, value: string, options: Record<string, unknown>) {
-        if (name === SESSION_COOKIE_NAME) current = value;
-        setCalls.push({ name, value, options });
-      },
-      delete(name: string, options: Record<string, unknown>) {
-        if (name === SESSION_COOKIE_NAME) current = undefined;
-        deleteCalls.push({ name, options });
-      }
-    },
+    api,
     setCalls,
     deleteCalls,
     current: () => current
