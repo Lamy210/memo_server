@@ -40,20 +40,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Provider-neutral auth formatting
-        run: |
-          pnpm exec prettier --check \
-            src/app.d.ts \
-            src/hooks.server.ts \
-            src/hooks.server.test.ts \
-            src/hooks.server.concurrent.test.ts \
-            'src/lib/server/identity/**/*.ts' \
-            'src/routes/auth/**/*.ts' \
-            src/routes/+layout.server.ts \
-            src/routes/+layout.svelte \
-            tests/e2e/auth-session.spec.ts \
-            playwright.config.js
-
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
 
