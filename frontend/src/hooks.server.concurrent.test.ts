@@ -46,7 +46,7 @@ describe('concurrent identity refresh', () => {
       if (url.endsWith('/.well-known/openid-configuration')) {
         await Promise.resolve();
         return Response.json({
-          issuer: 'https://id.example.test/',
+          issuer: 'https://id.example.test',
           authorization_endpoint: 'https://id.example.test/authorize',
           token_endpoint: 'https://id.example.test/token',
           code_challenge_methods_supported: ['S256'],
