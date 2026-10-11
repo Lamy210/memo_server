@@ -67,7 +67,7 @@ class IdentityFixtureHandler(BaseHTTPRequestHandler):
             self.send_json(
                 200,
                 {
-                    "issuer": f"{ISSUER}/",
+                    "issuer": ISSUER,
                     "authorization_endpoint": f"{ISSUER}/authorize",
                     "token_endpoint": f"{ISSUER}/token",
                     "end_session_endpoint": f"{ISSUER}/logout",
