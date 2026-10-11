@@ -14,7 +14,7 @@ Rust/Actix Web + SvelteKit で構成したメモアプリケーションです�
 MongoDB を新規Compose環境のauthoritative storeとし、Valkeyはcache、Manticore Searchは再構築可能な検索projectionとして利用します。既存デプロイの安全な移行のため、`AUTHORITATIVE_BACKEND=scylla|mongodb` を明示的に切り替えられます。ScyllaDBからMongoDBへの既存データbackfillは別migrationで行うため、環境変数未指定時は互換性のためScyllaDBを維持します。
 
 > [!NOTE]
-> メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、SvelteKit server proxy が private env `DEVELOPMENT_USER_ID` から `X-Development-User-Id` を付与します。ブラウザ側JSは認証headerを生成しません。本番では独立した認証サービスを運用し、`AUTH_MODE=jwt` でそのサービスが発行するaccess tokenを検証します。
+> メモAPIは認証必須です。Docker Compose は `AUTH_MODE=development` を明示し、SvelteKit server proxy が private env `DEVELOPMENT_USER_ID` から `X-Development-User-Id` を付与します。ブラウザ側JSは認証headerを生成しません。本番では provider-neutral な OAuth/OIDC 境界を利用し、`AUTH_MODE=jwt` で短寿命access tokenを検証します。
 
 ## 起動
 
@@ -80,7 +80,7 @@ Health endpoint 以外の memo API は認証が必要です。
 
 本番では `AUTH_MODE=jwt` を使用します。Backendは `Authorization` / `X-Development-User-Id` の重複や不正なheader bytesを401で拒否し、さらにJWT modeでは `X-Development-User-Id`、development modeでは `Authorization` を受け付けません。認証modeごとにcredential transportを排他的にして、proxy/backend間のcredential解釈を一意にします。既存互換の既定値は `AUTH_JWT_SIGNATURE_MODE=rs256` で、ES384移行時のみ `rs256-es384` を明示して両方式を受け入れ、移行完了後は `es384` でRS256を拒否できます。JWT用途typingも段階移行でき、既定の `AUTH_JWT_TYPE_MODE=legacy-any` は現行issuer互換を維持し、issuerがRFC 9068型access tokenを発行する段階で `at-jwt` を明示すると `typ=at+jwt`（または `application/at+jwt`）以外を拒否し、署名検証後は必須の `client_id` / `jti` も非空文字列として要求します。JWT modeでは `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS`（60〜3600秒）も必須で、`AUTH_ISSUER` はuserinfo/query/fragmentを含まないabsolute HTTPS URLに限定します。Backendはcompact JWTのサイズ/3-segment構造を暗号処理前に上限付きで検証し、未対応のcritical JOSE extensionを示す `crit` headerはJWKS取得前に拒否します。さらに設定したissuer・audience・expiry・issued-at・subject、`exp - iat` の最大寿命、署名アルゴリズム/JWKS鍵種別を検証します。署名鍵は `AUTH_JWKS_URI` のJWKSから取得し、key rotation時はJWKSを再取得します。`AUTH_JWKS_URI` はHTTPS絶対URLのみ許可し、JWKS専用clientはredirectを追従しません。JWKSはサイズ・鍵数を上限付きで読み込み、重複 `kid` は曖昧選択せずfail-closedで拒否します。JWKSのfresh cacheは `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS`、stale-if-errorは `AUTH_ACCESS_TOKEN_MAX_LIFETIME_SECONDS + 30秒` にも束縛され、短寿命token構成で古い検証鍵だけが長時間残らないようにします。JWT `sub` はmemo_server内のuser UUIDとして扱います。
 
-memo_serverは認証サービスと独立して運用します。Oryや共通認証基盤との連携は前提にせず、認証サービス側がユーザー登録・ログイン・セッション/refresh token・パスワード/MFA等を担当し、memo_serverはaccess tokenの検証とuser境界の適用だけを担当します。
+`memo_server` は OAuth/OIDC/JWT/JWKS の標準契約だけに依存します。具体的な認証実装、内部ホスト名、provider固有claim、provider SDK、session APIはapplication contractに含めません。SvelteKit BFFの本番browser session連携は private env `IDENTITY_ISSUER` / `IDENTITY_CLIENT_ID` / `IDENTITY_CLIENT_SECRET` / `IDENTITY_SESSION_KEY` を使用し、短寿命access tokenだけをserver-side request contextからBackendへ付与します。
 
 ```bash
 curl -H 'Authorization: Bearer <access-token>' \
@@ -165,6 +165,15 @@ Backend が利用する主な環境変数:
 | `AUTH_AUDIENCE` | `AUTH_MODE=jwt` のとき必須。memo API向けのaudience値 |
 | `AUTH_JWKS_URI` | `AUTH_MODE=jwt` のとき必須 |
 
+Frontend 本番browser authが利用するprivate環境変数:
+
+| Variable | Purpose |
+| --- | --- |
+| `IDENTITY_ISSUER` | provider-neutral OIDC issuer |
+| `IDENTITY_CLIENT_ID` | confidential client identifier |
+| `IDENTITY_CLIENT_SECRET` | confidential client credential |
+| `IDENTITY_SESSION_KEY` | BFF sealed-session用32-byte secretのbase64表現 |
+
 `DATABASE_URL` は `AUTHORITATIVE_BACKEND=scylla` の既存環境互換aliasです。MongoDB選択時には利用せず、`MONGODB_URI` / `MONGODB_DATABASE` を明示してください。MongoDB transactionを利用するため、接続先はreplica setまたはsharded clusterである必要があります。Dockerのsingle-node replica setではhost discoveryを避けるため `directConnection=true` を使います。本番の冗長replica set/sharded clusterでは全memberを到達可能にし、通常のtopology discoveryを利用してください。
 
 ## ScyllaDB から MongoDB への既存データ移行
@@ -177,6 +186,6 @@ Frontend は SvelteKit server route `/api/v1/...` をBackendへの同一origin p
 
 ## スコープ
 
-現在のMVPは専用Authサービスが発行するJWTのresource-server検証までを対象にします。添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクル、認証境界、開発・CI基盤を安定させ、その後に拡張します。
+現在のMVPはprovider-neutralなJWT resource-server検証とSvelteKit BFFのserver-side browser session境界までを対象にします。添付ファイル、共有メモ、リアルタイム共同編集、WebRTC/CRDT、CQRS/Event Sourcing は含めていません。まず基本的なメモライフサイクル、認証境界、開発・CI基盤を安定させ、その後に拡張します。
 
-認証サービス境界の詳細は [docs/authentication.md](docs/authentication.md) を参照してください。開発規約とPR運用は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+認証境界の詳細は [docs/authentication.md](docs/authentication.md) を参照してください。開発規約とPR運用は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
