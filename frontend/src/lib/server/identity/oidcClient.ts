@@ -137,7 +137,7 @@ export async function discoverIdentity(
   }
 
   const payload = (await readJson(response)) as DiscoveryDocument;
-  if (payload.issuer !== config.issuer.toString()) {
+  if (payload.issuer !== config.issuerIdentifier) {
     throw new IdentityClientError('invalid_response');
   }
 
@@ -166,7 +166,7 @@ export async function discoverIdentity(
   }
 
   return {
-    issuer: config.issuer.toString(),
+    issuer: config.issuerIdentifier,
     authorizationEndpoint,
     tokenEndpoint,
     endSessionEndpoint,
