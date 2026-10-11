@@ -207,9 +207,14 @@ export function createAuthorizationRequest(
   return { url };
 }
 
+function formUrlEncode(value: string): string {
+  const encoded = new URLSearchParams({ value }).toString();
+  return encoded.slice('value='.length);
+}
+
 function basicClientAuthorization(config: IdentityConfig): string {
-  const clientId = encodeURIComponent(config.clientId);
-  const clientSecret = encodeURIComponent(config.clientSecret);
+  const clientId = formUrlEncode(config.clientId);
+  const clientSecret = formUrlEncode(config.clientSecret);
   return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
 }
 
@@ -231,7 +236,10 @@ function validateTokenDocument(payload: unknown): TokenSet {
     throw new IdentityClientError('invalid_response');
   }
 
-  if (token.refresh_token !== undefined && (typeof token.refresh_token !== 'string' || token.refresh_token.length === 0)) {
+  if (
+    token.refresh_token !== undefined &&
+    (typeof token.refresh_token !== 'string' || token.refresh_token.length === 0)
+  ) {
     throw new IdentityClientError('invalid_response');
   }
 
