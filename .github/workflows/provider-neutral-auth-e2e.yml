@@ -101,7 +101,7 @@ jobs:
             exit 1
           fi
 
-          pnpm exec playwright test tests/e2e/auth-session.spec.ts
+          IDENTITY_E2E=1 pnpm exec playwright test tests/e2e/auth-session.spec.ts
 
       - name: Collect auth E2E logs
         if: always()
