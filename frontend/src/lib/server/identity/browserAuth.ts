@@ -44,6 +44,8 @@ type LogoutInput = {
   cookies: Pick<Cookies, 'delete'>;
 };
 
+type CallbackErrorCode = 'invalid_callback' | 'access_denied' | 'authentication_failed';
+
 function randomBase64Url(size: number, randomBytes: (size: number) => Uint8Array): string {
   return Buffer.from(randomBytes(size))
     .toString('base64')
@@ -56,9 +58,9 @@ function secureRandomBytes(size: number): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(size));
 }
 
-function callbackFailure(status: number): Response {
+function callbackFailure(status: number, error: CallbackErrorCode): Response {
   return Response.json(
-    { error: status === 400 ? 'invalid_callback' : 'authentication_failed' },
+    { error },
     { status, headers: { 'Cache-Control': 'no-store' } }
   );
 }
@@ -130,20 +132,31 @@ export async function completeLogin({
   if (sealedTransaction) {
     cookies.delete(LOGIN_TRANSACTION_COOKIE_NAME, { path: '/' });
   }
-  if (!sealedTransaction) return callbackFailure(400);
+  if (!sealedTransaction) return callbackFailure(400, 'invalid_callback');
 
   let config;
   try {
     config = readIdentityConfig(identityEnv);
   } catch {
-    return callbackFailure(502);
+    return callbackFailure(502, 'authentication_failed');
   }
 
   const transaction = await openLoginTransaction(sealedTransaction, config.sessionKey, now);
-  const code = url.searchParams.get('code');
   const state = url.searchParams.get('state');
-  if (!transaction || !code || !state || state !== transaction.state) {
-    return callbackFailure(400);
+  if (!transaction || !state || state !== transaction.state) {
+    return callbackFailure(400, 'invalid_callback');
+  }
+
+  const authorizationError = url.searchParams.get('error');
+  if (authorizationError) {
+    return authorizationError === 'access_denied'
+      ? callbackFailure(401, 'access_denied')
+      : callbackFailure(502, 'authentication_failed');
+  }
+
+  const code = url.searchParams.get('code');
+  if (!code) {
+    return callbackFailure(400, 'invalid_callback');
   }
 
   try {
@@ -176,9 +189,9 @@ export async function completeLogin({
   } catch (error) {
     cookies.delete(SESSION_COOKIE_NAME, { path: '/' });
     if (error instanceof IdentityClientError && error.kind === 'access_denied') {
-      return callbackFailure(401);
+      return callbackFailure(401, 'access_denied');
     }
-    return callbackFailure(502);
+    return callbackFailure(502, 'authentication_failed');
   }
 }
 
