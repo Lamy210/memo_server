@@ -8,6 +8,7 @@ import { exchangeAuthorizationCode, type OidcMetadata } from './oidcClient';
 it('form-encodes client credentials before client_secret_basic authentication', async () => {
   const config: IdentityConfig = {
     issuer: new URL('https://id.example.test'),
+    issuerIdentifier: 'https://id.example.test/',
     clientId: 'client id!',
     clientSecret: 's ecret!',
     sessionKey: new Uint8Array(32)
