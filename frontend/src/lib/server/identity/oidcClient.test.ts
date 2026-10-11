@@ -14,6 +14,7 @@ import {
 
 const config: IdentityConfig = {
   issuer: new URL('https://id.example.test'),
+  issuerIdentifier: 'https://id.example.test/',
   clientId: 'memo-web',
   clientSecret: 'client-secret',
   sessionKey: new Uint8Array(32)
