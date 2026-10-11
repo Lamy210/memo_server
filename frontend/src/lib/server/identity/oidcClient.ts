@@ -96,7 +96,8 @@ function parseSecureEndpoint(value: unknown, configuredIssuer: URL): URL {
     !endpoint.hostname ||
     endpoint.username ||
     endpoint.password ||
-    endpoint.hash
+    endpoint.hash ||
+    endpoint.origin !== configuredIssuer.origin
   ) {
     throw new IdentityClientError('invalid_response');
   }
