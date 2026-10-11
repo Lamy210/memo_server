@@ -40,6 +40,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Frontend format
+        run: pnpm format:check
+
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
 
