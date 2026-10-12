@@ -71,11 +71,7 @@ type TokenDocument = {
   refresh_token?: unknown;
 };
 
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
-}
-
-function parseSecureEndpoint(value: unknown, configuredIssuer: URL): URL {
+function parseSecureEndpoint(value: unknown): URL {
   if (typeof value !== 'string' || value.length === 0) {
     throw new IdentityClientError('invalid_response');
   }
@@ -87,14 +83,8 @@ function parseSecureEndpoint(value: unknown, configuredIssuer: URL): URL {
     throw new IdentityClientError('invalid_response');
   }
 
-  const loopbackHttp =
-    configuredIssuer.protocol === 'http:' &&
-    isLoopbackHostname(configuredIssuer.hostname) &&
-    endpoint.protocol === 'http:' &&
-    isLoopbackHostname(endpoint.hostname);
-
   if (
-    (endpoint.protocol !== 'https:' && !loopbackHttp) ||
+    endpoint.protocol !== 'https:' ||
     !endpoint.hostname ||
     endpoint.username ||
     endpoint.password ||
@@ -151,12 +141,12 @@ export async function discoverIdentity(
     throw new IdentityClientError('configuration');
   }
 
-  const authorizationEndpoint = parseSecureEndpoint(payload.authorization_endpoint, config.issuer);
-  const tokenEndpoint = parseSecureEndpoint(payload.token_endpoint, config.issuer);
+  const authorizationEndpoint = parseSecureEndpoint(payload.authorization_endpoint);
+  const tokenEndpoint = parseSecureEndpoint(payload.token_endpoint);
   const endSessionEndpoint =
     payload.end_session_endpoint === undefined
       ? undefined
-      : parseSecureEndpoint(payload.end_session_endpoint, config.issuer);
+      : parseSecureEndpoint(payload.end_session_endpoint);
 
   const authMethods = Array.isArray(payload.token_endpoint_auth_methods_supported)
     ? payload.token_endpoint_auth_methods_supported.filter(
@@ -201,6 +191,7 @@ export function createAuthorizationRequest(
   const url = new URL(metadata.authorizationEndpoint);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', 'openid offline_access');
+  url.searchParams.set('prompt', 'consent');
   url.searchParams.set('client_id', input.clientId);
   url.searchParams.set('redirect_uri', input.redirectUri);
   url.searchParams.set('state', input.state);
