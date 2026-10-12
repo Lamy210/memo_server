@@ -10,6 +10,7 @@ use memo_app_backend::{
     config::{AppConfig, AuthConfig},
     infrastructure::auth::AuthService,
 };
+use zeroize::Zeroize;
 
 const USAGE: &str = "usage: verify_identity_access_token < access-token.jwt";
 // The resource server independently enforces a 16 KiB compact JWT limit.
@@ -65,21 +66,30 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), PreflightError> {
     parse_args(env::args().skip(1).collect())?;
 
-    let input = read_stdin_token_bytes()?;
-    let token = token_from_stdin_bytes(&input)?;
-
+    // Validate deployment configuration before accepting a real access token so
+    // a configuration error never causes unnecessary token material to be read.
     let config = AppConfig::from_env().map_err(|_| PreflightError::Configuration)?;
     let auth_config = match config.auth {
         AuthConfig::Development => return Err(PreflightError::Configuration),
         jwt @ AuthConfig::Jwt { .. } => jwt,
     };
-
     let auth = AuthService::new(auth_config).map_err(|_| PreflightError::Configuration)?;
-    auth.authenticate(Some(token), None)
-        .await
-        .map_err(|_| PreflightError::Verification)?;
 
-    Ok(())
+    let mut input = read_stdin_token_bytes()?;
+    let token = match token_from_stdin_bytes(&input) {
+        Ok(token) => token,
+        Err(error) => {
+            zeroize_input(&mut input);
+            return Err(error);
+        }
+    };
+
+    let verification = auth.authenticate(Some(token), None).await;
+    zeroize_input(&mut input);
+
+    verification
+        .map(|_| ())
+        .map_err(|_| PreflightError::Verification)
 }
 
 fn parse_args(args: Vec<String>) -> Result<(), PreflightError> {
@@ -96,11 +106,14 @@ fn read_stdin_token_bytes() -> Result<Vec<u8>, PreflightError> {
         .lock()
         .take((IDENTITY_ACCESS_TOKEN_INPUT_MAX_BYTES + 1) as u64);
     let mut input = Vec::with_capacity(IDENTITY_ACCESS_TOKEN_INPUT_MAX_BYTES.min(4096));
-    reader
-        .read_to_end(&mut input)
-        .map_err(|_| PreflightError::Input)?;
+
+    if reader.read_to_end(&mut input).is_err() {
+        zeroize_input(&mut input);
+        return Err(PreflightError::Input);
+    }
 
     if input.len() > IDENTITY_ACCESS_TOKEN_INPUT_MAX_BYTES {
+        zeroize_input(&mut input);
         return Err(PreflightError::Input);
     }
 
@@ -130,6 +143,10 @@ fn token_from_stdin_bytes(input: &[u8]) -> Result<&str, PreflightError> {
     }
 
     Ok(token)
+}
+
+fn zeroize_input(input: &mut Vec<u8>) {
+    input.as_mut_slice().zeroize();
 }
 
 fn success_output() -> &'static str {
