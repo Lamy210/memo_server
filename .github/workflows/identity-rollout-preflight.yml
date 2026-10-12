@@ -7,11 +7,13 @@ on:
     paths:
       - 'scripts/validate_identity_rollout.py'
       - 'scripts/test_validate_identity_rollout.py'
+      - 'docs/identity-rollout-preflight.md'
       - '.github/workflows/identity-rollout-preflight.yml'
   pull_request:
     paths:
       - 'scripts/validate_identity_rollout.py'
       - 'scripts/test_validate_identity_rollout.py'
+      - 'docs/identity-rollout-preflight.md'
       - '.github/workflows/identity-rollout-preflight.yml'
       - 'docs/authentication.md'
 
