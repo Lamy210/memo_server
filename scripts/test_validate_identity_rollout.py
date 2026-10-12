@@ -62,29 +62,29 @@ class IdentityRolloutPreflightTests(unittest.TestCase):
     def test_discovery_requires_exact_issuer_and_expected_jwks_uri(self) -> None:
         document = {
             "issuer": "https://id.example.test/tenant",
-            "jwks_uri": "https://id.example.test/tenant/jwks.json",
-            "authorization_endpoint": "https://id.example.test/tenant/authorize",
-            "token_endpoint": "https://id.example.test/tenant/token",
+            "jwks_uri": "https://id.example.test/tenant/jwks.json?set=prod",
+            "authorization_endpoint": "https://id.example.test/tenant/authorize?tenant=prod",
+            "token_endpoint": "https://id.example.test/tenant/token?tenant=prod",
         }
 
         validate_discovery_document(
             document,
             expected_issuer="https://id.example.test/tenant",
-            expected_jwks_uri="https://id.example.test/tenant/jwks.json",
+            expected_jwks_uri="https://id.example.test/tenant/jwks.json?set=prod",
         )
 
         with self.assertRaises(PreflightError):
             validate_discovery_document(
                 document,
                 expected_issuer="https://id.example.test/tenant/",
-                expected_jwks_uri="https://id.example.test/tenant/jwks.json",
+                expected_jwks_uri="https://id.example.test/tenant/jwks.json?set=prod",
             )
 
         with self.assertRaises(PreflightError):
             validate_discovery_document(
                 document,
                 expected_issuer="https://id.example.test/tenant",
-                expected_jwks_uri="https://keys.example.test/jwks.json",
+                expected_jwks_uri="https://keys.example.test/jwks.json?set=prod",
             )
 
     def test_jwks_requires_unique_public_keys_compatible_with_signature_mode(self) -> None:
