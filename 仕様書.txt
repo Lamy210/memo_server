@@ -53,7 +53,7 @@
 ## 3. 機能要件
 
 ### 3.1 認証・認可機能
-- GCP、GitHub OAuthログイン
+- OAuth 2.0 / OpenID Connect ログイン
 - RBAC（Role Based Access Control）
 - セッション管理
 - 多要素認証

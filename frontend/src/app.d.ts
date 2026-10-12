@@ -5,10 +5,12 @@
 declare global {
   namespace App {
     interface Locals {
+      authenticated: boolean;
       accessToken?: string;
     }
 
     interface PageData {
+      authenticated?: boolean;
       user?: {
         id: string;
         name: string;
