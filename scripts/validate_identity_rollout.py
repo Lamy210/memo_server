@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
+import math
+import re
 import sys
 import urllib.error
 import urllib.request
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 MAX_JSON_BYTES = 256 * 1024
 MAX_JWKS_KEYS = 64
@@ -20,6 +24,7 @@ _ALLOWED_SIGNATURE_MODES = {
     "es384": {"ES384"},
 }
 _PRIVATE_JWK_MEMBERS = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+_BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class PreflightError(RuntimeError):
@@ -34,7 +39,11 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 def validate_https_url(value: str, field_name: str, *, allow_query: bool = False) -> str:
     if not isinstance(value, str) or not value or value != value.strip():
         raise PreflightError(f"{field_name} must be a non-empty canonical HTTPS URL")
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value) or "\\" in value:
+    if (
+        any(char.isspace() for char in value)
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+        or "\\" in value
+    ):
         raise PreflightError(f"{field_name} contains an ambiguous character")
 
     try:
@@ -58,6 +67,13 @@ def validate_https_url(value: str, field_name: str, *, allow_query: bool = False
         )
 
     return value
+
+
+def _redact_url_for_output(value: str) -> str:
+    parsed = urlsplit(value)
+    if not parsed.query:
+        return value
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "<redacted>", ""))
 
 
 def _require_object(document: object, name: str) -> dict[str, Any]:
@@ -85,17 +101,57 @@ def validate_discovery_document(
     if jwks_uri != expected_jwks_uri:
         raise PreflightError("discovery jwks_uri does not exactly match the configured JWKS URI")
 
-    summary = {"issuer": issuer, "jwks_uri": jwks_uri}
+    summary = {"issuer": issuer, "jwks_uri": _redact_url_for_output(jwks_uri)}
     for field in ("authorization_endpoint", "token_endpoint"):
         value = payload.get(field)
-        if value is None:
-            continue
-        if not isinstance(value, str):
-            raise PreflightError(f"discovery {field} must be a string")
+        if not isinstance(value, str) or not value:
+            raise PreflightError(f"discovery document is missing {field}")
         validate_https_url(value, f"discovery {field}", allow_query=True)
-        summary[field] = value
+        summary[field] = _redact_url_for_output(value)
+
+    end_session_endpoint = payload.get("end_session_endpoint")
+    if end_session_endpoint is not None:
+        if not isinstance(end_session_endpoint, str) or not end_session_endpoint:
+            raise PreflightError("discovery end_session_endpoint must be a non-empty string")
+        validate_https_url(
+            end_session_endpoint,
+            "discovery end_session_endpoint",
+            allow_query=True,
+        )
+        summary["end_session_endpoint"] = _redact_url_for_output(end_session_endpoint)
+
+    code_challenge_methods = payload.get("code_challenge_methods_supported")
+    if (
+        not isinstance(code_challenge_methods, list)
+        or not all(isinstance(value, str) for value in code_challenge_methods)
+        or "S256" not in code_challenge_methods
+    ):
+        raise PreflightError("discovery document must advertise PKCE S256 support")
+
+    token_auth_methods = payload.get("token_endpoint_auth_methods_supported")
+    if token_auth_methods is None:
+        token_auth_methods = ["client_secret_basic"]
+    if (
+        not isinstance(token_auth_methods, list)
+        or not all(isinstance(value, str) for value in token_auth_methods)
+        or "client_secret_basic" not in token_auth_methods
+    ):
+        raise PreflightError("discovery token endpoint must support client_secret_basic")
 
     return summary
+
+
+def _decode_base64url(value: object, field_name: str) -> bytes:
+    if not isinstance(value, str) or not _BASE64URL_RE.fullmatch(value):
+        raise PreflightError(f"{field_name} must be non-empty unpadded base64url")
+    padded = value + ("=" * (-len(value) % 4))
+    try:
+        decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise PreflightError(f"{field_name} must be valid base64url") from error
+    if not decoded:
+        raise PreflightError(f"{field_name} must decode to non-empty key material")
+    return decoded
 
 
 def _key_candidate_algorithms(key: dict[str, Any]) -> set[str]:
@@ -118,18 +174,14 @@ def _key_candidate_algorithms(key: dict[str, Any]) -> set[str]:
 
     kty = key.get("kty")
     if kty == "RSA":
-        if not isinstance(key.get("n"), str) or not key["n"]:
-            return set()
-        if not isinstance(key.get("e"), str) or not key["e"]:
-            return set()
+        _decode_base64url(key.get("n"), "RSA modulus n")
+        _decode_base64url(key.get("e"), "RSA exponent e")
         inferred = {"RS256"}
     elif kty == "EC":
         if key.get("crv") != "P-384":
             return set()
-        if not isinstance(key.get("x"), str) or not key["x"]:
-            return set()
-        if not isinstance(key.get("y"), str) or not key["y"]:
-            return set()
+        _decode_base64url(key.get("x"), "EC coordinate x")
+        _decode_base64url(key.get("y"), "EC coordinate y")
         inferred = {"ES384"}
     else:
         return set()
@@ -195,8 +247,12 @@ def fetch_json(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> object:
     validate_https_url(url, "request URL", allow_query=True)
-    if timeout_seconds <= 0:
-        raise PreflightError("timeout must be positive")
+    if (
+        not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        raise PreflightError("timeout must be a positive finite number")
 
     request = urllib.request.Request(
         url,
@@ -260,7 +316,7 @@ def run_preflight(
     return {
         "status": "ok",
         "issuer": issuer,
-        "jwks_uri": jwks_uri,
+        "jwks_uri": _redact_url_for_output(jwks_uri),
         "signature_mode": signature_mode,
         "discovery": discovery_summary,
         "jwks": jwks_summary,
