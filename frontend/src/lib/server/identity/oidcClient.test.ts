@@ -99,7 +99,7 @@ describe('discoverIdentity', () => {
 });
 
 describe('PKCE authorization request', () => {
-  it('uses S256 and the RFC 7636 challenge derivation', async () => {
+  it('uses S256, requests offline access with consent, and uses the RFC 7636 challenge derivation', async () => {
     const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
     const challenge = await createPkceChallenge(verifier);
     expect(challenge).toBe('E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
@@ -118,6 +118,7 @@ describe('PKCE authorization request', () => {
     expect(request.url.origin + request.url.pathname).toBe('https://id.example.test/authorize');
     expect(request.url.searchParams.get('response_type')).toBe('code');
     expect(request.url.searchParams.get('scope')).toBe('openid offline_access');
+    expect(request.url.searchParams.get('prompt')).toBe('consent');
     expect(request.url.searchParams.get('client_id')).toBe('memo-web');
     expect(request.url.searchParams.get('redirect_uri')).toBe(
       'https://memo.example.test/auth/callback'
