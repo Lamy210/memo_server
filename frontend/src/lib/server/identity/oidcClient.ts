@@ -2,6 +2,8 @@ import { Buffer } from 'node:buffer';
 
 import type { IdentityConfig } from './config';
 
+const IDENTITY_HTTP_TIMEOUT_MS = 10_000;
+
 export type IdentityClientErrorKind =
   | 'configuration'
   | 'temporarily_unavailable'
@@ -126,6 +128,7 @@ export async function discoverIdentity(
     response = await fetchFn(discoveryUrl(config.issuer), {
       method: 'GET',
       redirect: 'error',
+      signal: AbortSignal.timeout(IDENTITY_HTTP_TIMEOUT_MS),
       headers: { Accept: 'application/json' }
     });
   } catch {
@@ -260,6 +263,7 @@ async function requestToken(
     response = await fetchFn(metadata.tokenEndpoint, {
       method: 'POST',
       redirect: 'error',
+      signal: AbortSignal.timeout(IDENTITY_HTTP_TIMEOUT_MS),
       headers: {
         Accept: 'application/json',
         Authorization: basicClientAuthorization(config),
