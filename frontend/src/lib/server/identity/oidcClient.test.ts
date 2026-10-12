@@ -47,6 +47,25 @@ describe('discoverIdentity', () => {
     expect(metadata.tokenEndpoint.toString()).toBe('https://id.example.test/token');
   });
 
+  it('bounds discovery requests with a 10 second deadline', async () => {
+    const signal = new AbortController().signal;
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(signal);
+
+    try {
+      const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(init?.signal).toBe(signal);
+        return Response.json(discovery());
+      }) as unknown as typeof fetch;
+
+      await discoverIdentity(config, fetchFn);
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it('accepts HTTPS endpoints declared by discovery on a different origin', async () => {
     const fetchFn = vi.fn(async () =>
       Response.json(
@@ -154,6 +173,34 @@ describe('token endpoint', () => {
         redirectUri: 'https://memo.example.test/auth/callback'
       })
     ).rejects.toBeInstanceOf(IdentityClientError);
+  });
+
+  it('bounds token endpoint requests with a 10 second deadline', async () => {
+    const metadata = await discoverIdentity(
+      config,
+      vi.fn(async () => Response.json(discovery())) as unknown as typeof fetch
+    );
+    const signal = new AbortController().signal;
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(signal);
+
+    try {
+      const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(init?.signal).toBe(signal);
+        return Response.json({
+          access_token: 'access-2',
+          token_type: 'Bearer',
+          expires_in: 120,
+          refresh_token: 'refresh-2'
+        });
+      }) as unknown as typeof fetch;
+
+      await refreshAccessToken(metadata, config, fetchFn, { refreshToken: 'refresh-1' });
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it('supports refresh-token rotation and absence of a replacement token', async () => {
