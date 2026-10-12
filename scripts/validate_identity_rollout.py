@@ -31,7 +31,7 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def validate_https_url(value: str, field_name: str) -> str:
+def validate_https_url(value: str, field_name: str, *, allow_query: bool = False) -> str:
     if not isinstance(value, str) or not value or value != value.strip():
         raise PreflightError(f"{field_name} must be a non-empty canonical HTTPS URL")
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value) or "\\" in value:
@@ -49,11 +49,12 @@ def validate_https_url(value: str, field_name: str) -> str:
         or not hostname
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.query
+        or (parsed.query and not allow_query)
         or parsed.fragment
     ):
+        query_requirement = "" if allow_query else ", query"
         raise PreflightError(
-            f"{field_name} must be an absolute HTTPS URL without credentials, query, or fragment"
+            f"{field_name} must be an absolute HTTPS URL without credentials{query_requirement}, or fragment"
         )
 
     return value
@@ -80,7 +81,7 @@ def validate_discovery_document(
     jwks_uri = payload.get("jwks_uri")
     if not isinstance(jwks_uri, str):
         raise PreflightError("discovery document is missing jwks_uri")
-    validate_https_url(jwks_uri, "discovery jwks_uri")
+    validate_https_url(jwks_uri, "discovery jwks_uri", allow_query=True)
     if jwks_uri != expected_jwks_uri:
         raise PreflightError("discovery jwks_uri does not exactly match the configured JWKS URI")
 
@@ -91,7 +92,7 @@ def validate_discovery_document(
             continue
         if not isinstance(value, str):
             raise PreflightError(f"discovery {field} must be a string")
-        validate_https_url(value, f"discovery {field}")
+        validate_https_url(value, f"discovery {field}", allow_query=True)
         summary[field] = value
 
     return summary
@@ -193,7 +194,7 @@ def fetch_json(
     opener=None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> object:
-    validate_https_url(url, "request URL")
+    validate_https_url(url, "request URL", allow_query=True)
     if timeout_seconds <= 0:
         raise PreflightError("timeout must be positive")
 
@@ -240,7 +241,7 @@ def run_preflight(
     opener=None,
 ) -> dict[str, object]:
     issuer = validate_https_url(issuer, "issuer")
-    jwks_uri = validate_https_url(jwks_uri, "jwks_uri")
+    jwks_uri = validate_https_url(jwks_uri, "jwks_uri", allow_query=True)
 
     discovery = fetch_json(
         discovery_url(issuer),
