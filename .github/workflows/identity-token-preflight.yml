@@ -44,7 +44,9 @@ jobs:
         run: cargo fmt --check
 
       - name: Contract tests
-        run: cargo test --locked --bin verify_identity_access_token
+        run: |
+          cargo test --locked --bin verify_identity_access_token
+          cargo test --locked --test identity_token_preflight
 
       - name: Clippy
-        run: cargo clippy --locked --bin verify_identity_access_token -- -D warnings
+        run: cargo clippy --locked --bin verify_identity_access_token --test identity_token_preflight -- -D warnings
