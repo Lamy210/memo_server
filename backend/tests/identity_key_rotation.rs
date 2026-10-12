@@ -18,14 +18,10 @@ mod auth_under_test {
         const TEST_USER_ID: &str = "12345678-1234-4234-8234-123456789012";
         const TEST_TOKEN_LIFETIME_SECONDS: u64 = 3_000_000_000;
 
-        const OLD_EC_X: &str =
-            "yaoQu-f0gTaWyBTD0BZ0r28LndWqh0Xn-rQOynEOkZrPkqxCLHf7Qnbv9K0TOAag";
-        const OLD_EC_Y: &str =
-            "0MIBkNuwwFXm0CqxaGYxjuGIwD_wKX9DqE16TFVnNcyHha9QVqZ8lhosVwKRKTt4";
-        const NEW_EC_X: &str =
-            "EARZSdKbfLYw8HosQxf-kuNyASrWCmIqCHBdnE8LB-LeIdxy84IsFlm_O9ShEIio";
-        const NEW_EC_Y: &str =
-            "q_iMicqi1KZFC4hSKYIZnI2aXFhiHKtGtbab-4-nXIzGHtLnpeyYOt6-phnnkyuk";
+        const OLD_EC_X: &str = "yaoQu-f0gTaWyBTD0BZ0r28LndWqh0Xn-rQOynEOkZrPkqxCLHf7Qnbv9K0TOAag";
+        const OLD_EC_Y: &str = "0MIBkNuwwFXm0CqxaGYxjuGIwD_wKX9DqE16TFVnNcyHha9QVqZ8lhosVwKRKTt4";
+        const NEW_EC_X: &str = "EARZSdKbfLYw8HosQxf-kuNyASrWCmIqCHBdnE8LB-LeIdxy84IsFlm_O9ShEIio";
+        const NEW_EC_Y: &str = "q_iMicqi1KZFC4hSKYIZnI2aXFhiHKtGtbab-4-nXIzGHtLnpeyYOt6-phnnkyuk";
 
         const OLD_TOKEN: &str =
             "eyJhbGciOiJFUzM4NCIsInR5cCI6IkpXVCIsImtpZCI6ImVjLXRlc3QifQ.eyJzdWIiOiIxMjM0NTY3OC0xMjM0LTQyMzQtODIzNC0xMjM0NTY3ODkwMTIiLCJpc3MiOiJodHRwczovL2F1dGgubWVtby50ZXN0IiwiYXVkIjoibWVtby1hcGkiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6NDEwMjQ0NDgwMCwibmJmIjoxNzAwMDAwMDAwfQ.Hkju4wPXh0OU3FPNMJgIti1Gp08Ek1VD_ur1f9os7yc5N73q-KUZFg-PV-zipv0mJf9FBxTn1eEo-ofKxlDwf538cRYCnbC0MBodRfKm1skaA68uVf0hfgBt8axnHNjK";
