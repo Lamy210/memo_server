@@ -22,6 +22,15 @@ class ProviderNeutralAuthScannerTests(unittest.TestCase):
 
             self.assertTrue(any(f.path == "docs/authentication.md" for f in findings))
 
+    def test_detects_vendor_fingerprint_in_other_current_docs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write(root, "docs/browser-auth-operations.md", "Deploy this with Keycloak.\n")
+
+            findings = check_paths(root)
+
+            self.assertTrue(any(f.path == "docs/browser-auth-operations.md" for f in findings))
+
     def test_detects_vendor_fingerprint_in_contributing_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
