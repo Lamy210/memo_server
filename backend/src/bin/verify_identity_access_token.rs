@@ -145,8 +145,8 @@ fn token_from_stdin_bytes(input: &[u8]) -> Result<&str, PreflightError> {
     Ok(token)
 }
 
-fn zeroize_input(input: &mut Vec<u8>) {
-    input.as_mut_slice().zeroize();
+fn zeroize_input(input: &mut [u8]) {
+    input.zeroize();
 }
 
 fn success_output() -> &'static str {
