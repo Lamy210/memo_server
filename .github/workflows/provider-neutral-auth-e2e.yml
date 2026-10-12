@@ -50,11 +50,20 @@ jobs:
 
           pnpm build
 
+          openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
+            -keyout "$RUNNER_TEMP/identity.key" \
+            -out "$RUNNER_TEMP/identity.crt" \
+            -subj "/CN=127.0.0.1" \
+            -addext "subjectAltName=IP:127.0.0.1" \
+            -addext "basicConstraints=critical,CA:TRUE"
+
           python3 ../scripts/identity-fixture-server.py \
             --port 19090 \
             --client-id memo-web \
             --client-secret fixture-secret \
             --redirect-uri http://127.0.0.1:4173/auth/callback \
+            --tls-cert "$RUNNER_TEMP/identity.crt" \
+            --tls-key "$RUNNER_TEMP/identity.key" \
             >"$RUNNER_TEMP/identity-fixture.log" 2>&1 &
           identity_pid=$!
 
@@ -68,10 +77,11 @@ jobs:
 
           session_key="$(python3 -c 'import base64; print(base64.b64encode(bytes([42]) * 32).decode())')"
           BACKEND_URL=http://127.0.0.1:18080 \
-          IDENTITY_ISSUER=http://127.0.0.1:19090 \
+          IDENTITY_ISSUER=https://127.0.0.1:19090 \
           IDENTITY_CLIENT_ID=memo-web \
           IDENTITY_CLIENT_SECRET=fixture-secret \
           IDENTITY_SESSION_KEY="$session_key" \
+          NODE_EXTRA_CA_CERTS="$RUNNER_TEMP/identity.crt" \
             pnpm preview --host 127.0.0.1 --port 4173 --strictPort \
             >"$RUNNER_TEMP/auth-preview.log" 2>&1 &
           server_pid=$!
@@ -85,7 +95,7 @@ jobs:
 
           ready=0
           for _ in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:19090/healthz >/dev/null \
+            if curl --cacert "$RUNNER_TEMP/identity.crt" -fsS https://127.0.0.1:19090/healthz >/dev/null \
               && curl -fsS http://127.0.0.1:18080/healthz >/dev/null \
               && curl -fsS http://127.0.0.1:4173/auth/session >/dev/null; then
               ready=1
