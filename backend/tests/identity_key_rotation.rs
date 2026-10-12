@@ -16,6 +16,10 @@ mod auth_under_test {
         const TEST_ISSUER: &str = "https://auth.memo.test";
         const TEST_AUDIENCE: &str = "memo-api";
         const TEST_USER_ID: &str = "12345678-1234-4234-8234-123456789012";
+
+        // Fixture-only bound: the static signed tokens deliberately outlive the
+        // deployment policy range so this regression remains deterministic.
+        // Production configuration is still constrained by AppConfig tests.
         const TEST_TOKEN_LIFETIME_SECONDS: u64 = 3_000_000_000;
 
         const OLD_EC_X: &str = "yaoQu-f0gTaWyBTD0BZ0r28LndWqh0Xn-rQOynEOkZrPkqxCLHf7Qnbv9K0TOAag";
@@ -62,6 +66,19 @@ mod auth_under_test {
             es384_jwk("ec-next", NEW_EC_X, NEW_EC_Y)
         }
 
+        async fn install_rotation_snapshot(verifier: &JwtVerifier, keys: Vec<Jwk>) {
+            let set = JwkSet { keys };
+            validate_jwks_set(&set).expect("rotation fixture JWKS must satisfy production shape");
+            *verifier.jwks.write().await = Some(CachedJwks {
+                set: Arc::new(set),
+                fetched_at: Instant::now(),
+            });
+        }
+
+        async fn suppress_external_forced_refresh(verifier: &JwtVerifier) {
+            verifier.refresh_state.lock().await.last_forced_attempt = Some(Instant::now());
+        }
+
         async fn assert_valid(verifier: &JwtVerifier, token: &str) {
             let identity = verifier
                 .verify(token)
@@ -88,6 +105,27 @@ mod auth_under_test {
             // remains published. Previously issued new-key tokens stay valid.
             assert_valid(&verifier, OLD_TOKEN).await;
             assert_valid(&verifier, NEW_TOKEN).await;
+        }
+
+        #[tokio::test]
+        async fn rollback_can_retire_new_key_only_after_its_token_horizon() {
+            let verifier = verifier();
+
+            install_rotation_snapshot(&verifier, vec![old_key(), new_key()]).await;
+            assert_valid(&verifier, NEW_TOKEN).await;
+
+            // This snapshot models the state only after every token signed by
+            // the new key has passed its validity horizon. The forced-refresh
+            // cooldown prevents this deterministic test from contacting the
+            // intentionally invalid external JWKS origin when `kid` is absent.
+            install_rotation_snapshot(&verifier, vec![old_key()]).await;
+            suppress_external_forced_refresh(&verifier).await;
+
+            assert_valid(&verifier, OLD_TOKEN).await;
+            assert!(matches!(
+                verifier.verify(NEW_TOKEN).await,
+                Err(AppError::Unauthorized(_))
+            ));
         }
     }
 }
