@@ -16,6 +16,7 @@ class Finding:
 
 _TEXT_FILES = (
     Path("README.md"),
+    Path("CONTRIBUTING.md"),
     Path("docs/authentication.md"),
     Path("docker-compose.yml"),
 )
@@ -28,6 +29,7 @@ _MANIFESTS = (
     Path("frontend/package.json"),
     Path("backend/Cargo.toml"),
 )
+_ROOT_CURRENT_DOC_SUFFIXES = {".md", ".txt"}
 
 # This intentionally spans several common implementations. The check is an
 # abstraction guard, not a declaration of which implementation is deployed.
@@ -49,13 +51,27 @@ _PROVIDER_FINGERPRINT_WORDS = (
 _PROVIDER_WORD_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:" + "|".join(map(re.escape, _PROVIDER_FINGERPRINT_WORDS)) + r")(?![A-Za-z0-9])"
 )
+_CONCRETE_UPSTREAM_AUTH_RE = re.compile(
+    r"(?i)\b(?:github|google|microsoft|apple)\s+(?:oauth|oidc|login|identity)\b"
+)
 _INTERNAL_PLATFORM_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:Auth|Identity)?Platform[A-Z][A-Za-z0-9]*\b")
 
 
 def _iter_existing_text_paths(root: Path):
+    yielded: set[Path] = set()
+
     for relative in _TEXT_FILES:
         path = root / relative
         if path.is_file():
+            yielded.add(relative)
+            yield relative, path
+
+    for path in sorted(root.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in _ROOT_CURRENT_DOC_SUFFIXES:
+            continue
+        relative = path.relative_to(root)
+        if relative not in yielded:
+            yielded.add(relative)
             yield relative, path
 
     for relative_dir in _TEXT_DIRS:
@@ -67,12 +83,15 @@ def _iter_existing_text_paths(root: Path):
                 continue
             if path.suffix.lower() not in {".md", ".rs", ".ts", ".svelte", ".js", ".cjs", ".mjs", ".json", ".yml", ".yaml"}:
                 continue
-            yield path.relative_to(root), path
+            relative = path.relative_to(root)
+            if relative not in yielded:
+                yielded.add(relative)
+                yield relative, path
 
 
 def _text_findings(relative: Path, text: str) -> list[Finding]:
     findings: list[Finding] = []
-    if _PROVIDER_WORD_RE.search(text):
+    if _PROVIDER_WORD_RE.search(text) or _CONCRETE_UPSTREAM_AUTH_RE.search(text):
         findings.append(Finding(relative.as_posix(), "provider implementation fingerprint in current boundary"))
     if _INTERNAL_PLATFORM_RE.search(text):
         findings.append(Finding(relative.as_posix(), "internal platform identifier in current boundary"))
