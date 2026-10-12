@@ -180,6 +180,13 @@ mod tests {
     }
 
     #[test]
+    fn sensitive_input_is_zeroized_before_release() {
+        let mut input = b"header.payload.signature\n".to_vec();
+        zeroize_input(&mut input);
+        assert!(input.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn success_output_is_deliberately_non_identifying() {
         assert_eq!(success_output(), "access_token.valid=true");
     }
