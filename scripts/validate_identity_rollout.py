@@ -39,12 +39,14 @@ def validate_https_url(value: str, field_name: str) -> str:
 
     try:
         parsed = urlsplit(value)
+        hostname = parsed.hostname
+        parsed.port
     except ValueError as error:
         raise PreflightError(f"{field_name} is not a valid URL") from error
 
     if (
         parsed.scheme != "https"
-        or not parsed.hostname
+        or not hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
@@ -101,6 +103,8 @@ def _key_candidate_algorithms(key: dict[str, Any]) -> set[str]:
         raise PreflightError("JWKS key alg must be a string when present")
 
     public_use = key.get("use")
+    if public_use is not None and not isinstance(public_use, str):
+        raise PreflightError("JWKS key use must be a string when present")
     if public_use is not None and public_use != "sig":
         return set()
 
