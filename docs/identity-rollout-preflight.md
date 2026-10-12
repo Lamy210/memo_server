@@ -31,18 +31,20 @@ The command exits with status `0` and emits a JSON summary when the public contr
 
 The preflight currently verifies:
 
-1. configured issuer and JWKS URLs are absolute HTTPS URLs with a host and without credentials, query, fragment, ambiguous whitespace, control characters, or backslashes;
-2. discovery is fetched from `<issuer>/.well-known/openid-configuration`;
-3. the discovery `issuer` exactly equals the configured issuer string;
-4. the discovery `jwks_uri` exactly equals the configured JWKS URI;
-5. published authorization/token endpoints, when present, are HTTPS URLs;
-6. discovery and JWKS requests are bounded by a timeout, do not follow redirects, and accept at most 256 KiB of JSON;
-7. JWKS contains between 1 and 64 keys;
-8. published `kid` values are non-empty, unique, and at most 128 bytes;
-9. private or symmetric key material is not published in JWKS;
-10. at least one public verification key is usable for the configured signature mode, including RSA/RS256 and EC P-384/ES384 shape checks plus `use` / `key_ops` constraints when published.
+1. the configured issuer is an absolute HTTPS URL with a host and without credentials, query, fragment, ambiguous whitespace, control characters, backslashes, or a malformed port;
+2. the configured JWKS URI is an absolute HTTPS URL with a host and without credentials or fragment; a standards-valid query component is allowed because the backend JWKS contract allows it;
+3. discovery is fetched from `<issuer>/.well-known/openid-configuration`;
+4. the discovery `issuer` exactly equals the configured issuer string;
+5. the discovery `jwks_uri` exactly equals the configured JWKS URI;
+6. published authorization/token endpoints, when present, are HTTPS URLs without credentials or fragment; query components are allowed to match the browser OIDC endpoint contract;
+7. discovery and JWKS requests are bounded by a timeout, do not follow redirects, and accept at most 256 KiB of JSON;
+8. JWKS contains between 1 and 64 keys;
+9. published `kid` values are non-empty, unique, and at most 128 bytes;
+10. private or symmetric key material is not published in JWKS;
+11. published `alg`, `use`, and `key_ops` metadata is structurally valid when present rather than being ignored because another usable key exists;
+12. at least one public verification key is usable for the configured signature mode, including RSA/RS256 and EC P-384/ES384 shape checks plus `use` / `key_ops` constraints when published.
 
-These limits intentionally mirror the resource-server boundary where practical so rollout validation fails before production requests encounter the same incompatible data.
+These limits intentionally mirror the resource-server and browser OIDC boundaries where practical so rollout validation fails before production requests encounter the same incompatible data.
 
 ## What this does not prove
 
