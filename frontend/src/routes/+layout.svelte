@@ -1,5 +1,7 @@
 <script lang="ts">
   import '../app.css';
+
+  export let data: { authenticated?: boolean };
 </script>
 
 <svelte:head>
@@ -19,17 +21,30 @@
       </a>
 
       <nav class="flex items-center gap-1 text-sm font-medium text-slate-600" aria-label="メインナビゲーション">
-        <a href="/memos" class="rounded-lg px-3 py-2 transition hover:bg-slate-100 hover:text-slate-950">
-          メモ
-        </a>
-        <a
-          href="/memos/search"
-          class="hidden rounded-lg px-3 py-2 transition hover:bg-slate-100 hover:text-slate-950 sm:block"
-        >検索</a>
-        <a
-          href="/memos/new"
-          class="ml-1 rounded-xl bg-sky-700 px-3.5 py-2 text-white shadow-sm transition hover:bg-sky-800"
-        >新規作成</a>
+        {#if data.authenticated}
+          <a href="/memos" class="rounded-lg px-3 py-2 transition hover:bg-slate-100 hover:text-slate-950">
+            メモ
+          </a>
+          <a
+            href="/memos/search"
+            class="hidden rounded-lg px-3 py-2 transition hover:bg-slate-100 hover:text-slate-950 sm:block"
+          >検索</a>
+          <a
+            href="/memos/new"
+            class="ml-1 rounded-xl bg-sky-700 px-3.5 py-2 text-white shadow-sm transition hover:bg-sky-800"
+          >新規作成</a>
+          <form method="POST" action="/auth/logout?return_to=/memos" class="ml-1">
+            <button
+              type="submit"
+              class="rounded-lg px-3 py-2 transition hover:bg-slate-100 hover:text-slate-950"
+            >ログアウト</button>
+          </form>
+        {:else}
+          <a
+            href="/auth/login?return_to=/memos"
+            class="rounded-xl bg-sky-700 px-3.5 py-2 text-white shadow-sm transition hover:bg-sky-800"
+          >ログイン</a>
+        {/if}
       </nav>
     </div>
   </header>

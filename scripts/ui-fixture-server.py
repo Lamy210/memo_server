@@ -46,6 +46,8 @@ MEMOS = [
 UNAUTHORIZED = False
 REQUIRE_IDENTITY_ENCODING = False
 ENCODED_RESPONSE = False
+EXPECTED_BEARER_TOKENS = set()
+LAST_AUTHORIZATION = None
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -77,16 +79,38 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def require_bearer(self, path):
+        global LAST_AUTHORIZATION
+
+        if not path.startswith("/api/v1/") or not EXPECTED_BEARER_TOKENS:
+            return True
+
+        authorization = self.headers.get("Authorization")
+        accepted = {f"Bearer {token}" for token in EXPECTED_BEARER_TOKENS}
+        if authorization not in accepted:
+            self.send_json(401, {"message": "Fixture expected server-controlled Bearer identity"})
+            return False
+
+        LAST_AUTHORIZATION = authorization
+        return True
+
+    def admit_api_request(self, path):
+        return self.require_identity_encoding(path) and self.require_bearer(path)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query, keep_blank_values=True)
 
-        if not self.require_identity_encoding(path):
-            return
-
         if path == "/healthz":
             self.send_json(200, {"status": "ok"})
+            return
+
+        if path == "/__fixture__/last-authorization":
+            self.send_json(200, {"authorization": LAST_AUTHORIZATION})
+            return
+
+        if not self.admit_api_request(path):
             return
 
         if path == "/api/v1/memos/search":
@@ -149,9 +173,6 @@ class FixtureHandler(BaseHTTPRequestHandler):
         global UNAUTHORIZED, ENCODED_RESPONSE
         path = urlparse(self.path).path
 
-        if not self.require_identity_encoding(path):
-            return
-
         if path == "/__visual__/scenario/unauthorized":
             UNAUTHORIZED = True
             self.send_json(200, {"scenario": "unauthorized"})
@@ -168,6 +189,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"scenario": "success"})
             return
 
+        if not self.admit_api_request(path):
+            return
+
         if path == "/api/v1/memos":
             self.send_json(201, {**MEMOS[0], "version": 1})
             return
@@ -175,7 +199,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         path = urlparse(self.path).path
-        if not self.require_identity_encoding(path):
+        if not self.admit_api_request(path):
             return
         if path.startswith("/api/v1/memos/"):
             self.send_json(200, {**MEMOS[0], "version": 4})
@@ -184,7 +208,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urlparse(self.path).path
-        if not self.require_identity_encoding(path):
+        if not self.admit_api_request(path):
             return
         if path.startswith("/api/v1/memos/"):
             self.send_response(204)
@@ -194,13 +218,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global REQUIRE_IDENTITY_ENCODING
+    global REQUIRE_IDENTITY_ENCODING, EXPECTED_BEARER_TOKENS
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--require-identity-encoding", action="store_true")
+    parser.add_argument("--expected-bearer-token", action="append", default=[])
     args = parser.parse_args()
     REQUIRE_IDENTITY_ENCODING = args.require_identity_encoding
+    EXPECTED_BEARER_TOKENS = set(args.expected_bearer_token)
     ThreadingHTTPServer(("127.0.0.1", args.port), FixtureHandler).serve_forever()
 
 
