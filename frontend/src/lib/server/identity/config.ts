@@ -16,12 +16,15 @@ export class IdentityConfigurationError extends Error {
 }
 
 function requireNonBlank(value: string | undefined): string {
-  const normalized = value?.trim();
-  if (!normalized) throw new IdentityConfigurationError();
-  return normalized;
+  if (!value || !value.trim()) throw new IdentityConfigurationError();
+  return value;
 }
 
 function parseIssuer(value: string): URL {
+  if (value !== value.trim()) {
+    throw new IdentityConfigurationError();
+  }
+
   let issuer: URL;
   try {
     issuer = new URL(value);
@@ -29,12 +32,8 @@ function parseIssuer(value: string): URL {
     throw new IdentityConfigurationError();
   }
 
-  const loopbackHttp =
-    issuer.protocol === 'http:' &&
-    (issuer.hostname === '127.0.0.1' || issuer.hostname === 'localhost' || issuer.hostname === '[::1]');
-
   if (
-    (issuer.protocol !== 'https:' && !loopbackHttp) ||
+    issuer.protocol !== 'https:' ||
     !issuer.hostname ||
     issuer.username ||
     issuer.password ||
