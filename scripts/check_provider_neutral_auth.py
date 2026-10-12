@@ -52,7 +52,7 @@ _PROVIDER_WORD_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:" + "|".join(map(re.escape, _PROVIDER_FINGERPRINT_WORDS)) + r")(?![A-Za-z0-9])"
 )
 _CONCRETE_UPSTREAM_AUTH_RE = re.compile(
-    r"(?i)\b(?:github|google|microsoft|apple)\s+(?:oauth|oidc|login|identity)\b"
+    r"(?i)(?<![A-Za-z0-9])(?:github|google|microsoft|apple)\s+(?:oauth|oidc|login|identity)(?![A-Za-z0-9])"
 )
 _INTERNAL_PLATFORM_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:Auth|Identity)?Platform[A-Z][A-Za-z0-9]*\b")
 
