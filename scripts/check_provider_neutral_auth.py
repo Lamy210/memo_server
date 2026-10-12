@@ -17,7 +17,6 @@ class Finding:
 _TEXT_FILES = (
     Path("README.md"),
     Path("CONTRIBUTING.md"),
-    Path("docs/authentication.md"),
     Path("docker-compose.yml"),
 )
 _TEXT_DIRS = (
@@ -30,6 +29,8 @@ _MANIFESTS = (
     Path("backend/Cargo.toml"),
 )
 _ROOT_CURRENT_DOC_SUFFIXES = {".md", ".txt"}
+_CURRENT_DOC_SUFFIXES = {".md", ".txt"}
+_ARCHIVAL_DOC_PREFIXES = (Path("docs/superpowers"),)
 
 # This intentionally spans several common implementations. The check is an
 # abstraction guard, not a declaration of which implementation is deployed.
@@ -57,6 +58,10 @@ _CONCRETE_UPSTREAM_AUTH_RE = re.compile(
 _INTERNAL_PLATFORM_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:Auth|Identity)?Platform[A-Z][A-Za-z0-9]*\b")
 
 
+def _is_archival_doc(relative: Path) -> bool:
+    return any(relative == prefix or prefix in relative.parents for prefix in _ARCHIVAL_DOC_PREFIXES)
+
+
 def _iter_existing_text_paths(root: Path):
     yielded: set[Path] = set()
 
@@ -71,6 +76,17 @@ def _iter_existing_text_paths(root: Path):
             continue
         relative = path.relative_to(root)
         if relative not in yielded:
+            yielded.add(relative)
+            yield relative, path
+
+    docs = root / "docs"
+    if docs.is_dir():
+        for path in sorted(docs.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in _CURRENT_DOC_SUFFIXES:
+                continue
+            relative = path.relative_to(root)
+            if _is_archival_doc(relative) or relative in yielded:
+                continue
             yielded.add(relative)
             yield relative, path
 
