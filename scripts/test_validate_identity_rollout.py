@@ -50,6 +50,7 @@ class IdentityRolloutPreflightTests(unittest.TestCase):
         for value in (
             "http://id.example.test",
             "https://user:secret@id.example.test",
+            "https://id.example.test:bad",
             "https://id.example.test?x=1",
             "https://id.example.test#fragment",
             "/relative",
@@ -123,6 +124,30 @@ class IdentityRolloutPreflightTests(unittest.TestCase):
 
         with self.assertRaises(PreflightError):
             validate_jwks_document(valid, signature_mode="es384-only-invalid-mode")
+
+    def test_jwks_rejects_malformed_verification_metadata_even_with_another_usable_key(self) -> None:
+        valid_key = {
+            "kid": "rsa-good",
+            "kty": "RSA",
+            "alg": "RS256",
+            "use": "sig",
+            "n": "AQAB",
+            "e": "AQAB",
+        }
+        malformed_metadata = {
+            "kid": "rsa-bad-metadata",
+            "kty": "RSA",
+            "alg": "RS256",
+            "use": ["sig"],
+            "n": "AQAB",
+            "e": "AQAB",
+        }
+
+        with self.assertRaises(PreflightError):
+            validate_jwks_document(
+                {"keys": [valid_key, malformed_metadata]},
+                signature_mode="rs256",
+            )
 
     def test_jwks_rejects_unbounded_sets(self) -> None:
         keys = [
