@@ -28,22 +28,16 @@ describe('readIdentityConfig', () => {
 
   it.each([
     'http://id.example.test',
+    'http://127.0.0.1:19090',
+    'http://localhost:19090',
+    'http://[::1]:19090',
     'ftp://id.example.test',
     'https://user:secret@id.example.test',
     'https://id.example.test?tenant=a',
     'https://id.example.test#fragment'
-  ])('rejects unsafe issuer %s', (issuer) => {
+  ])('rejects non-HTTPS or unsafe issuer %s', (issuer) => {
     expect(() => readIdentityConfig(validEnv({ IDENTITY_ISSUER: issuer }))).toThrow();
   });
-
-  it.each(['http://127.0.0.1:19090', 'http://localhost:19090'])(
-    'allows explicit loopback HTTP issuer for local/CI fixture %s',
-    (issuer) => {
-      expect(readIdentityConfig(validEnv({ IDENTITY_ISSUER: issuer })).issuer.toString()).toBe(
-        `${issuer}/`
-      );
-    }
-  );
 
   it.each([
     ['IDENTITY_CLIENT_ID', ''],
@@ -52,6 +46,18 @@ describe('readIdentityConfig', () => {
     ['IDENTITY_CLIENT_SECRET', '   ']
   ] as const)('rejects blank %s', (name, value) => {
     expect(() => readIdentityConfig(validEnv({ [name]: value }))).toThrow();
+  });
+
+  it('preserves non-blank client credentials exactly', () => {
+    const config = readIdentityConfig(
+      validEnv({
+        IDENTITY_CLIENT_ID: ' memo-web ',
+        IDENTITY_CLIENT_SECRET: ' client-secret '
+      })
+    );
+
+    expect(config.clientId).toBe(' memo-web ');
+    expect(config.clientSecret).toBe(' client-secret ');
   });
 
   it.each(['not-base64!', Buffer.alloc(31).toString('base64'), Buffer.alloc(33).toString('base64')])(
