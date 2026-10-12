@@ -1,0 +1,35 @@
+name: Identity rollout preflight
+
+on:
+  push:
+    branches:
+      - feat/identity-rollout-preflight
+    paths:
+      - 'scripts/validate_identity_rollout.py'
+      - 'scripts/test_validate_identity_rollout.py'
+      - '.github/workflows/identity-rollout-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/validate_identity_rollout.py'
+      - 'scripts/test_validate_identity_rollout.py'
+      - '.github/workflows/identity-rollout-preflight.yml'
+      - 'docs/authentication.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: identity-rollout-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Provider-neutral production identity preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Unit tests
+        run: python3 -m unittest scripts.test_validate_identity_rollout -v
