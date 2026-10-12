@@ -34,7 +34,7 @@ class ProviderNeutralAuthScannerTests(unittest.TestCase):
     def test_detects_concrete_upstream_login_provider_in_root_current_doc(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.write(root, "仕様書.txt", "Authentication supports GitHub OAuth login.\n")
+            self.write(root, "仕様書.txt", "認証はGitHub OAuthログインに対応します。\n")
 
             findings = check_paths(root)
 
