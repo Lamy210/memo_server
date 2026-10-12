@@ -22,6 +22,24 @@ class ProviderNeutralAuthScannerTests(unittest.TestCase):
 
             self.assertTrue(any(f.path == "docs/authentication.md" for f in findings))
 
+    def test_detects_vendor_fingerprint_in_contributing_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write(root, "CONTRIBUTING.md", "Do not depend directly on Ory.\n")
+
+            findings = check_paths(root)
+
+            self.assertTrue(any(f.path == "CONTRIBUTING.md" for f in findings))
+
+    def test_detects_concrete_upstream_login_provider_in_root_current_doc(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write(root, "仕様書.txt", "Authentication supports GitHub OAuth login.\n")
+
+            findings = check_paths(root)
+
+            self.assertTrue(any(f.path == "仕様書.txt" for f in findings))
+
     def test_detects_internal_camel_case_platform_identifier_without_naming_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
