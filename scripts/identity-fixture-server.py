@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import secrets
+import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -83,6 +84,7 @@ class IdentityFixtureHandler(BaseHTTPRequestHandler):
             client_id = query.get("client_id", [None])[0]
             redirect_uri = query.get("redirect_uri", [None])[0]
             response_type = query.get("response_type", [None])[0]
+            prompt = query.get("prompt", [None])[0]
             state = query.get("state", [None])[0]
             challenge = query.get("code_challenge", [None])[0]
             challenge_method = query.get("code_challenge_method", [None])[0]
@@ -92,6 +94,7 @@ class IdentityFixtureHandler(BaseHTTPRequestHandler):
                 client_id != CLIENT_ID
                 or redirect_uri != REDIRECT_URI
                 or response_type != "code"
+                or prompt != "consent"
                 or not state
                 or not challenge
                 or challenge_method != "S256"
@@ -204,14 +207,20 @@ def main():
     parser.add_argument("--client-id", required=True)
     parser.add_argument("--client-secret", required=True)
     parser.add_argument("--redirect-uri", required=True)
+    parser.add_argument("--tls-cert", required=True)
+    parser.add_argument("--tls-key", required=True)
     args = parser.parse_args()
 
-    ISSUER = f"http://127.0.0.1:{args.port}"
+    ISSUER = f"https://127.0.0.1:{args.port}"
     CLIENT_ID = args.client_id
     CLIENT_SECRET = args.client_secret
     REDIRECT_URI = args.redirect_uri
 
-    ThreadingHTTPServer(("127.0.0.1", args.port), IdentityFixtureHandler).serve_forever()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), IdentityFixtureHandler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile=args.tls_cert, keyfile=args.tls_key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.serve_forever()
 
 
 if __name__ == "__main__":
