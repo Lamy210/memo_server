@@ -8,7 +8,10 @@ use futures::future::LocalBoxFuture;
 
 use crate::{
     error::{AppError, AppResult},
-    infrastructure::auth::{AuthService, AuthenticatedIdentity},
+    infrastructure::{
+        auth::{AuthService, AuthenticatedIdentity},
+        auth_observability::observe_authentication_result,
+    },
 };
 
 const DEVELOPMENT_USER_HEADER: &str = "x-development-user-id";
@@ -29,21 +32,26 @@ impl FromRequest for AuthenticatedUser {
         );
 
         Box::pin(async move {
-            let auth_service = auth_service.ok_or_else(|| {
-                AppError::InternalServerError("Authentication service is not configured".into())
-            })?;
-            let authorization = authorization?;
-            let development_user_id = development_user_id?;
-            let bearer_token = authorization
-                .as_deref()
-                .map(parse_bearer_token)
-                .transpose()?;
+            let result = async {
+                let auth_service = auth_service.ok_or_else(|| {
+                    AppError::InternalServerError("Authentication service is not configured".into())
+                })?;
+                let authorization = authorization?;
+                let development_user_id = development_user_id?;
+                let bearer_token = authorization
+                    .as_deref()
+                    .map(parse_bearer_token)
+                    .transpose()?;
 
-            let identity = auth_service
-                .authenticate(bearer_token, development_user_id.as_deref())
-                .await?;
+                let identity = auth_service
+                    .authenticate(bearer_token, development_user_id.as_deref())
+                    .await?;
 
-            Ok(Self(identity))
+                Ok(Self(identity))
+            }
+            .await;
+
+            observe_authentication_result(result)
         })
     }
 }
