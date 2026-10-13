@@ -87,6 +87,9 @@ fn parse_bearer_token(value: &str) -> AppResult<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::auth_observability::{
+        classify_authentication_result, AuthVerificationOutcome,
+    };
 
     #[test]
     fn single_authentication_header_is_accepted() {
@@ -132,5 +135,43 @@ mod tests {
             parse_bearer_token("Bearer one two"),
             Err(AppError::Unauthorized(_))
         ));
+    }
+
+    #[test]
+    fn authentication_observability_uses_fixed_secret_free_categories() {
+        let success: AppResult<()> = Ok(());
+        assert_eq!(
+            classify_authentication_result(&success),
+            AuthVerificationOutcome::Success
+        );
+
+        let secret = "sensitive-token-shaped-detail";
+        let unauthorized: AppResult<()> = Err(AppError::Unauthorized(secret.into()));
+        let unavailable: AppResult<()> = Err(AppError::ServiceUnavailable(secret.into()));
+        let internal: AppResult<()> = Err(AppError::InternalServerError(secret.into()));
+
+        let cases = [
+            (
+                classify_authentication_result(&unauthorized),
+                AuthVerificationOutcome::Unauthorized,
+                "unauthorized",
+            ),
+            (
+                classify_authentication_result(&unavailable),
+                AuthVerificationOutcome::DependencyUnavailable,
+                "dependency_unavailable",
+            ),
+            (
+                classify_authentication_result(&internal),
+                AuthVerificationOutcome::InternalError,
+                "internal_error",
+            ),
+        ];
+
+        for (actual, expected, label) in cases {
+            assert_eq!(actual, expected);
+            assert_eq!(actual.label(), label);
+            assert!(!actual.label().contains(secret));
+        }
     }
 }
