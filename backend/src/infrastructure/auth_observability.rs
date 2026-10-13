@@ -2,6 +2,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{AppError, AppResult};
 
+const METRICS_LOG_EVERY_ATTEMPTS: u64 = 100;
+static AUTH_OBSERVABILITY: AuthObservability = AuthObservability::new();
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuthVerificationOutcome {
     Success,
@@ -50,7 +53,8 @@ impl AuthObservability {
     }
 
     pub(crate) fn record<T>(&self, result: &AppResult<T>) {
-        match classify_authentication_result(result) {
+        let outcome = classify_authentication_result(result);
+        match outcome {
             AuthVerificationOutcome::Success => {
                 self.success.fetch_add(1, Ordering::Relaxed);
             }
@@ -64,7 +68,25 @@ impl AuthObservability {
                 self.internal_error.fetch_add(1, Ordering::Relaxed);
             }
         }
-        self.total.fetch_add(1, Ordering::Relaxed);
+
+        let total = self.total.fetch_add(1, Ordering::Relaxed) + 1;
+        if total.is_multiple_of(METRICS_LOG_EVERY_ATTEMPTS) {
+            let stats = self.snapshot();
+            log::info!(
+                "auth verification aggregate: last_result={} total={} success={} unauthorized={} dependency_unavailable={} internal_error={}",
+                outcome.label(),
+                stats.total,
+                stats.success,
+                stats.unauthorized,
+                stats.dependency_unavailable,
+                stats.internal_error
+            );
+        }
+    }
+
+    pub(crate) fn record_and_return<T>(&self, result: AppResult<T>) -> AppResult<T> {
+        self.record(&result);
+        result
     }
 
     pub(crate) fn snapshot(&self) -> AuthVerificationStats {
@@ -76,6 +98,10 @@ impl AuthObservability {
             internal_error: self.internal_error.load(Ordering::Relaxed),
         }
     }
+}
+
+pub(crate) fn observe_authentication_result<T>(result: AppResult<T>) -> AppResult<T> {
+    AUTH_OBSERVABILITY.record_and_return(result)
 }
 
 pub(crate) fn classify_authentication_result<T>(result: &AppResult<T>) -> AuthVerificationOutcome {
