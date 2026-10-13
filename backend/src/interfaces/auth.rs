@@ -88,7 +88,8 @@ fn parse_bearer_token(value: &str) -> AppResult<&str> {
 mod tests {
     use super::*;
     use crate::infrastructure::auth_observability::{
-        classify_authentication_result, AuthVerificationOutcome,
+        classify_authentication_result, AuthObservability, AuthVerificationOutcome,
+        AuthVerificationStats,
     };
 
     #[test]
@@ -173,5 +174,32 @@ mod tests {
             assert_eq!(actual.label(), label);
             assert!(!actual.label().contains(secret));
         }
+    }
+
+    #[test]
+    fn authentication_observability_aggregates_fixed_outcomes() {
+        let observability = AuthObservability::new();
+        let secret = "sensitive-token-shaped-detail";
+
+        let success: AppResult<()> = Ok(());
+        let unauthorized: AppResult<()> = Err(AppError::Unauthorized(secret.into()));
+        let unavailable: AppResult<()> = Err(AppError::ServiceUnavailable(secret.into()));
+        let internal: AppResult<()> = Err(AppError::InternalServerError(secret.into()));
+
+        observability.record(&success);
+        observability.record(&unauthorized);
+        observability.record(&unavailable);
+        observability.record(&internal);
+
+        assert_eq!(
+            observability.snapshot(),
+            AuthVerificationStats {
+                total: 4,
+                success: 1,
+                unauthorized: 1,
+                dependency_unavailable: 1,
+                internal_error: 1,
+            }
+        );
     }
 }
