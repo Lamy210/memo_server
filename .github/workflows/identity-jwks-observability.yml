@@ -1,0 +1,52 @@
+name: Identity JWKS observability
+
+on:
+  pull_request:
+    paths:
+      - 'backend/src/infrastructure/auth.rs'
+      - 'backend/src/infrastructure/auth_observability.rs'
+      - 'docs/identity-auth-observability.md'
+      - 'docs/identity-key-rotation-rollout.md'
+      - '.github/workflows/identity-jwks-observability.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/src/infrastructure/auth.rs'
+      - 'backend/src/infrastructure/auth_observability.rs'
+      - 'docs/identity-auth-observability.md'
+      - 'docs/identity-key-rotation-rollout.md'
+      - '.github/workflows/identity-jwks-observability.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure Rust toolchain
+        run: rustup component add rustfmt clippy
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: JWKS observability contract
+        run: >-
+          cargo test --locked --lib
+          infrastructure::auth_observability::tests::jwks_observability_
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
