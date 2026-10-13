@@ -112,3 +112,34 @@ pub(crate) fn classify_authentication_result<T>(result: &AppResult<T>) -> AuthVe
         Err(_) => AuthVerificationOutcome::InternalError,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{JwksRefreshOutcome, JwksRefreshTrigger};
+
+    #[test]
+    fn jwks_observability_uses_fixed_secret_free_categories() {
+        let secret = "https://identity.internal.example/jwks?token=secret";
+        let triggers = [
+            (JwksRefreshTrigger::Scheduled, "scheduled"),
+            (JwksRefreshTrigger::UnknownKid, "unknown_kid"),
+            (JwksRefreshTrigger::InvalidSignature, "invalid_signature"),
+        ];
+        let outcomes = [
+            (JwksRefreshOutcome::Success, "success"),
+            (JwksRefreshOutcome::StaleFallback, "stale_fallback"),
+            (JwksRefreshOutcome::Throttled, "throttled"),
+            (JwksRefreshOutcome::Unavailable, "unavailable"),
+            (JwksRefreshOutcome::InvalidResponse, "invalid_response"),
+        ];
+
+        for (trigger, expected) in triggers {
+            assert_eq!(trigger.label(), expected);
+            assert!(!trigger.label().contains(secret));
+        }
+        for (outcome, expected) in outcomes {
+            assert_eq!(outcome.label(), expected);
+            assert!(!outcome.label().contains(secret));
+        }
+    }
+}
