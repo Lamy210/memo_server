@@ -6,6 +6,12 @@ mod error {
     pub use memo_app_backend::error::*;
 }
 
+mod infrastructure {
+    pub(crate) mod auth_observability {
+        include!("../src/infrastructure/auth_observability.rs");
+    }
+}
+
 mod auth_under_test {
     include!("../src/infrastructure/auth.rs");
 
