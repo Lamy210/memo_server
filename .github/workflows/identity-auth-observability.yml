@@ -46,7 +46,7 @@ jobs:
       - name: Authentication observability contract
         run: >-
           cargo test --locked --lib
-          interfaces::auth::tests::authentication_observability_uses_fixed_secret_free_categories
+          interfaces::auth::tests::authentication_observability_
 
       - name: Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
