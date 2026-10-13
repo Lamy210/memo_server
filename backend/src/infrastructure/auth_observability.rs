@@ -153,7 +153,10 @@ pub(crate) fn classify_authentication_result<T>(result: &AppResult<T>) -> AuthVe
 
 #[cfg(test)]
 mod tests {
-    use super::{JwksRefreshOutcome, JwksRefreshTrigger};
+    use super::{
+        JwksObservability, JwksRefreshOutcome, JwksRefreshStats, JwksRefreshTrigger,
+    };
+    use crate::error::{AppError, AppResult};
 
     #[test]
     fn jwks_observability_uses_fixed_secret_free_categories() {
@@ -179,5 +182,62 @@ mod tests {
             assert_eq!(outcome.label(), expected);
             assert!(!outcome.label().contains(secret));
         }
+    }
+
+    #[test]
+    fn jwks_observability_aggregates_fixed_triggers_and_outcomes() {
+        let observability = JwksObservability::new();
+
+        observability.record(JwksRefreshTrigger::Scheduled, JwksRefreshOutcome::Success);
+        observability.record(
+            JwksRefreshTrigger::UnknownKid,
+            JwksRefreshOutcome::StaleFallback,
+        );
+        observability.record(
+            JwksRefreshTrigger::UnknownKid,
+            JwksRefreshOutcome::Throttled,
+        );
+        observability.record(
+            JwksRefreshTrigger::InvalidSignature,
+            JwksRefreshOutcome::Unavailable,
+        );
+        observability.record(
+            JwksRefreshTrigger::InvalidSignature,
+            JwksRefreshOutcome::InvalidResponse,
+        );
+
+        assert_eq!(
+            observability.snapshot(),
+            JwksRefreshStats {
+                total: 5,
+                scheduled: 1,
+                unknown_kid: 2,
+                invalid_signature: 2,
+                success: 1,
+                stale_fallback: 1,
+                throttled: 1,
+                unavailable: 1,
+                invalid_response: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn jwks_observability_preserves_the_original_result() {
+        let observability = JwksObservability::new();
+        let secret = "sensitive-jwks-detail";
+        let result: AppResult<u8> = Err(AppError::ServiceUnavailable(secret.into()));
+
+        let returned = observability.record_and_return(
+            JwksRefreshTrigger::UnknownKid,
+            JwksRefreshOutcome::Unavailable,
+            result,
+        );
+
+        assert!(matches!(
+            returned,
+            Err(AppError::ServiceUnavailable(message)) if message == secret
+        ));
+        assert_eq!(observability.snapshot().total, 1);
     }
 }
