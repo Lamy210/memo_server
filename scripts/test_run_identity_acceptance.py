@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 from scripts.run_identity_acceptance import (
     AcceptanceConfig,
+    AcceptanceEvidence,
     AcceptancePhase,
     build_verifier_env,
     main,
@@ -34,6 +35,35 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
             timeout_seconds=7.5,
         )
 
+    def evidence(self) -> AcceptanceEvidence:
+        return AcceptanceEvidence(
+            browser_flow_validated=True,
+            rotation_rollback_validated=True,
+            monitoring_validated=True,
+        )
+
+    def test_incomplete_operator_evidence_stops_before_network_and_token_verifier(self) -> None:
+        preflight = Mock(return_value={"status": "ok"})
+        verifier = Mock(return_value=0)
+        incomplete = AcceptanceEvidence(
+            browser_flow_validated=True,
+            rotation_rollback_validated=False,
+            monitoring_validated=True,
+        )
+
+        result = run_acceptance(
+            self.config(),
+            incomplete,
+            preflight_fn=preflight,
+            verifier_fn=verifier,
+        )
+
+        self.assertEqual(result.phase, AcceptancePhase.OPERATOR_EVIDENCE)
+        self.assertFalse(result.ready)
+        self.assertFalse(result.rotation_rollback_validated)
+        preflight.assert_not_called()
+        verifier.assert_not_called()
+
     def test_preflight_failure_stops_before_token_verifier(self) -> None:
         verifier = Mock(return_value=0)
 
@@ -42,6 +72,7 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
 
         result = run_acceptance(
             self.config(),
+            self.evidence(),
             preflight_fn=failing_preflight,
             verifier_fn=verifier,
         )
@@ -66,7 +97,12 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
             self.assertEqual(config, self.config())
             return 0
 
-        result = run_acceptance(self.config(), preflight_fn=preflight, verifier_fn=verifier)
+        result = run_acceptance(
+            self.config(),
+            self.evidence(),
+            preflight_fn=preflight,
+            verifier_fn=verifier,
+        )
 
         self.assertEqual(calls, ["preflight", "verifier"])
         self.assertTrue(result.ready)
@@ -74,6 +110,9 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         rendered = result.render()
         self.assertEqual(
             rendered,
+            "identity_acceptance.browser_flow=true\n"
+            "identity_acceptance.rotation_rollback=true\n"
+            "identity_acceptance.monitoring=true\n"
             "identity_acceptance.issuer_preflight=true\n"
             "identity_acceptance.access_token=true\n"
             "identity_acceptance.ready=true",
