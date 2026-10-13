@@ -4,6 +4,7 @@ use crate::error::{AppError, AppResult};
 
 const METRICS_LOG_EVERY_ATTEMPTS: u64 = 100;
 static AUTH_OBSERVABILITY: AuthObservability = AuthObservability::new();
+static JWKS_OBSERVABILITY: JwksObservability = JwksObservability::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuthVerificationOutcome {
@@ -71,12 +72,37 @@ pub(crate) struct AuthVerificationStats {
     pub(crate) internal_error: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct JwksRefreshStats {
+    pub(crate) total: u64,
+    pub(crate) scheduled: u64,
+    pub(crate) unknown_kid: u64,
+    pub(crate) invalid_signature: u64,
+    pub(crate) success: u64,
+    pub(crate) stale_fallback: u64,
+    pub(crate) throttled: u64,
+    pub(crate) unavailable: u64,
+    pub(crate) invalid_response: u64,
+}
+
 pub(crate) struct AuthObservability {
     total: AtomicU64,
     success: AtomicU64,
     unauthorized: AtomicU64,
     dependency_unavailable: AtomicU64,
     internal_error: AtomicU64,
+}
+
+pub(crate) struct JwksObservability {
+    total: AtomicU64,
+    scheduled: AtomicU64,
+    unknown_kid: AtomicU64,
+    invalid_signature: AtomicU64,
+    success: AtomicU64,
+    stale_fallback: AtomicU64,
+    throttled: AtomicU64,
+    unavailable: AtomicU64,
+    invalid_response: AtomicU64,
 }
 
 impl AuthObservability {
@@ -138,8 +164,108 @@ impl AuthObservability {
     }
 }
 
+impl JwksObservability {
+    pub(crate) const fn new() -> Self {
+        Self {
+            total: AtomicU64::new(0),
+            scheduled: AtomicU64::new(0),
+            unknown_kid: AtomicU64::new(0),
+            invalid_signature: AtomicU64::new(0),
+            success: AtomicU64::new(0),
+            stale_fallback: AtomicU64::new(0),
+            throttled: AtomicU64::new(0),
+            unavailable: AtomicU64::new(0),
+            invalid_response: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn record(&self, trigger: JwksRefreshTrigger, outcome: JwksRefreshOutcome) {
+        match trigger {
+            JwksRefreshTrigger::Scheduled => {
+                self.scheduled.fetch_add(1, Ordering::Relaxed);
+            }
+            JwksRefreshTrigger::UnknownKid => {
+                self.unknown_kid.fetch_add(1, Ordering::Relaxed);
+            }
+            JwksRefreshTrigger::InvalidSignature => {
+                self.invalid_signature.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        match outcome {
+            JwksRefreshOutcome::Success => {
+                self.success.fetch_add(1, Ordering::Relaxed);
+            }
+            JwksRefreshOutcome::StaleFallback => {
+                self.stale_fallback.fetch_add(1, Ordering::Relaxed);
+            }
+            JwksRefreshOutcome::Throttled => {
+                self.throttled.fetch_add(1, Ordering::Relaxed);
+            }
+            JwksRefreshOutcome::Unavailable => {
+                self.unavailable.fetch_add(1, Ordering::Relaxed);
+            }
+            JwksRefreshOutcome::InvalidResponse => {
+                self.invalid_response.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.total.fetch_add(1, Ordering::Relaxed);
+
+        match outcome {
+            JwksRefreshOutcome::Success => log::info!(
+                "auth jwks refresh: trigger={} outcome={}",
+                trigger.label(),
+                outcome.label()
+            ),
+            JwksRefreshOutcome::Throttled => log::debug!(
+                "auth jwks refresh: trigger={} outcome={}",
+                trigger.label(),
+                outcome.label()
+            ),
+            JwksRefreshOutcome::StaleFallback
+            | JwksRefreshOutcome::Unavailable
+            | JwksRefreshOutcome::InvalidResponse => log::warn!(
+                "auth jwks refresh: trigger={} outcome={}",
+                trigger.label(),
+                outcome.label()
+            ),
+        }
+    }
+
+    pub(crate) fn record_and_return<T>(
+        &self,
+        trigger: JwksRefreshTrigger,
+        outcome: JwksRefreshOutcome,
+        result: AppResult<T>,
+    ) -> AppResult<T> {
+        self.record(trigger, outcome);
+        result
+    }
+
+    pub(crate) fn snapshot(&self) -> JwksRefreshStats {
+        JwksRefreshStats {
+            total: self.total.load(Ordering::Relaxed),
+            scheduled: self.scheduled.load(Ordering::Relaxed),
+            unknown_kid: self.unknown_kid.load(Ordering::Relaxed),
+            invalid_signature: self.invalid_signature.load(Ordering::Relaxed),
+            success: self.success.load(Ordering::Relaxed),
+            stale_fallback: self.stale_fallback.load(Ordering::Relaxed),
+            throttled: self.throttled.load(Ordering::Relaxed),
+            unavailable: self.unavailable.load(Ordering::Relaxed),
+            invalid_response: self.invalid_response.load(Ordering::Relaxed),
+        }
+    }
+}
+
 pub(crate) fn observe_authentication_result<T>(result: AppResult<T>) -> AppResult<T> {
     AUTH_OBSERVABILITY.record_and_return(result)
+}
+
+pub(crate) fn observe_jwks_refresh<T>(
+    trigger: JwksRefreshTrigger,
+    outcome: JwksRefreshOutcome,
+    result: AppResult<T>,
+) -> AppResult<T> {
+    JWKS_OBSERVABILITY.record_and_return(trigger, outcome, result)
 }
 
 pub(crate) fn classify_authentication_result<T>(result: &AppResult<T>) -> AuthVerificationOutcome {
