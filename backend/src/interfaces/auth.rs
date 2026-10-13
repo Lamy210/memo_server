@@ -202,4 +202,28 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn authentication_observability_preserves_the_original_result() {
+        let observability = AuthObservability::new();
+        let secret = "sensitive-token-shaped-detail";
+        let result: AppResult<u8> = Err(AppError::Unauthorized(secret.into()));
+
+        let returned = observability.record_and_return(result);
+
+        assert!(matches!(
+            &returned,
+            Err(AppError::Unauthorized(message)) if message == secret
+        ));
+        assert_eq!(
+            observability.snapshot(),
+            AuthVerificationStats {
+                total: 1,
+                success: 0,
+                unauthorized: 1,
+                dependency_unavailable: 0,
+                internal_error: 0,
+            }
+        );
+    }
 }
