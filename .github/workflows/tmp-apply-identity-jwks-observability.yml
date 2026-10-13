@@ -1,5 +1,6 @@
 name: Temporary apply identity JWKS observability patch
 
+# Temporary branch-local gate; removed after the verified auth.rs patch is committed.
 on:
   push:
     branches:
