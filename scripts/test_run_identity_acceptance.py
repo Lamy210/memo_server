@@ -81,6 +81,25 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         self.assertFalse(result.ready)
         verifier.assert_not_called()
 
+    def test_unexpected_failure_is_normalized_without_dynamic_details(self) -> None:
+        verifier = Mock(return_value=0)
+        sensitive_detail = "https://id.example.test/jwks?credential=must-not-leak"
+
+        def exploding_preflight(**_kwargs):
+            raise RuntimeError(sensitive_detail)
+
+        result = run_acceptance(
+            self.config(),
+            self.evidence(),
+            preflight_fn=exploding_preflight,
+            verifier_fn=verifier,
+        )
+
+        self.assertEqual(result.phase, AcceptancePhase.INTERNAL)
+        self.assertFalse(result.ready)
+        self.assertNotIn(sensitive_detail, result.render())
+        verifier.assert_not_called()
+
     def test_success_runs_preflight_before_verifier_and_returns_non_identifying_evidence(self) -> None:
         calls: list[str] = []
 
