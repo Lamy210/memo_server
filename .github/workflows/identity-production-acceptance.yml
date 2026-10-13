@@ -1,0 +1,47 @@
+name: Identity production acceptance
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/run_identity_acceptance.py'
+      - 'scripts/test_run_identity_acceptance.py'
+      - 'scripts/validate_identity_rollout.py'
+      - 'scripts/test_validate_identity_rollout.py'
+      - 'backend/src/bin/verify_identity_access_token.rs'
+      - 'docs/identity-production-acceptance.md'
+      - '.github/workflows/identity-production-acceptance.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/run_identity_acceptance.py'
+      - 'scripts/test_run_identity_acceptance.py'
+      - 'scripts/validate_identity_rollout.py'
+      - 'scripts/test_validate_identity_rollout.py'
+      - 'backend/src/bin/verify_identity_access_token.rs'
+      - 'docs/identity-production-acceptance.md'
+      - '.github/workflows/identity-production-acceptance.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: identity-production-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Provider-neutral production acceptance contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python contract tests
+        run: |
+          python3 -m unittest scripts.test_validate_identity_rollout -v
+          python3 -m unittest scripts.test_run_identity_acceptance -v
+
+      - name: Rust verifier contract tests
+        run: cargo test --locked --manifest-path backend/Cargo.toml --bin verify_identity_access_token
