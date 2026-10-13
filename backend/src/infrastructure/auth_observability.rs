@@ -153,9 +153,7 @@ pub(crate) fn classify_authentication_result<T>(result: &AppResult<T>) -> AuthVe
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        JwksObservability, JwksRefreshOutcome, JwksRefreshStats, JwksRefreshTrigger,
-    };
+    use super::{JwksObservability, JwksRefreshOutcome, JwksRefreshStats, JwksRefreshTrigger};
     use crate::error::{AppError, AppResult};
 
     #[test]
