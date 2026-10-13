@@ -44,6 +44,7 @@ class SafeArgumentParser(argparse.ArgumentParser):
 
 class AcceptancePhase(Enum):
     USAGE = "usage"
+    OPERATOR_EVIDENCE = "operator_evidence"
     ISSUER_PREFLIGHT = "issuer_preflight"
     ACCESS_TOKEN = "access_token"
     COMPLETE = "complete"
@@ -61,8 +62,26 @@ class AcceptanceConfig:
 
 
 @dataclass(frozen=True)
+class AcceptanceEvidence:
+    browser_flow_validated: bool
+    rotation_rollback_validated: bool
+    monitoring_validated: bool
+
+    @property
+    def complete(self) -> bool:
+        return (
+            self.browser_flow_validated
+            and self.rotation_rollback_validated
+            and self.monitoring_validated
+        )
+
+
+@dataclass(frozen=True)
 class AcceptanceResult:
     phase: AcceptancePhase
+    browser_flow_validated: bool | None
+    rotation_rollback_validated: bool | None
+    monitoring_validated: bool | None
     issuer_preflight: bool | None
     access_token: bool | None
     ready: bool
@@ -75,6 +94,10 @@ class AcceptanceResult:
 
     def render(self) -> str:
         lines = [
+            f"identity_acceptance.browser_flow={self._status(self.browser_flow_validated)}",
+            "identity_acceptance.rotation_rollback="
+            f"{self._status(self.rotation_rollback_validated)}",
+            f"identity_acceptance.monitoring={self._status(self.monitoring_validated)}",
             f"identity_acceptance.issuer_preflight={self._status(self.issuer_preflight)}",
             f"identity_acceptance.access_token={self._status(self.access_token)}",
             f"identity_acceptance.ready={'true' if self.ready else 'false'}",
@@ -130,12 +153,41 @@ def run_verifier(
     return int(getattr(completed, "returncode", 1))
 
 
+def _result(
+    *,
+    phase: AcceptancePhase,
+    evidence: AcceptanceEvidence,
+    issuer_preflight: bool | None,
+    access_token: bool | None,
+    ready: bool,
+) -> AcceptanceResult:
+    return AcceptanceResult(
+        phase=phase,
+        browser_flow_validated=evidence.browser_flow_validated,
+        rotation_rollback_validated=evidence.rotation_rollback_validated,
+        monitoring_validated=evidence.monitoring_validated,
+        issuer_preflight=issuer_preflight,
+        access_token=access_token,
+        ready=ready,
+    )
+
+
 def run_acceptance(
     config: AcceptanceConfig,
+    evidence: AcceptanceEvidence,
     *,
     preflight_fn: Callable[..., object] = run_preflight,
     verifier_fn: Callable[[AcceptanceConfig], int] = run_verifier,
 ) -> AcceptanceResult:
+    if not evidence.complete:
+        return _result(
+            phase=AcceptancePhase.OPERATOR_EVIDENCE,
+            evidence=evidence,
+            issuer_preflight=None,
+            access_token=None,
+            ready=False,
+        )
+
     try:
         preflight_fn(
             issuer=config.issuer,
@@ -144,23 +196,26 @@ def run_acceptance(
             timeout_seconds=config.timeout_seconds,
         )
     except PreflightError:
-        return AcceptanceResult(
+        return _result(
             phase=AcceptancePhase.ISSUER_PREFLIGHT,
+            evidence=evidence,
             issuer_preflight=False,
             access_token=None,
             ready=False,
         )
 
     if verifier_fn(config) != 0:
-        return AcceptanceResult(
+        return _result(
             phase=AcceptancePhase.ACCESS_TOKEN,
+            evidence=evidence,
             issuer_preflight=True,
             access_token=False,
             ready=False,
         )
 
-    return AcceptanceResult(
+    return _result(
         phase=AcceptancePhase.COMPLETE,
+        evidence=evidence,
         issuer_preflight=True,
         access_token=True,
         ready=True,
@@ -189,9 +244,7 @@ def _positive_finite_float(value: str) -> float:
 
 def _parser() -> SafeArgumentParser:
     parser = SafeArgumentParser(
-        description=(
-            "Run provider-neutral production identity issuer/JWKS and access-token acceptance checks"
-        )
+        description="Run the provider-neutral production identity acceptance gate"
     )
     parser.add_argument("--issuer", required=True)
     parser.add_argument("--jwks-uri", required=True)
@@ -208,12 +261,18 @@ def _parser() -> SafeArgumentParser:
         type=_positive_finite_float,
         default=10.0,
     )
+    parser.add_argument("--browser-flow-validated", action="store_true")
+    parser.add_argument("--rotation-rollback-validated", action="store_true")
+    parser.add_argument("--monitoring-validated", action="store_true")
     return parser
 
 
 def _usage_failure() -> AcceptanceResult:
     return AcceptanceResult(
         phase=AcceptancePhase.USAGE,
+        browser_flow_validated=None,
+        rotation_rollback_validated=None,
+        monitoring_validated=None,
         issuer_preflight=None,
         access_token=None,
         ready=False,
@@ -236,7 +295,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         max_access_token_lifetime_seconds=args.max_access_token_lifetime_seconds,
         timeout_seconds=args.timeout_seconds,
     )
-    result = run_acceptance(config)
+    evidence = AcceptanceEvidence(
+        browser_flow_validated=args.browser_flow_validated,
+        rotation_rollback_validated=args.rotation_rollback_validated,
+        monitoring_validated=args.monitoring_validated,
+    )
+    result = run_acceptance(config, evidence)
     print(result.render())
     return 0 if result.ready else 1
 
