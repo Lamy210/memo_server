@@ -30,6 +30,7 @@ The acceptance runner therefore:
 - passes stdin directly to the existing Rust verifier, which applies the bounded-input and zeroization behavior documented in `identity-access-token-preflight.md`;
 - removes common inherited access-token environment variable names before launching the verifier;
 - suppresses child verifier output and emits only stable acceptance booleans/failure phases;
+- normalizes unexpected preflight exceptions to a fixed `internal` phase instead of echoing dynamic exception details;
 - never emits issuer URLs, JWKS URLs, audience values, token contents, claims, subjects, `kid`, or provider-specific diagnostics.
 
 Disable shell tracing before obtaining or piping a token. Never place a production token in a command argument, CI variable dump, issue, pull request, chat message, or shell history.
@@ -125,6 +126,7 @@ Failure exits non-zero. Unexecuted phases are reported as `not_run`, and one sta
 identity_acceptance.failure_phase=operator_evidence
 identity_acceptance.failure_phase=issuer_preflight
 identity_acceptance.failure_phase=access_token
+identity_acceptance.failure_phase=internal
 identity_acceptance.failure_phase=usage
 ```
 
@@ -134,7 +136,7 @@ The order is fail-closed:
 2. issuer/discovery/JWKS preflight;
 3. real access-token verification.
 
-A failure in an earlier phase prevents later phases from running, so a real token is not unnecessarily consumed when rollout evidence or issuer/JWKS acceptance is already incomplete.
+An unexpected internal failure also fails closed and emits only the fixed `internal` category. A failure in an earlier phase prevents later phases from running, so a real token is not unnecessarily consumed when rollout evidence or issuer/JWKS acceptance is already incomplete.
 
 ## What `ready=true` does and does not mean
 
