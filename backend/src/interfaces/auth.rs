@@ -8,7 +8,10 @@ use futures::future::LocalBoxFuture;
 
 use crate::{
     error::{AppError, AppResult},
-    infrastructure::auth::{AuthService, AuthenticatedIdentity},
+    infrastructure::{
+        auth::{AuthService, AuthenticatedIdentity},
+        auth_observability::observe_authentication_result,
+    },
 };
 
 const DEVELOPMENT_USER_HEADER: &str = "x-development-user-id";
@@ -29,21 +32,26 @@ impl FromRequest for AuthenticatedUser {
         );
 
         Box::pin(async move {
-            let auth_service = auth_service.ok_or_else(|| {
-                AppError::InternalServerError("Authentication service is not configured".into())
-            })?;
-            let authorization = authorization?;
-            let development_user_id = development_user_id?;
-            let bearer_token = authorization
-                .as_deref()
-                .map(parse_bearer_token)
-                .transpose()?;
+            let result = async {
+                let auth_service = auth_service.ok_or_else(|| {
+                    AppError::InternalServerError("Authentication service is not configured".into())
+                })?;
+                let authorization = authorization?;
+                let development_user_id = development_user_id?;
+                let bearer_token = authorization
+                    .as_deref()
+                    .map(parse_bearer_token)
+                    .transpose()?;
 
-            let identity = auth_service
-                .authenticate(bearer_token, development_user_id.as_deref())
-                .await?;
+                let identity = auth_service
+                    .authenticate(bearer_token, development_user_id.as_deref())
+                    .await?;
 
-            Ok(Self(identity))
+                Ok(Self(identity))
+            }
+            .await;
+
+            observe_authentication_result(result)
         })
     }
 }
@@ -87,6 +95,10 @@ fn parse_bearer_token(value: &str) -> AppResult<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::auth_observability::{
+        classify_authentication_result, AuthObservability, AuthVerificationOutcome,
+        AuthVerificationStats,
+    };
 
     #[test]
     fn single_authentication_header_is_accepted() {
@@ -132,5 +144,94 @@ mod tests {
             parse_bearer_token("Bearer one two"),
             Err(AppError::Unauthorized(_))
         ));
+    }
+
+    #[test]
+    fn authentication_observability_uses_fixed_secret_free_categories() {
+        let success: AppResult<()> = Ok(());
+        assert_eq!(
+            classify_authentication_result(&success),
+            AuthVerificationOutcome::Success
+        );
+
+        let secret = "sensitive-token-shaped-detail";
+        let unauthorized: AppResult<()> = Err(AppError::Unauthorized(secret.into()));
+        let unavailable: AppResult<()> = Err(AppError::ServiceUnavailable(secret.into()));
+        let internal: AppResult<()> = Err(AppError::InternalServerError(secret.into()));
+
+        let cases = [
+            (
+                classify_authentication_result(&unauthorized),
+                AuthVerificationOutcome::Unauthorized,
+                "unauthorized",
+            ),
+            (
+                classify_authentication_result(&unavailable),
+                AuthVerificationOutcome::DependencyUnavailable,
+                "dependency_unavailable",
+            ),
+            (
+                classify_authentication_result(&internal),
+                AuthVerificationOutcome::InternalError,
+                "internal_error",
+            ),
+        ];
+
+        for (actual, expected, label) in cases {
+            assert_eq!(actual, expected);
+            assert_eq!(actual.label(), label);
+            assert!(!actual.label().contains(secret));
+        }
+    }
+
+    #[test]
+    fn authentication_observability_aggregates_fixed_outcomes() {
+        let observability = AuthObservability::new();
+        let secret = "sensitive-token-shaped-detail";
+
+        let success: AppResult<()> = Ok(());
+        let unauthorized: AppResult<()> = Err(AppError::Unauthorized(secret.into()));
+        let unavailable: AppResult<()> = Err(AppError::ServiceUnavailable(secret.into()));
+        let internal: AppResult<()> = Err(AppError::InternalServerError(secret.into()));
+
+        observability.record(&success);
+        observability.record(&unauthorized);
+        observability.record(&unavailable);
+        observability.record(&internal);
+
+        assert_eq!(
+            observability.snapshot(),
+            AuthVerificationStats {
+                total: 4,
+                success: 1,
+                unauthorized: 1,
+                dependency_unavailable: 1,
+                internal_error: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn authentication_observability_preserves_the_original_result() {
+        let observability = AuthObservability::new();
+        let secret = "sensitive-token-shaped-detail";
+        let result: AppResult<u8> = Err(AppError::Unauthorized(secret.into()));
+
+        let returned = observability.record_and_return(result);
+
+        assert!(matches!(
+            &returned,
+            Err(AppError::Unauthorized(message)) if message == secret
+        ));
+        assert_eq!(
+            observability.snapshot(),
+            AuthVerificationStats {
+                total: 1,
+                success: 0,
+                unauthorized: 1,
+                dependency_unavailable: 0,
+                internal_error: 0,
+            }
+        );
     }
 }

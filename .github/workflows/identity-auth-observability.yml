@@ -1,0 +1,52 @@
+name: Identity auth observability
+
+on:
+  pull_request:
+    paths:
+      - 'backend/src/interfaces/auth.rs'
+      - 'backend/src/infrastructure/auth_observability.rs'
+      - 'backend/src/infrastructure/mod.rs'
+      - 'docs/identity-auth-observability.md'
+      - '.github/workflows/identity-auth-observability.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/src/interfaces/auth.rs'
+      - 'backend/src/infrastructure/auth_observability.rs'
+      - 'backend/src/infrastructure/mod.rs'
+      - 'docs/identity-auth-observability.md'
+      - '.github/workflows/identity-auth-observability.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure Rust toolchain
+        run: rustup component add rustfmt clippy
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Authentication observability contract
+        run: >-
+          cargo test --locked --lib
+          interfaces::auth::tests::authentication_observability_
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
