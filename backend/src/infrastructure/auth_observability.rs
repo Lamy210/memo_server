@@ -209,24 +209,52 @@ impl JwksObservability {
             }
         }
         self.total.fetch_add(1, Ordering::Relaxed);
+        let stats = self.snapshot();
 
         match outcome {
             JwksRefreshOutcome::Success => log::info!(
-                "auth jwks refresh: trigger={} outcome={}",
+                "auth jwks refresh: trigger={} outcome={} total={} scheduled={} unknown_kid={} invalid_signature={} success={} stale_fallback={} throttled={} unavailable={} invalid_response={}",
                 trigger.label(),
-                outcome.label()
+                outcome.label(),
+                stats.total,
+                stats.scheduled,
+                stats.unknown_kid,
+                stats.invalid_signature,
+                stats.success,
+                stats.stale_fallback,
+                stats.throttled,
+                stats.unavailable,
+                stats.invalid_response
             ),
             JwksRefreshOutcome::Throttled => log::debug!(
-                "auth jwks refresh: trigger={} outcome={}",
+                "auth jwks refresh: trigger={} outcome={} total={} scheduled={} unknown_kid={} invalid_signature={} success={} stale_fallback={} throttled={} unavailable={} invalid_response={}",
                 trigger.label(),
-                outcome.label()
+                outcome.label(),
+                stats.total,
+                stats.scheduled,
+                stats.unknown_kid,
+                stats.invalid_signature,
+                stats.success,
+                stats.stale_fallback,
+                stats.throttled,
+                stats.unavailable,
+                stats.invalid_response
             ),
             JwksRefreshOutcome::StaleFallback
             | JwksRefreshOutcome::Unavailable
             | JwksRefreshOutcome::InvalidResponse => log::warn!(
-                "auth jwks refresh: trigger={} outcome={}",
+                "auth jwks refresh: trigger={} outcome={} total={} scheduled={} unknown_kid={} invalid_signature={} success={} stale_fallback={} throttled={} unavailable={} invalid_response={}",
                 trigger.label(),
-                outcome.label()
+                outcome.label(),
+                stats.total,
+                stats.scheduled,
+                stats.unknown_kid,
+                stats.invalid_signature,
+                stats.success,
+                stats.stale_fallback,
+                stats.throttled,
+                stats.unavailable,
+                stats.invalid_response
             ),
         }
     }
