@@ -25,6 +25,44 @@ impl AuthVerificationOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JwksRefreshTrigger {
+    Scheduled,
+    UnknownKid,
+    InvalidSignature,
+}
+
+impl JwksRefreshTrigger {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::UnknownKid => "unknown_kid",
+            Self::InvalidSignature => "invalid_signature",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JwksRefreshOutcome {
+    Success,
+    StaleFallback,
+    Throttled,
+    Unavailable,
+    InvalidResponse,
+}
+
+impl JwksRefreshOutcome {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::StaleFallback => "stale_fallback",
+            Self::Throttled => "throttled",
+            Self::Unavailable => "unavailable",
+            Self::InvalidResponse => "invalid_response",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AuthVerificationStats {
     pub(crate) total: u64,
     pub(crate) success: u64,
