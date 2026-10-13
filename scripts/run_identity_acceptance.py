@@ -47,6 +47,7 @@ class AcceptancePhase(Enum):
     OPERATOR_EVIDENCE = "operator_evidence"
     ISSUER_PREFLIGHT = "issuer_preflight"
     ACCESS_TOKEN = "access_token"
+    INTERNAL = "internal"
     COMPLETE = "complete"
 
 
@@ -198,6 +199,14 @@ def run_acceptance(
     except PreflightError:
         return _result(
             phase=AcceptancePhase.ISSUER_PREFLIGHT,
+            evidence=evidence,
+            issuer_preflight=False,
+            access_token=None,
+            ready=False,
+        )
+    except Exception:
+        return _result(
+            phase=AcceptancePhase.INTERNAL,
             evidence=evidence,
             issuer_preflight=False,
             access_token=None,
