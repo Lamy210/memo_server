@@ -65,6 +65,23 @@ Consequences for operations:
 - retirement checks therefore concern the token-validity horizon and fleet convergence, not an instantaneous global rejection point;
 - rollback should be safe even if different replicas temporarily observe different valid JWKS snapshots during normal propagation, because both keys remain published throughout the overlap.
 
+## Rotation telemetry
+
+`docs/identity-auth-observability.md` defines the fixed JWKS refresh event used during rollout. Operators should correlate the following provider-neutral signals with the rotation timeline:
+
+- `trigger=scheduled`: normal initial/cache-expiry refresh;
+- `trigger=unknown_kid`: the current snapshot did not contain the token's key and a bounded forced refresh was requested;
+- `trigger=invalid_signature`: signature verification requested a bounded forced refresh;
+- `outcome=success`: the refreshed, validated key set replaced the cache;
+- `outcome=stale_fallback`: a normal refresh failed but an eligible stale snapshot kept verification available;
+- `outcome=throttled`: a forced refresh was suppressed by cooldown;
+- `outcome=unavailable`: the JWKS dependency could not supply a usable response;
+- `outcome=invalid_response`: the returned data failed size/shape/key-set validation.
+
+The concrete `kid`, issuer, JWKS URL, token, subject, and raw upstream error are deliberately absent. Diagnose a rotation from the fixed event sequence plus access-controlled deployment context, not by adding those values to application logs.
+
+A short-lived `unknown_kid` or `invalid_signature` followed by `success` can be expected during controlled convergence. Sustained `unknown_kid`, repeated `invalid_signature`, `stale_fallback`, `unavailable`, or `invalid_response` after the expected propagation interval is a rollout warning. Stop advancing key retirement until the cause is understood and the fleet is healthy.
+
 ## Repository regression harness
 
 `backend/tests/identity_key_rotation.rs` exercises the canonical verifier source rather than implementing a second JWT validator.
@@ -92,7 +109,7 @@ It does **not** prove that a concrete deployed issuer:
 - issues production-profile claims correctly;
 - propagates JWKS changes consistently across its edge/cache layers;
 - completes browser login/refresh/logout correctly;
-- exposes sufficient authentication/JWKS telemetry for rollout decisions.
+- delivers the application telemetry through the deployed log collector/dashboard/alert path.
 
 Those remain deployment acceptance work.
 
@@ -102,13 +119,13 @@ Before production traffic switches:
 
 1. run the public issuer/JWKS rollout preflight;
 2. issue a real staging token with the production profile and validate it through the Rust access-token preflight;
-3. publish the new verification key while the old key remains present;
-4. validate real tokens signed by both keys during overlap;
-5. switch staging issuance to the new key and exercise browser login/refresh/logout;
-6. rehearse rollback by returning issuance to the old key while keeping both verification keys published;
-7. validate that previously issued new-key tokens still work during the rollback overlap;
-8. after the new-token validity horizon plus safety margin, rehearse retiring the new key and confirm expected fleet convergence;
-9. verify authentication/JWKS failure telemetry and the rollback decision path;
-10. repeat the approved sequence for production.
+3. confirm the private operations pipeline receives the fixed authentication/JWKS events without credential, key identifier, issuer, or JWKS URL leakage;
+4. publish the new verification key while the old key remains present;
+5. validate real tokens signed by both keys during overlap and observe healthy refresh outcomes;
+6. switch staging issuance to the new key and exercise browser login/refresh/logout;
+7. rehearse rollback by returning issuance to the old key while keeping both verification keys published;
+8. validate that previously issued new-key tokens still work during the rollback overlap and that JWKS telemetry stays healthy;
+9. after the new-token validity horizon plus safety margin, rehearse retiring the new key and confirm expected fleet convergence;
+10. verify alert routing and the rollback decision path, then repeat the approved sequence for production.
 
 A successful repository test is necessary evidence for the application behavior, but it is not a substitute for this real issuer rehearsal.
