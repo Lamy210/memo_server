@@ -1,0 +1,52 @@
+name: Identity token preflight
+
+on:
+  pull_request:
+    paths:
+      - "backend/src/bin/verify_identity_access_token.rs"
+      - "backend/src/infrastructure/auth.rs"
+      - "backend/tests/identity_token_preflight.rs"
+      - "docs/identity-access-token-preflight.md"
+      - ".github/workflows/identity-token-preflight.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/src/bin/verify_identity_access_token.rs"
+      - "backend/src/infrastructure/auth.rs"
+      - "backend/tests/identity_token_preflight.rs"
+      - "docs/identity-access-token-preflight.md"
+      - ".github/workflows/identity-token-preflight.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Access-token preflight contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure Rust toolchain
+        run: rustup component add rustfmt clippy
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Contract tests
+        run: |
+          cargo test --locked --bin verify_identity_access_token
+          cargo test --locked --test identity_token_preflight
+
+      - name: Clippy
+        run: cargo clippy --locked --bin verify_identity_access_token --test identity_token_preflight -- -D warnings
