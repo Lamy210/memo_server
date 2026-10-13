@@ -8,7 +8,35 @@ mod error {
 
 mod infrastructure {
     pub(crate) mod auth_observability {
-        include!("../src/infrastructure/auth_observability.rs");
+        use crate::error::AppResult;
+
+        // The rotation regression includes the production verifier source so it
+        // can exercise its private cache state. Keep only the observability
+        // dependency surface here; observability behavior itself is covered by
+        // the canonical module's dedicated unit tests.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum JwksRefreshTrigger {
+            Scheduled,
+            UnknownKid,
+            InvalidSignature,
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum JwksRefreshOutcome {
+            Success,
+            StaleFallback,
+            Throttled,
+            Unavailable,
+            InvalidResponse,
+        }
+
+        pub(crate) fn observe_jwks_refresh<T>(
+            _trigger: JwksRefreshTrigger,
+            _outcome: JwksRefreshOutcome,
+            result: AppResult<T>,
+        ) -> AppResult<T> {
+            result
+        }
     }
 }
 
