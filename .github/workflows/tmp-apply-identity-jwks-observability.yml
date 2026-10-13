@@ -1,0 +1,64 @@
+name: Temporary apply identity JWKS observability patch
+
+on:
+  push:
+    branches:
+      - feat/identity-jwks-observability
+    paths:
+      - 'scripts/apply_identity_jwks_observability_patch.py'
+      - '.github/workflows/tmp-apply-identity-jwks-observability.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: temporary-identity-jwks-observability-patch
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    name: Apply and verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v7
+        with:
+          ref: feat/identity-jwks-observability
+          fetch-depth: 1
+
+      - name: Apply exact patch
+        run: python3 scripts/apply_identity_jwks_observability_patch.py
+
+      - name: Format
+        run: cargo fmt
+        working-directory: backend
+
+      - name: Verify format
+        run: cargo fmt --check
+        working-directory: backend
+
+      - name: Verify production wiring contract
+        run: python3 scripts/test_identity_jwks_observability.py
+
+      - name: Verify JWKS observability contract
+        run: >-
+          cargo test --locked --lib
+          infrastructure::auth_observability::tests::jwks_observability_
+        working-directory: backend
+
+      - name: Verify Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        working-directory: backend
+
+      - name: Verify patch whitespace
+        run: git diff --check
+
+      - name: Commit verified production patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add backend/src/infrastructure/auth.rs
+          git diff --cached --quiet && { echo 'expected auth.rs changes'; exit 1; }
+          git commit -m 'feat: instrument JWKS refresh observability'
+          git push origin HEAD:feat/identity-jwks-observability
