@@ -19,9 +19,7 @@ impl AuthVerificationOutcome {
     }
 }
 
-pub(crate) fn classify_authentication_result<T>(
-    result: &AppResult<T>,
-) -> AuthVerificationOutcome {
+pub(crate) fn classify_authentication_result<T>(result: &AppResult<T>) -> AuthVerificationOutcome {
     match result {
         Ok(_) => AuthVerificationOutcome::Success,
         Err(AppError::Unauthorized(_)) => AuthVerificationOutcome::Unauthorized,
