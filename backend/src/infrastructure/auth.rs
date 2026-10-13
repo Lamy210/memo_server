@@ -19,6 +19,9 @@ use uuid::Uuid;
 use crate::{
     config::{AuthConfig, JwtAccessTokenTypeMode, JwtSignatureMode},
     error::{AppError, AppResult},
+    infrastructure::auth_observability::{
+        observe_jwks_refresh, JwksRefreshOutcome, JwksRefreshTrigger,
+    },
 };
 
 const JWT_CLOCK_SKEW_SECONDS: i64 = 30;
@@ -126,6 +129,11 @@ struct JwksCachePolicy {
     stale_if_error_ttl: Duration,
 }
 
+struct JwksFetchError {
+    outcome: JwksRefreshOutcome,
+    error: AppError,
+}
+
 struct JwtVerifier {
     client: Client,
     issuer: String,
@@ -152,8 +160,8 @@ impl JwtVerifier {
             .https_only(true)
             .redirect(Policy::none())
             .build()
-            .map_err(|error| {
-                log::error!("Failed to build authentication JWKS HTTP client: {error}");
+            .map_err(|_| {
+                log::error!("Failed to build authentication JWKS HTTP client");
                 AppError::ServiceUnavailable(
                     "Authentication key client could not be initialized".into(),
                 )
@@ -195,13 +203,15 @@ impl JwtVerifier {
             .ok_or_else(|| AppError::Unauthorized("Access token is missing kid".into()))?;
         validate_token_kid(kid)?;
 
-        let key = self.decoding_key(kid, algorithm, false).await?;
+        let key = self.decoding_key(kid, algorithm, None).await?;
         match self.decode_claims(token, &key, algorithm) {
             Ok(identity) => Ok(identity),
             Err(ClaimsVerificationError::Jwt(error))
                 if matches!(error.kind(), ErrorKind::InvalidSignature) =>
             {
-                let refreshed_key = self.decoding_key(kid, algorithm, true).await?;
+                let refreshed_key = self
+                    .decoding_key(kid, algorithm, Some(JwksRefreshTrigger::InvalidSignature))
+                    .await?;
                 self.decode_claims(token, &refreshed_key, algorithm)
                     .map_err(|_| AppError::Unauthorized("Access token is invalid".into()))
             }
@@ -235,12 +245,12 @@ impl JwtVerifier {
         &self,
         kid: &str,
         algorithm: Algorithm,
-        force_refresh: bool,
+        refresh_trigger: Option<JwksRefreshTrigger>,
     ) -> AppResult<DecodingKey> {
-        let mut set = self.jwks(force_refresh).await?;
+        let mut set = self.jwks(refresh_trigger).await?;
 
-        if select_unique_jwk(&set, kid)?.is_none() && !force_refresh {
-            set = self.jwks(true).await?;
+        if select_unique_jwk(&set, kid)?.is_none() && refresh_trigger.is_none() {
+            set = self.jwks(Some(JwksRefreshTrigger::UnknownKid)).await?;
         }
 
         let jwk = select_unique_jwk(&set, kid)?.ok_or_else(|| {
@@ -248,13 +258,14 @@ impl JwtVerifier {
         })?;
         validate_jwk_for_algorithm(jwk, algorithm)?;
 
-        DecodingKey::from_jwk(jwk).map_err(|error| {
-            log::error!("Failed to build decoding key from JWKS: {error}");
+        DecodingKey::from_jwk(jwk).map_err(|_| {
+            log::error!("Failed to build decoding key from authentication JWKS");
             AppError::ServiceUnavailable("Authentication key set is invalid".into())
         })
     }
 
-    async fn jwks(&self, force_refresh: bool) -> AppResult<Arc<JwkSet>> {
+    async fn jwks(&self, refresh_trigger: Option<JwksRefreshTrigger>) -> AppResult<Arc<JwkSet>> {
+        let force_refresh = refresh_trigger.is_some();
         if !force_refresh {
             if let Some((set, fetched_at)) = self.cached_jwks().await {
                 if fetched_at.elapsed() < self.jwks_cache_policy.fresh_ttl {
@@ -276,16 +287,22 @@ impl JwtVerifier {
                     return Ok(set.clone());
                 }
             }
-        } else {
+        }
+
+        let trigger = refresh_trigger.unwrap_or(JwksRefreshTrigger::Scheduled);
+        if force_refresh {
             let now = Instant::now();
             if !forced_refresh_allowed(refresh_state.last_forced_attempt, now) {
-                log::debug!("Skipping forced JWKS refresh during refresh cooldown");
                 if let Some((set, _)) = cached {
-                    return Ok(set);
+                    return observe_jwks_refresh(trigger, JwksRefreshOutcome::Throttled, Ok(set));
                 }
-                return Err(AppError::ServiceUnavailable(
-                    "Authentication key refresh is temporarily throttled".into(),
-                ));
+                return observe_jwks_refresh(
+                    trigger,
+                    JwksRefreshOutcome::Throttled,
+                    Err(AppError::ServiceUnavailable(
+                        "Authentication key refresh is temporarily throttled".into(),
+                    )),
+                );
             }
             // Record attempts, not only successes, so an unavailable JWKS
             // endpoint cannot be hammered through repeated forced refreshes.
@@ -299,23 +316,22 @@ impl JwtVerifier {
                     set: set.clone(),
                     fetched_at: Instant::now(),
                 });
-                Ok(set)
+                observe_jwks_refresh(trigger, JwksRefreshOutcome::Success, Ok(set))
             }
-            Err(error) if !force_refresh => {
-                if let Some((set, fetched_at)) = cached {
-                    if fetched_at.elapsed() < self.jwks_cache_policy.stale_if_error_ttl {
-                        log::warn!(
-                            "JWKS refresh failed; temporarily using stale cached keys: {error}"
-                        );
-                        return Ok(set);
+            Err(fetch_error) => {
+                if !force_refresh {
+                    if let Some((set, fetched_at)) = cached {
+                        if fetched_at.elapsed() < self.jwks_cache_policy.stale_if_error_ttl {
+                            return observe_jwks_refresh(
+                                trigger,
+                                JwksRefreshOutcome::StaleFallback,
+                                Ok(set),
+                            );
+                        }
                     }
-                    log::warn!(
-                        "JWKS refresh failed and cached keys exceeded the stale-if-error window"
-                    );
                 }
-                Err(error)
+                observe_jwks_refresh(trigger, fetch_error.outcome, Err(fetch_error.error))
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -326,35 +342,39 @@ impl JwtVerifier {
             .map(|cached| (cached.set.clone(), cached.fetched_at))
     }
 
-    async fn fetch_jwks(&self) -> AppResult<JwkSet> {
+    async fn fetch_jwks(&self) -> Result<JwkSet, JwksFetchError> {
         let mut response = self
             .client
             .get(&self.jwks_uri)
             .timeout(JWKS_REQUEST_TIMEOUT)
             .send()
             .await
-            .map_err(|error| {
-                log::warn!("Failed to fetch authentication JWKS: {error}");
-                AppError::ServiceUnavailable("Authentication key service is unavailable".into())
+            .map_err(|_| JwksFetchError {
+                outcome: JwksRefreshOutcome::Unavailable,
+                error: AppError::ServiceUnavailable(
+                    "Authentication key service is unavailable".into(),
+                ),
             })?;
 
         if !response.status().is_success() {
-            log::warn!(
-                "Authentication JWKS endpoint returned non-success status {}",
-                response.status()
-            );
-            return Err(AppError::ServiceUnavailable(
-                "Authentication key service is unavailable".into(),
-            ));
+            return Err(JwksFetchError {
+                outcome: JwksRefreshOutcome::Unavailable,
+                error: AppError::ServiceUnavailable(
+                    "Authentication key service is unavailable".into(),
+                ),
+            });
         }
 
         if response
             .content_length()
             .is_some_and(|length| length > JWKS_MAX_BODY_BYTES as u64)
         {
-            return Err(AppError::ServiceUnavailable(
-                "Authentication JWKS response exceeds the configured safety limit".into(),
-            ));
+            return Err(JwksFetchError {
+                outcome: JwksRefreshOutcome::InvalidResponse,
+                error: AppError::ServiceUnavailable(
+                    "Authentication JWKS response exceeds the configured safety limit".into(),
+                ),
+            });
         }
 
         let mut body = Vec::with_capacity(
@@ -363,18 +383,26 @@ impl JwtVerifier {
                 .unwrap_or(0)
                 .min(JWKS_MAX_BODY_BYTES as u64) as usize,
         );
-        while let Some(chunk) = response.chunk().await.map_err(|error| {
-            log::warn!("Authentication JWKS body read failed: {error}");
-            AppError::ServiceUnavailable("Authentication key service is unavailable".into())
+        while let Some(chunk) = response.chunk().await.map_err(|_| JwksFetchError {
+            outcome: JwksRefreshOutcome::Unavailable,
+            error: AppError::ServiceUnavailable("Authentication key service is unavailable".into()),
         })? {
-            append_bounded_jwks_chunk(&mut body, &chunk)?;
+            append_bounded_jwks_chunk(&mut body, &chunk).map_err(|error| JwksFetchError {
+                outcome: JwksRefreshOutcome::InvalidResponse,
+                error,
+            })?;
         }
 
-        let set = serde_json::from_slice::<JwkSet>(&body).map_err(|error| {
-            log::error!("Authentication JWKS response could not be decoded: {error}");
-            AppError::ServiceUnavailable("Authentication key service returned invalid data".into())
+        let set = serde_json::from_slice::<JwkSet>(&body).map_err(|_| JwksFetchError {
+            outcome: JwksRefreshOutcome::InvalidResponse,
+            error: AppError::ServiceUnavailable(
+                "Authentication key service returned invalid data".into(),
+            ),
         })?;
-        validate_jwks_set(&set)?;
+        validate_jwks_set(&set).map_err(|error| JwksFetchError {
+            outcome: JwksRefreshOutcome::InvalidResponse,
+            error,
+        })?;
         Ok(set)
     }
 }
