@@ -64,11 +64,19 @@ The 30-second lease accounts for discovery plus token requests, each of which ha
 
 ## Shared result security
 
-Valkey never receives plaintext access tokens, refresh tokens, browser cookies, client secrets, or subject identifiers.
+Valkey never receives plaintext access tokens, refresh tokens, replayable browser-cookie values, client secrets, or subject identifiers.
 
-The BFF derives coordination-only keys from `IDENTITY_SESSION_KEY` with HKDF-SHA-256. The coordination identifier is a keyed HMAC of the old sealed cookie. A follower result contains only the already-sealed new session plus an HMAC bound to that exact coordination generation.
+The BFF derives three coordination-only keys from `IDENTITY_SESSION_KEY` with HKDF-SHA-256:
 
-A copied or modified result fails authentication and causes fail-closed session handling.
+- `memo_server/identity-refresh/v1/key-id` for the keyed coordination identifier;
+- `memo_server/identity-refresh/v1/result-encryption` for AES-256-GCM result-handoff encryption;
+- `memo_server/identity-refresh/v1/result-mac` for the context-binding HMAC.
+
+The coordination identifier is a keyed HMAC of the old sealed cookie. Before a refreshed sealed session S1 is written to Valkey, S1 is encrypted again with the coordination-layer AES-256-GCM key using a fresh 96-bit nonce and `v1\0<coordination-id>` as additional authenticated data. Valkey stores only the nonce, ciphertext, and a MAC bound to the exact coordination generation; it does not store the S1 browser-cookie value itself.
+
+Followers verify the HMAC before AES-GCM decryption. A copied, modified, malformed, cross-generation, or decrypt-failing result causes fail-closed session handling. A cryptographically valid handoff is also rejected if its access token has already expired by the time a follower receives it.
+
+See `docs/superpowers/specs/2026-10-14-distributed-refresh-coordination-handoff-encryption-amendment.md` for the corrective security amendment that supersedes the original plaintext-envelope representation.
 
 ## Valkey operational requirements
 
@@ -104,9 +112,9 @@ If the leader crashes, the token endpoint times out, result publication fails, o
 - followers do not promote themselves to a new leader;
 - the affected browser session fails closed and requires login unless a valid authenticated result was already published.
 
-### Invalid shared result
+### Invalid or stale shared result
 
-A malformed result, MAC failure, cross-generation result, or invalid/decrypt-failing sealed session is rejected. The old refresh credential is not retried.
+A malformed envelope, HMAC failure, AES-GCM authentication failure, cross-generation result, invalid/decrypt-failing sealed session, changed `sessionExpiresAt`, or handoff whose `accessTokenExpiresAt <= now` is rejected. The browser session is cleared and the old refresh credential is not retried.
 
 ## Verification coverage
 
@@ -115,6 +123,9 @@ The repository includes deterministic tests for:
 - two independent coordinators processing the same near-expiry V2 session against real Valkey;
 - strict single-use refresh semantics with exactly one upstream redemption;
 - follower adoption of the refreshed sealed session;
+- result-handoff ciphertext not exposing the replayable browser-cookie value;
+- fresh handoff encryption nonces and independent HKDF encryption/MAC domains;
+- rejection of an authenticated but already-expired handoff access token;
 - leader loss with the attempt marker retained;
 - publish failure after an upstream success;
 - cross-generation result substitution;
@@ -123,7 +134,7 @@ The repository includes deterministic tests for:
 - the 30-second lease / 25-second follower deadline timing envelope;
 - no regression of the existing process-local single-flight path when shared coordination is disabled.
 
-The dedicated `Identity refresh coordination` GitHub Actions workflow runs the real-Valkey integration suite together with TypeScript/Svelte checks and linting.
+The dedicated `Identity refresh coordination` GitHub Actions workflow runs the handoff-security contracts, the real-Valkey integration suite, TypeScript/Svelte checks, and linting.
 
 ## Deployment sequence
 
