@@ -9,20 +9,20 @@
 
 Remove the current one-active-BFF-replica correctness constraint for browser-session traffic without changing the provider-neutral OAuth/OIDC/JWT boundary or exposing access/refresh credentials to browser JavaScript.
 
-Today, `frontend/src/hooks.server.ts` deduplicates near-expiry refresh work with a process-local `Map` keyed by the sealed session cookie. This prevents duplicate redemption only inside one SvelteKit process. Two replicas can receive the same sealed session concurrently and redeem the same rotating refresh token at the same time. With strict refresh-token rotation, one redemption may succeed while another receives `invalid_grant`, causing divergent session handling.
+Today, `frontend/src/hooks.server.ts` deduplicates near-expiry refresh work with a process-local `Map` keyed by the sealed session cookie. This prevents duplicate redemption only inside one SvelteKit process. Two replicas can receive the same sealed session concurrently and redeem the same rotating refresh token at the same time. With strict refresh-token rotation, one redemption may succeed while another receives `invalid_grant`, producing divergent session state.
 
-The target design adds shared Valkey coordination while preserving the sealed cookie as the browser-facing session artifact.
+The target design adds Valkey-backed shared refresh coordination while preserving the sealed cookie as the browser-facing session artifact.
 
 Success means:
 
-- multiple active SvelteKit BFF replicas may process the same browser session safely;
-- for one old sealed session generation, at most one upstream refresh attempt is initiated;
-- a successful refresh can be handed off to concurrent follower replicas without exposing raw token material to Valkey;
+- multiple active SvelteKit BFF replicas can process the same browser session safely;
+- for one old sealed session generation, at most one upstream refresh attempt is initiated while coordination state is intact;
+- a successful refresh can be handed to concurrent follower replicas without putting plaintext token material in Valkey;
 - an ambiguous refresh outcome is never retried with the same old refresh credential;
-- a Valkey outage cannot cause duplicate refresh redemption;
-- already-valid access tokens remain usable when safe during a transient coordination outage;
+- a Valkey outage cannot trigger uncoordinated refresh;
+- a still-valid access token can be used safely during a transient coordination outage;
 - expired or indeterminate sessions fail closed;
-- existing backend JWT/JWKS verification and provider-neutral identity contracts remain unchanged.
+- the backend JWT/JWKS verification and provider-neutral identity contracts remain unchanged.
 
 ## Non-goals
 
@@ -30,15 +30,14 @@ This change does not:
 
 - move memo authorization into the frontend;
 - replace the backend JWT/JWKS verifier;
-- add provider-specific refresh-token behavior;
-- depend on a provider grace/reuse window;
+- depend on provider-specific refresh-token grace/reuse behavior;
 - introduce a public session API;
-- store raw access tokens or raw refresh tokens in Valkey;
+- store plaintext access tokens or refresh tokens in Valkey;
 - make Valkey the source of memo-domain data;
-- change the current development `AUTH_MODE=development` path;
+- change `AUTH_MODE=development` behavior;
 - make browser authentication available when the identity provider itself is unavailable.
 
-## Existing behavior and constraints
+## Current constraints
 
 The current production browser session is an AES-256-GCM sealed `Secure` + `HttpOnly` cookie containing:
 
@@ -46,11 +45,11 @@ The current production browser session is an AES-256-GCM sealed `Secure` + `Http
 - `accessTokenExpiresAt`;
 - `refreshToken`.
 
-`restoreIdentitySession()` refreshes when the access token is within the 30-second refresh window. A process-local `refreshFlights` map deduplicates concurrent requests carrying the exact same sealed cookie.
+`restoreIdentitySession()` refreshes inside a 30-second early-refresh window. The current process-local `refreshFlights` map correctly deduplicates only requests handled by the same process.
 
-The existing OIDC client already bounds discovery and token endpoint requests with a 10-second HTTP deadline. The new shared coordination must therefore use a lease longer than that network deadline and must treat a lease loss after an upstream request may have started as an ambiguous outcome rather than permission to retry.
+The OIDC client already bounds discovery/token requests with a 10-second HTTP deadline. Shared coordination must therefore use a lease longer than 10 seconds and must treat lease loss after an upstream request may have started as an ambiguous outcome rather than permission to retry.
 
-`docs/browser-auth-operations.md` currently requires one active BFF replica because the process-local map does not coordinate across replicas. This design removes that restriction only when shared coordination is explicitly enabled and healthy.
+`docs/browser-auth-operations.md` currently permits only one active BFF replica for browser-session traffic. That restriction is removed only after shared coordination is enabled and its multi-replica acceptance tests pass.
 
 ## Chosen architecture
 
@@ -67,18 +66,18 @@ Any SvelteKit BFF replica
   v
 Shared refresh coordinator
   |
-  +--> derive digest = SHA-256(S0)
+  +--> derive coordination id from S0 with a server-only derived key
   |
-  +--> Valkey state for {digest}
-  |      - attempt marker
-  |      - short lease
-  |      - optional sealed-success handoff
+  +--> Valkey state for {coordination-id}
+  |      - persistent attempt marker
+  |      - short leader lease
+  |      - short authenticated sealed-result handoff
   |
   +--> exactly one leader may call the OIDC token endpoint
   |         |
-  |         +--> success -> sealed session S1 -> publish encrypted handoff
+  |         +--> success -> sealed session S1 -> authenticated handoff
   |         |
-  |         +--> failure/ambiguity -> no retry of S0 refresh credential
+  |         +--> failure/ambiguity -> S0 is never redeemed again
   |
   +--> followers wait for S1 or fail closed
   |
@@ -86,25 +85,23 @@ Shared refresh coordinator
 Browser receives S1 cookie
 ```
 
-The application will not implement Redlock across multiple independent Valkey primaries. The production requirement is one logically authoritative Valkey coordination service with its own HA/replication/failover architecture. The application-level invariant is fail-closed coordination; it does not claim linearizability across an arbitrarily partitioned multi-primary deployment.
+The application will not implement Redlock across independent Valkey primaries. Production uses one logically authoritative coordination service with its own HA/failover topology. Application correctness assumes that this service does not concurrently accept conflicting writes for the same coordination key.
 
 ## Why not a full server-side session store
 
-A full server-side session store would also solve cross-replica refresh but would change the browser/session architecture substantially: the cookie would become an opaque session identifier, every authenticated request would require shared-store access, server-side token lifecycle and garbage collection would become mandatory, and the store would become a hard dependency even for requests whose access token is still valid.
+A full server-side session store would also solve cross-replica refresh but would make the shared store a hard dependency for every authenticated request and would replace the current browser-session architecture with opaque server-side session state.
 
-That broader change is not required for the current problem. Shared refresh coordination keeps normal authenticated requests on the existing sealed-cookie path and touches Valkey only when a token approaches expiry or when coordination state for that old session generation must be consulted.
+That larger migration is unnecessary for this problem. Shared coordination is consulted only near refresh or when resolving an already-started refresh generation. Requests with comfortably valid access tokens remain on the existing sealed-cookie path.
 
 ## Why not rely on provider refresh-token grace
 
-Provider-specific refresh-token reuse/grace behavior is explicitly outside the stable application contract. Depending on such behavior would make correctness vary by identity implementation and would weaken the provider-neutral boundary.
+Provider-specific refresh-token reuse/grace semantics are outside the stable application contract. Correctness must hold for the strict case where the refresh token is single-use and a second redemption fails.
 
-The design therefore assumes the strict case: a refresh credential may be single-use and a second redemption may fail.
+## Bounded V2 session schema
 
-## Session schema evolution
+The current payload has no bounded logical session lifetime. A replay marker cannot be garbage-collected safely if an old sealed cookie can be accepted indefinitely.
 
-The current session payload has no bounded logical session lifetime. A persistent replay/attempt marker cannot be safely garbage-collected if an old sealed cookie can be presented indefinitely.
-
-Shared coordination therefore introduces a new bounded session schema:
+Coordination therefore introduces:
 
 ```ts
 type IdentitySessionV2 = {
@@ -118,16 +115,17 @@ type IdentitySessionV2 = {
 
 Requirements:
 
-- `sessionExpiresAt` is fixed at login and is not extended by token refresh;
-- `openSession()` rejects V2 sessions after `sessionExpiresAt`;
-- distributed coordination is enabled only for V2 sessions;
-- legacy sessions without `schemaVersion: 2` are cleared and require re-login when distributed coordination mode is enabled;
-- single-replica mode may continue to accept the legacy schema during the migration window;
-- the deployment that enables multi-replica coordination must document the expected one-time re-login for any remaining legacy browser session.
+- `sessionExpiresAt` is fixed at login;
+- refresh never extends `sessionExpiresAt`;
+- `openSession()` rejects V2 sessions after that deadline;
+- shared coordination accepts only V2 sessions;
+- legacy sessions are cleared and require re-login when shared coordination is enabled;
+- coordination-disabled single-replica mode may continue to accept legacy sessions during migration;
+- V2 sessions remain valid if the deployment later rolls back to single-replica mode.
 
-The session cookie may remain a browser-session cookie without `Max-Age`; `sessionExpiresAt` is the authoritative application lifetime. This bounds replay-guard retention even if a browser continues to send an old cookie.
+The cookie can remain a browser-session cookie without `Max-Age`; the application deadline is authoritative.
 
-### Browser session lifetime
+### Session lifetime configuration
 
 Add private configuration:
 
@@ -137,32 +135,30 @@ IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS
 
 Rules:
 
-- required when distributed coordination is enabled;
-- positive integer;
-- bounded to an operationally reasonable range, proposed 900 seconds through 86400 seconds;
-- default is not silently inferred in production coordination mode;
-- login sets `sessionExpiresAt = now + configured lifetime`;
-- refresh never extends this deadline.
+- required when shared coordination is enabled;
+- integer in `900..=86400` seconds;
+- no silent production default in coordination-enabled mode;
+- login sets `sessionExpiresAt = now + configured lifetime`.
 
-This is an application session bound, not an upstream refresh-token lifetime claim.
+This is an application session bound, not a claim about the upstream refresh-token lifetime.
 
 ## Coordination configuration
 
-Add private frontend configuration:
+Add private configuration:
 
 ```text
 IDENTITY_REFRESH_COORDINATION_URL
 IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS
 ```
 
-`IDENTITY_REFRESH_COORDINATION_URL` accepts `valkey://`, `valkeys://`, and the existing compatible `redis://` / `rediss://` schemes supported by the selected client.
+`IDENTITY_REFRESH_COORDINATION_URL` accepts `valkey://`, `valkeys://`, and compatible `redis://` / `rediss://` URLs supported by the selected client.
 
 Modes:
 
-1. **Coordination disabled**: URL absent. Keep the current process-local single-flight behavior and retain the documented one-active-replica production constraint.
-2. **Coordination enabled**: URL present. V2 bounded sessions and shared Valkey coordination are mandatory for refresh. Multi-replica browser-session traffic is permitted only in this mode.
+1. **Disabled:** coordination URL absent. Preserve process-local single-flight and the one-active-replica production restriction.
+2. **Enabled:** coordination URL present. V2 bounded sessions and shared coordination are mandatory for refresh; multi-replica browser-session traffic is permitted after acceptance testing.
 
-The application must never silently fall back from enabled shared coordination to process-local refresh when Valkey is unavailable. Such a fallback would recreate the exact cross-replica race this design is intended to remove.
+Enabled mode must never silently fall back to process-local-only refresh when Valkey is unavailable.
 
 ## Valkey client selection
 
@@ -170,14 +166,14 @@ Use `iovalkey` for the first implementation.
 
 Rationale:
 
-- it is maintained under the `valkey-io` organization;
-- it is TypeScript-based and provides official type declarations;
-- its package metadata supports Node.js `>=18.12.0`, which includes the repository's Node 24 runtime;
-- it supports Valkey URLs, TLS, Lua scripting, Cluster, and Sentinel;
-- it adds no native runtime requirement to the current `node:24-alpine` frontend image;
-- the required coordination primitive is a small set of string operations and atomic scripts, so the larger native GLIDE stack is not required for this change.
+- maintained under `valkey-io`;
+- TypeScript implementation with declarations;
+- package metadata supports Node.js `>=18.12.0`, including this repository's Node 24 runtime;
+- supports Valkey URLs, TLS, Lua scripting, Cluster, and Sentinel;
+- no native runtime dependency is added to `node:24-alpine`;
+- the required primitive is a small set of string operations plus atomic scripts.
 
-The implementation must use the stable package version resolved by pnpm at implementation time and commit the resulting lockfile. The design does not require a Valkey server upgrade; the current Valkey 9.1.2 deployment target is sufficient.
+Use the stable version resolved by pnpm at implementation time and commit the lockfile. The design does not require a Valkey server upgrade; current Valkey 9.1.2 is sufficient.
 
 References:
 
@@ -185,208 +181,242 @@ References:
 - <https://valkey.io/commands/set/>
 - <https://valkey.io/topics/distlock/>
 
-## Coordination key design
+## Cryptographic domain separation
 
-For an old sealed session `S0`:
+Valkey is a shared coordination dependency and may contain attacker-controlled or corrupted values after an operational incident. A sealed session is authenticated, but without additional binding a valid sealed session from one coordination key could be copied into another key.
+
+Do not use `IDENTITY_SESSION_KEY` directly as an HMAC key. Derive coordination-only keys with HKDF-SHA-256 from the existing uniformly random 32-byte session key.
+
+Use distinct HKDF `info` values:
 
 ```text
-digest = hex(SHA-256(S0))
+memo_server/identity-refresh/v1/key-id
+memo_server/identity-refresh/v1/result-mac
 ```
 
-The raw sealed cookie is never placed in a key name.
+The derived keys never leave the SvelteKit server process.
 
-Use a Valkey Cluster-compatible hash tag so all keys for one old session generation occupy the same slot:
+### Coordination identifier
+
+For old sealed session `S0`:
 
 ```text
-memo:identity:refresh:v1:{<digest>}:attempt
-memo:identity:refresh:v1:{<digest>}:lease
-memo:identity:refresh:v1:{<digest>}:result
+coordination_id = hex(HMAC-SHA-256(key_id_key, S0))
+```
+
+This avoids putting the raw cookie or an unkeyed cookie fingerprint in Valkey key names.
+
+### Authenticated result envelope
+
+Valkey stores a result envelope containing the already-encrypted sealed session plus a context-binding MAC:
+
+```ts
+type RefreshResultEnvelope = {
+  version: 1;
+  sealedSession: string;
+  mac: string;
+};
+```
+
+Compute:
+
+```text
+mac = HMAC-SHA-256(
+  result_mac_key,
+  "v1\0" || coordination_id || "\0" || sealedSession
+)
+```
+
+Followers verify this MAC in constant time before opening `sealedSession`.
+
+This prevents a Valkey writer that does not know the session key from forging a handoff or swapping a valid result between coordination generations. It does not protect against deletion of coordination keys; key retention/integrity remains part of the Valkey operational trust boundary.
+
+## Valkey key design
+
+Use a Cluster-compatible hash tag so keys for one generation share a slot:
+
+```text
+memo:identity:refresh:v1:{<coordination_id>}:attempt
+memo:identity:refresh:v1:{<coordination_id>}:lease
+memo:identity:refresh:v1:{<coordination_id>}:result
 ```
 
 Values:
 
-- `attempt`: random 128-bit-or-stronger owner token. Its existence means an upstream redemption may already have been attempted for this old session generation.
-- `lease`: the same owner token with a short TTL. Its existence tells followers that the leader is expected to still be working.
-- `result`: the new **sealed session string** only. It contains encrypted/authenticated session state, not plaintext access or refresh credentials.
+- `attempt`: cryptographically random owner token, at least 128 bits;
+- `lease`: the same owner token with short TTL;
+- `result`: authenticated `RefreshResultEnvelope`.
 
-No key or value contains raw issuer credentials, client secrets, access tokens, refresh tokens, subject identifiers, authorization codes, or raw cookies.
+No Valkey key/value contains plaintext issuer credentials, client secrets, access tokens, refresh tokens, subject IDs, authorization codes, or raw browser cookies.
 
 ## TTLs
 
 ### Attempt replay guard
 
-The attempt marker TTL is derived from the old session's remaining logical lifetime:
+Set attempt TTL to:
 
 ```text
-max(1 second, sessionExpiresAt - now) + 60-second cleanup margin
+max(1 second, sessionExpiresAt - now) + 60 seconds
 ```
 
-This ensures the application never retries the old refresh credential while the old sealed session could still be accepted as logically valid.
+The old refresh credential therefore cannot be retried while the old session is logically acceptable.
 
 ### Lease
 
-Use a 15-second lease.
+Use **15 seconds**.
 
-Reasoning:
+The identity HTTP deadline is 10 seconds; the remaining margin covers scheduling and result publication. Lease expiry is never permission to retry because the attempt marker remains.
 
-- the existing identity HTTP deadline is 10 seconds;
-- 15 seconds leaves bounded scheduling/serialization margin;
-- lease expiry is not permission to retry because the attempt marker remains.
+### Result
 
-### Result handoff
+Keep the authenticated sealed result for **120 seconds**.
 
-Keep the sealed success result for 120 seconds.
-
-This is long enough for ordinary concurrent/follower requests to adopt the new cookie without retaining every old-to-new mapping for the full browser session lifetime. After result expiry, an old S0 cookie still cannot refresh again because its attempt marker remains; it fails closed and requires re-login.
+After result expiry, S0 still cannot become leader again because the attempt marker remains. A very stale S0 therefore causes re-login rather than a second redemption.
 
 ## Atomic operations
 
-Use small server-side Lua scripts through `iovalkey` so acquisition/publication decisions are atomic and all touched keys share one Cluster hash slot.
+Use small Lua scripts through `iovalkey`. All touched keys share one hash slot.
 
-### Acquire script
+### Acquire
 
-Given `attempt`, `lease`, and `result` keys:
+Atomically:
 
-1. if `result` exists, return `RESULT` plus the sealed result;
-2. if `attempt` exists and `lease` exists, return `WAIT`;
-3. if `attempt` exists and `lease` does not exist, return `INDETERMINATE`;
-4. otherwise set `attempt=<owner>` with replay-guard TTL and `lease=<owner>` with 15-second TTL, then return `LEADER`.
+1. if `result` exists, return `RESULT` and its envelope;
+2. else if `attempt` and `lease` exist, return `WAIT`;
+3. else if `attempt` exists and `lease` does not, return `INDETERMINATE`;
+4. else set `attempt=<owner>` with replay-guard TTL and `lease=<owner>` with 15-second TTL, then return `LEADER`.
 
-The attempt and lease writes happen atomically.
+The attempt marker exists before the leader is allowed to start the upstream token request.
 
-### Publish-success script
+### Publish success
 
-The leader may publish only while the `attempt` marker still contains its owner token.
+The leader may publish only while `attempt == owner`.
 
-The script:
+Atomically:
 
-1. checks `attempt == owner`;
-2. stores `result=<sealed S1>` with 120-second TTL;
-3. deletes `lease` only when it still equals the same owner;
-4. keeps `attempt` until the replay-guard TTL expires.
+1. verify attempt ownership;
+2. store the authenticated result envelope for 120 seconds;
+3. delete `lease` only if it still contains the same owner;
+4. leave `attempt` until its replay-guard TTL expires.
 
-A leader whose attempt ownership has expired must not publish a success result into a new coordination generation.
+If attempt ownership has expired, the leader must not publish into a new generation and must treat its local state as indeterminate.
 
-### Failure completion
+### Complete failure
 
-On any upstream refresh error, network timeout, response parse failure, sealing failure, or uncertain completion:
+On upstream refresh error, HTTP timeout, parse failure, sealing failure, MAC/envelope construction failure, or uncertain completion:
 
-- do not delete the attempt marker;
-- remove the lease only when owned by the current leader;
-- do not retry the same old refresh credential;
-- clear the browser session for that request.
-
-This deliberately converts ambiguous refresh state into re-authentication instead of duplicate redemption.
+- never delete `attempt`;
+- delete `lease` only if owned by this leader;
+- never retry S0's refresh credential;
+- clear the browser session for the failed request.
 
 ## Refresh state machine
 
 ```text
 VALID_ACCESS_TOKEN
     |
-    | enters 30s refresh window
+    | enters 30s early-refresh window
     v
 NEEDS_REFRESH
     |
-    | acquire shared coordination
+    | shared acquire
     +-------------------------------+
     |                               |
     v                               v
 LEADER                            FOLLOWER
     |                               |
-    | mark attempt before            | RESULT -> adopt S1
-    | upstream request               | WAIT   -> bounded poll
+    | attempt already persisted      | RESULT -> verify MAC -> open S1
+    |                               | WAIT -> bounded polling
     v                               | INDETERMINATE -> clear session
 UPSTREAM_REFRESH                    |
     |                               |
     +--> success -> seal S1 ---------+
+    |               MAC-bind result
     |               publish result
     |               set cookie
     |
-    +--> any failure/ambiguity
+    +--> any failure / ambiguity
                     |
                     v
               CLEAR SESSION
 ```
 
-## Follower waiting behavior
+## Follower behavior
 
-Followers that receive `WAIT` perform bounded polling for the result.
+A follower receiving `WAIT` polls only this generation's keys.
 
 Requirements:
 
-- total follower wait is capped below the normal frontend request budget;
-- proposed maximum is 12 seconds;
-- use short jittered intervals rather than a tight loop;
-- each poll reads only the coordination keys for the same digest;
-- if `result` appears, validate/decrypt it with the normal session code before use;
-- if the lease disappears without a result, return `INDETERMINATE` immediately;
-- if the wait deadline is reached while the lease still exists, fail closed for that request and do not call the upstream token endpoint.
+- total wait limit: **12 seconds**;
+- use short jittered intervals, not a tight loop;
+- `RESULT`: verify result MAC, open/validate S1, then adopt it;
+- lease disappears with no result: `INDETERMINATE` immediately;
+- wait deadline reached while lease exists: fail closed for this request and never call the upstream token endpoint;
+- follower timeout does not cancel the leader.
 
-A timed-out follower does not cancel the leader's refresh.
+A MAC failure or invalid/decrypt-failing S1 is treated as indeterminate and never causes an S0 retry.
 
 ## Valkey outage behavior
 
-Coordination-enabled mode distinguishes whether the current access token is still valid.
+### Token still valid
 
-### Access token still valid
+When coordination is unavailable but `accessTokenExpiresAt > now`:
 
-If coordination is unavailable while the access token is inside the early-refresh window but `accessTokenExpiresAt > now`:
+- do not call the refresh endpoint;
+- use the still-valid token for the current request;
+- do not rewrite the cookie;
+- emit a fixed coordination-unavailable outcome;
+- allow a later request to try coordination again.
 
-- do not call the upstream refresh endpoint;
-- continue the current request with the still-valid existing access token;
-- do not rewrite the session cookie;
-- emit a low-cardinality coordination-unavailable outcome;
-- allow a later request to retry coordination.
+No refresh credential is consumed, so this does not weaken exactly-once refresh behavior.
 
-This is safe because no refresh credential is consumed.
+### Token expired
 
-### Access token expired
+When coordination is unavailable and the access token is expired:
 
-If coordination is unavailable and the access token is already expired:
-
-- do not call the upstream refresh endpoint;
-- clear the session cookie;
+- do not call refresh;
+- clear the session;
 - expose unauthenticated state;
 - require re-login.
 
-This preserves fail-closed behavior and avoids uncoordinated refresh.
+### Indeterminate generation
 
-### Indeterminate attempt
-
-If an attempt marker exists without a usable result and without an active lease, clear the session immediately. Do not temporarily reuse the old access token even if it has a few seconds remaining. Once an ambiguous redemption may have happened, the old refresh state is not a safe basis for continued session mutation.
+If `attempt` exists without a usable result and without an active lease, clear the session immediately. Do not use the old token merely because it has a few seconds remaining.
 
 ## Security properties
 
-The design must preserve these properties:
+The implementation must preserve all of the following:
 
-- browser JavaScript never receives access or refresh credentials;
-- Valkey never stores plaintext access or refresh credentials;
-- the old sealed cookie is never used directly as a Valkey key;
-- coordination identifiers are SHA-256 digests of already-random authenticated ciphertext;
-- owner tokens are generated with cryptographically secure randomness;
-- upstream refresh is started only after the attempt marker exists;
-- no code path deletes the attempt marker merely because a request failed;
-- no code path retries an old refresh credential after an attempt marker has been observed;
-- public/browser error responses remain generic and provider-neutral;
-- internal logs never include the sealed session, digest, tokens, client secret, or result ciphertext;
-- Valkey TLS (`valkeys://`/`rediss://`) is required when the coordination network is not a trusted private network.
+- browser JavaScript never receives access/refresh credentials;
+- Valkey never stores plaintext access/refresh credentials;
+- raw sealed cookies never appear in Valkey keys or logs;
+- coordination IDs use a server-keyed HMAC, not plain hashing;
+- result handoffs are MAC-bound to the exact coordination generation;
+- MAC checks use constant-time comparison;
+- owner tokens use cryptographically secure randomness;
+- attempt state is persisted before upstream redemption starts;
+- request failure never deletes the attempt marker;
+- an observed attempt marker can never lead to retry of the same old refresh credential;
+- browser errors remain generic/provider-neutral;
+- logs never include coordination ID, owner token, sealed result, token values, or Valkey URI credentials;
+- `valkeys://`/`rediss://` is required outside a trusted private network.
 
 ## Valkey operational requirements
 
-Multi-replica correctness depends on the shared coordination store being operated as a correctness dependency, not as an evictable cache.
+Multi-replica correctness treats Valkey coordination state as correctness state, not disposable cache state.
 
 Required production properties:
 
-- no eviction of coordination keys before their TTL;
-- bounded command/connect timeouts;
-- authentication/ACL appropriate to the deployment;
-- private-network placement or TLS;
-- persistence/HA chosen consistently with the deployment's availability objectives;
-- one logical write authority for a coordination key at a time.
+- no eviction of attempt/lease/result keys before TTL;
+- bounded connect/command timeouts;
+- appropriate ACL/authentication;
+- private network or TLS;
+- HA/persistence consistent with deployment SLOs;
+- one logical write authority per key generation.
 
-The application must document that a configuration allowing volatile-key eviction under memory pressure is unsupported for multi-replica refresh correctness.
+A memory policy that may evict these keys before TTL is unsupported for multi-replica correctness.
 
-Valkey failover may still create an ambiguous external-refresh window. The application response remains fail closed: it must prefer re-login over replaying an old refresh token.
+Valkey is inside the replay-marker integrity trust boundary: an attacker able to delete attempt state can defeat the no-retry invariant. The result MAC limits value forgery/substitution but cannot protect against malicious deletion.
 
 ## Component boundaries
 
@@ -394,24 +424,26 @@ Valkey failover may still create an ambiguous external-refresh window. The appli
 
 Owns:
 
-- V1/V2 session parsing;
-- V2 `sessionExpiresAt` validation;
-- sealing/opening session ciphertext;
-- schema compatibility rules.
+- V1/V2 parsing;
+- `sessionExpiresAt` validation;
+- sealing/opening;
+- compatibility rules.
 
-It does not know about Valkey.
+It does not know Valkey commands.
 
 ### `refreshCoordinator.ts` (new)
 
 Owns:
 
-- digest/key derivation;
+- HKDF/HMAC coordination key derivation;
+- Valkey key derivation;
+- result-envelope MAC creation/verification;
 - Valkey client boundary;
 - acquire/publish/failure scripts;
-- follower wait logic;
-- fixed outcome types.
+- bounded follower waiting;
+- fixed coordination outcomes.
 
-Suggested public interface:
+Suggested caller-facing shape:
 
 ```ts
 type RefreshCoordinationDecision =
@@ -439,273 +471,257 @@ interface RefreshCoordinator {
 }
 ```
 
-The exact internal class/function names may vary, but callers must not depend on Valkey commands or key names directly.
+The exact internal names may differ. Callers must not depend directly on Valkey commands or key formats.
 
 ### `hooks.server.ts`
 
 Owns orchestration only:
 
 - open current session;
-- decide whether refresh is required;
-- call the coordinator;
+- decide whether refresh is needed;
+- call coordinator;
 - leader performs OIDC refresh;
-- followers consume a published sealed result;
-- set/clear cookies and locals.
+- follower consumes verified result;
+- set/clear cookie and locals.
 
-The existing process-local map remains only for coordination-disabled mode and may also be used as an optimization inside one process in front of the shared coordinator, provided it cannot bypass shared correctness.
+The existing process-local map remains only in coordination-disabled mode or as a local optimization that cannot bypass shared acquire.
 
 ### `config.ts`
 
-Owns validation for:
+Owns:
 
-- optional coordination URL;
-- required browser session max age when coordination is enabled;
+- optional coordination URL validation;
+- mandatory session max age when enabled;
 - URL scheme restrictions;
 - numeric bounds.
 
-No raw coordination URL is emitted to public error responses.
+No raw coordination URL is exposed in public errors.
 
 ## Observability
 
-Add low-cardinality internal counters/events with fixed labels only.
-
-Suggested outcomes:
+Add fixed low-cardinality internal outcomes:
 
 ```text
-identity_refresh_coordination_outcome=
-  leader
-  follower_result
-  follower_wait_timeout
-  indeterminate
-  unavailable_valid_token_fallback
-  unavailable_expired_session
-  upstream_refresh_failed
-  publish_failed
-  success
+leader
+follower_result
+follower_wait_timeout
+indeterminate
+unavailable_valid_token_fallback
+unavailable_expired_session
+upstream_refresh_failed
+publish_failed
+result_authentication_failed
+success
 ```
 
-Do not log:
-
-- digest values;
-- owner values;
-- sealed result values;
-- token values;
-- subject/client identifiers;
-- Valkey URI credentials.
-
-The existing identity/JWKS observability privacy model remains the reference for output hygiene.
+Do not log coordination IDs, owner values, result envelopes, tokens, subject/client identifiers, or Valkey URI credentials.
 
 ## Failure modes
 
 | Failure | Required behavior |
 | --- | --- |
-| Two replicas receive S0 concurrently | one leader refreshes; follower adopts S1 |
-| Leader crashes before upstream call | attempt remains; after lease loss session becomes indeterminate and re-login is required |
-| Leader crashes during/after upstream redemption | attempt remains; no retry of S0; re-login unless S1 was published |
-| Token endpoint times out | ambiguous; keep attempt marker; clear session |
-| Valkey unavailable, token still valid | use current token for current request only; no refresh |
+| Two replicas receive S0 concurrently | one leader refreshes; followers adopt authenticated S1 |
+| Leader dies before upstream call | attempt remains; after lease loss S0 becomes indeterminate |
+| Leader dies during/after redemption | no S0 retry; re-login unless authenticated S1 was published |
+| Token endpoint times out | ambiguous; attempt remains; clear session |
+| Valkey unavailable, token valid | current request may use existing valid token; no refresh |
 | Valkey unavailable, token expired | clear session; no refresh |
-| Result cannot be decrypted/validated | clear session; do not retry old refresh |
-| Publish fails after successful upstream refresh | treat as ambiguous; clear session; no retry old refresh |
-| Lease expires while leader still running | followers may fail closed; leader may publish only while attempt ownership still matches |
-| Attempt TTL expires after session lifetime | old session is already invalid by `sessionExpiresAt`; no replay path remains |
-| Valkey eviction removes attempt early | unsupported production configuration; correctness no longer guaranteed |
+| Result MAC invalid | clear session; no S0 retry |
+| Valid result copied from another coordination key | MAC binding rejects it |
+| Publish fails after upstream success | ambiguous; clear session; no S0 retry |
+| Lease expires while leader still runs | followers may fail closed; leader publishes only while attempt ownership matches |
+| Attempt TTL expires | S0 is already invalid by `sessionExpiresAt` |
+| Attempt key evicted/deleted early | unsupported / integrity violation; correctness not guaranteed |
 
 ## Testing strategy
 
-Tests must prove failure-detection capability, not only code coverage.
+Tests must demonstrate fault detection, not only coverage.
 
 ### Unit tests
 
 Cover:
 
-- V2 session lifetime validation;
-- legacy-session behavior in enabled/disabled coordination modes;
-- key derivation never includes raw sealed cookie text;
-- fixed TTL calculations;
-- configuration scheme/range validation;
-- failure classification without sensitive details.
+- V2 session expiry;
+- legacy behavior in enabled/disabled modes;
+- HKDF domain separation;
+- coordination ID does not contain raw cookie text and changes with S0;
+- result MAC validates only for its original coordination ID;
+- cross-key result substitution fails;
+- tampered result/MAC fails;
+- TTL calculations;
+- config scheme/range validation;
+- sensitive data is absent from fixed error/outcome strings.
 
 ### Real-Valkey integration tests
 
-Use an actual Valkey 9.1.2 container.
+Use Valkey 9.1.2.
 
 Required regressions:
 
-1. **Two independent coordinator instances, same S0**  
-   Assert the upstream refresh stub is called exactly once and both logical replicas obtain the same refreshed access-token state.
+1. **Two independent coordinators, same S0**  
+   Upstream refresh stub is called exactly once; both logical replicas converge on S1.
 
-2. **Leader crash before result publication**  
-   Create attempt + lease, simulate upstream redemption, remove/expire lease without result, then assert a second coordinator returns `indeterminate` and never invokes upstream refresh.
+2. **Leader crash after attempt**  
+   Expire/remove lease without result; second coordinator returns `indeterminate` and never calls upstream refresh.
 
-3. **Follower waits then consumes result**  
-   A follower observing `WAIT` must receive S1 after leader publication.
+3. **Follower result handoff**  
+   Follower observing `WAIT` receives and verifies S1 after leader publication.
 
-4. **Result expires but replay guard remains**  
-   After result TTL expiry, the same S0 must not become leader again; it must fail closed.
+4. **Result expires while attempt remains**  
+   Same S0 never becomes leader again; it fails closed.
 
-5. **Coordination unavailable with valid token**  
-   Current valid access token is used without calling upstream refresh.
+5. **Cross-generation substitution**  
+   Copy a valid result value to another coordination key; follower rejects it by MAC.
 
-6. **Coordination unavailable with expired token**  
-   Session is cleared and upstream refresh is not called.
+6. **Coordination unavailable with valid token**  
+   Existing token is used and refresh is not called.
 
-7. **Publish failure after upstream success**  
-   No second redemption is attempted with S0.
+7. **Coordination unavailable with expired token**  
+   Session is cleared and refresh is not called.
 
-8. **Session expiry bounds replay state**  
-   Once V2 `sessionExpiresAt` has passed, S0 is rejected before refresh coordination.
+8. **Publish failure after upstream success**  
+   No second redemption occurs with S0.
 
-### Browser E2E
+9. **Session expiry bounds replay state**  
+   Expired V2 session is rejected before coordination.
 
-Extend the provider-neutral browser E2E with a deterministic multi-replica refresh scenario using two logical SvelteKit request contexts against one Valkey instance and a strict-rotation identity fixture.
+### Browser/auth E2E
 
-The fixture must reject reuse of the same refresh token. The test passes only when:
+Extend the provider-neutral auth fixture with strict single-use refresh tokens and a deterministic multi-replica scenario using independent coordinator/client instances against one Valkey service.
 
-- exactly one refresh redemption occurs;
-- both concurrent requests converge on the refreshed session where result handoff is available;
-- browser-readable surfaces still contain no access/refresh credentials;
-- no expired token is forwarded after refresh failure.
+Acceptance requires:
+
+- exactly one redemption;
+- concurrent requests converge where handoff is available;
+- no access/refresh credential appears in browser-readable surfaces;
+- no expired token is forwarded after failure.
 
 ## CI design
 
-Add a dedicated lightweight workflow/job for shared refresh coordination rather than relying only on mocked frontend unit tests.
+Add a dedicated real-Valkey coordination job/workflow.
 
-The job must:
+It must:
 
 1. start Valkey 9.1.2;
-2. install frontend dependencies with the repository's pinned pnpm toolchain;
-3. run the dedicated coordination integration tests;
+2. install dependencies with the repository pnpm toolchain;
+3. run coordination integration tests;
 4. run relevant TypeScript/Svelte checks;
-5. fail if the real-Valkey regressions fail.
+5. fail on any real-Valkey regression.
 
-The normal frontend/unit/build jobs remain unchanged except for the new dependency and source files. Full-stack smoke continues to protect the existing single-replica development path.
-
-Before merging the implementation PR, required verification is:
+Before implementation merge:
 
 - `pnpm check`;
 - `pnpm lint`;
 - `pnpm test:unit -- --run`;
-- dedicated real-Valkey coordination integration tests;
+- real-Valkey coordination integration tests;
 - provider-neutral auth E2E;
 - `pnpm build`;
-- container-definition validation/build;
+- container validation/build;
 - full CI green.
 
 ## Deployment and migration
 
-Rollout is staged.
+### Stage 1: code present, coordination disabled
 
-### Stage 1: code deployed, coordination disabled
-
-- introduce V2-capable session parsing and coordinator code;
-- keep `IDENTITY_REFRESH_COORDINATION_URL` absent;
-- retain one-active-replica policy;
-- verify no regression in current browser auth.
+- add V2-aware parsing and coordinator implementation;
+- leave coordination URL absent;
+- keep one-active-replica policy;
+- verify current auth behavior.
 
 ### Stage 2: coordination service validation
 
-- deploy production Valkey coordination endpoint with no-eviction policy;
-- validate connectivity, ACL/TLS, command timeout, and failure telemetry;
+- deploy Valkey endpoint with no-eviction policy;
+- validate connectivity, ACL/TLS, timeout behavior, and telemetry;
 - do not horizontally scale yet.
 
-### Stage 3: enable shared coordination on one replica
+### Stage 3: enable on one replica
 
-- configure `IDENTITY_REFRESH_COORDINATION_URL` and `IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS`;
-- legacy sessions are cleared and users re-login into V2 sessions;
-- validate successful refresh, outage fallback, and indeterminate fail-closed behavior.
+- set coordination URL and browser session max age;
+- remaining legacy sessions are cleared and users re-login into V2;
+- validate normal refresh, Valkey outage fallback, and indeterminate behavior.
 
-### Stage 4: multi-replica canary
+### Stage 4: two-replica canary
 
-- add a second active BFF replica;
-- generate concurrent near-expiry traffic;
-- verify exactly-once logical refresh and result handoff;
-- monitor coordination-unavailable, indeterminate, upstream failure, and login-rate changes.
+- activate a second BFF replica;
+- generate concurrent near-expiry requests;
+- verify one redemption and successful handoff;
+- monitor indeterminate/outage/upstream-failure/login-rate changes.
 
 ### Stage 5: normal multi-replica operation
 
-- remove the one-active-replica operational restriction from `docs/browser-auth-operations.md` only after canary acceptance succeeds;
-- retain a documented rollback path to one replica.
+- remove the one-active-replica restriction from `docs/browser-auth-operations.md` only after canary acceptance;
+- retain documented rollback to one replica.
 
 ## Rollback
 
-If shared coordination causes operational problems:
+If shared coordination is problematic:
 
 1. reduce browser-session traffic to one active BFF replica;
-2. disable `IDENTITY_REFRESH_COORDINATION_URL`;
-3. continue using current sealed-session behavior with process-local single-flight;
-4. do not run multiple active replicas in disabled mode;
-5. keep backend JWT/JWKS configuration unchanged.
+2. remove/disable `IDENTITY_REFRESH_COORDINATION_URL`;
+3. use process-local single-flight again;
+4. do not run multiple active replicas while disabled;
+5. leave backend JWT/JWKS configuration unchanged.
 
-V2 sessions remain valid in single-replica mode, so rollback does not require token or memo-data migration.
+V2 sessions remain valid in single-replica mode, so rollback requires no memo-data or token-contract migration.
 
 ## Compatibility
 
-### Backend API
-
-No change.
-
-### Memo data
-
-No change.
-
-### JWT/JWKS contract
-
-No change.
-
-### Browser cookie
-
-Same cookie name and security attributes. The encrypted payload gains V2 schema/lifetime fields. Enabling shared coordination intentionally invalidates legacy unbounded sessions once so replay-guard lifetime can be proven.
-
-### Development environment
-
-Current Compose/local development may keep shared coordination disabled initially. A dedicated integration test uses the existing Valkey service/version to exercise coordination.
+- **Backend API:** unchanged.
+- **Memo data:** unchanged.
+- **JWT/JWKS contract:** unchanged.
+- **Cookie:** same name and security attributes; encrypted payload gains V2 lifetime metadata.
+- **Existing browser sessions:** enabling shared coordination intentionally causes one-time re-login for legacy unbounded sessions.
+- **Local development:** may keep coordination disabled; real-Valkey tests exercise the new path independently.
 
 ## Acceptance criteria
 
-The implementation is accepted only if all of the following are demonstrated:
+Implementation is accepted only when all are proven:
 
-- two independent BFF coordination instances cannot redeem the same old refresh credential twice;
-- attempt state is persisted before the upstream refresh request begins;
-- ambiguous leader loss never permits a retry with the same old credential;
-- followers can consume a successful sealed result;
-- no plaintext access/refresh credential is stored in Valkey;
+- two independent BFF coordinators cannot redeem the same old refresh credential twice while coordination state is intact;
+- attempt state exists before upstream redemption starts;
+- ambiguous leader loss never allows retry of S0;
+- followers consume only MAC-authenticated results bound to their coordination generation;
+- Valkey contains no plaintext access/refresh credential;
 - expired/indeterminate sessions fail closed;
-- transient coordination failure does not unnecessarily reject a still-valid access token before its expiry;
-- coordination-disabled mode preserves existing single-replica behavior;
-- coordination-enabled mode never silently falls back to process-local-only refresh;
-- tests exercise a real Valkey instance and a strict single-use refresh-token fixture;
-- all existing provider-neutral auth, frontend, container, and full-stack checks remain green;
-- `docs/browser-auth-operations.md` is updated only when multi-replica acceptance has actually been proven.
+- transient Valkey failure does not reject a still-valid access token unnecessarily;
+- enabled mode never falls back to process-local-only refresh;
+- disabled mode preserves current single-replica behavior;
+- real Valkey and strict single-use refresh fixtures exercise the regression;
+- existing provider-neutral auth/frontend/container/full-stack checks remain green;
+- the operational one-replica restriction is removed only after real multi-replica acceptance passes.
 
 ## Rejected alternatives
 
 ### Full server-side session store now
 
-Rejected for this change because it expands every authenticated request's dependency surface and requires a larger session-lifecycle migration than needed to solve refresh duplication.
+Rejected because it expands shared-store dependency to every authenticated request and requires a broader session-lifecycle migration.
 
-### Distributed lock without a persistent attempt marker
+### Lock without persistent attempt marker
 
-Rejected because a lease expiry after an ambiguous upstream request would allow another replica to retry the same rotating refresh token.
+Rejected because lease expiry after ambiguous upstream redemption would allow a second refresh attempt.
 
-### Process-local lock plus sticky sessions
+### Plain SHA-256 coordination key and unbound sealed result
 
-Rejected because failover, deployment replacement, or routing changes can move concurrent requests across replicas.
+Rejected because it unnecessarily exposes a stable cookie fingerprint to the coordination store and does not prevent cross-key substitution of an otherwise valid sealed result after store compromise/corruption.
 
-### Provider-specific refresh reuse/grace
+### Process-local lock plus sticky routing
 
-Rejected because it violates the provider-neutral application contract and cannot provide portable correctness.
+Rejected because failover, deploy replacement, or routing changes can move concurrent requests between replicas.
+
+### Provider-specific refresh reuse grace
+
+Rejected because it violates the provider-neutral boundary.
 
 ### Retry refresh after timeout
 
-Rejected because a timeout does not prove the identity provider failed to redeem the token. Retrying could reuse a consumed credential.
+Rejected because a timeout does not prove the provider failed to consume the refresh token.
 
 ## Design decision summary
 
-The implementation will preserve the current encrypted browser cookie model and add a correctness-focused Valkey coordination layer only around refresh. The key invariant is stronger than ordinary duplicate suppression:
+Keep the encrypted browser cookie model and add Valkey only around refresh coordination. Derive coordination-only cryptographic keys from the session key with HKDF. Persist an attempt marker before the upstream request, use a short lease for liveness, and publish only a short MAC-bound sealed result for followers.
 
-> Once an old sealed session generation has begun an upstream refresh attempt, that old refresh credential is never attempted again.
+The core invariant is:
 
-A short lease indicates whether a leader is likely still running. A longer attempt marker prevents replay after ambiguous completion. A short sealed-result handoff lets concurrent followers converge on the leader's refreshed session. A bounded V2 browser-session lifetime makes the replay marker safely garbage-collectable.
+> Once one sealed session generation has begun an upstream refresh attempt, its old refresh credential is never attempted again.
 
-This trades occasional re-login under ambiguous infrastructure failure for deterministic avoidance of rotating refresh-token reuse, while leaving the backend identity contract and memo-domain architecture unchanged.
+A bounded V2 session lifetime makes the replay marker garbage-collectable. Ambiguous infrastructure failures intentionally trade session continuity for re-login rather than risking rotating refresh-token reuse. Backend identity verification and memo-domain architecture remain unchanged.
