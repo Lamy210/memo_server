@@ -9,6 +9,7 @@ on:
       - 'frontend/src/lib/server/identity/**'
       - 'frontend/package.json'
       - 'frontend/pnpm-lock.yaml'
+      - 'docs/browser-auth-operations.md'
       - '.github/workflows/identity-refresh-coordination.yml'
   push:
     branches:
@@ -20,68 +21,21 @@ on:
       - 'frontend/src/lib/server/identity/**'
       - 'frontend/package.json'
       - 'frontend/pnpm-lock.yaml'
+      - 'docs/browser-auth-operations.md'
       - '.github/workflows/identity-refresh-coordination.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  lockfile-preview:
-    name: Lockfile preview
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: frontend
-
-    steps:
-      - name: Checkout head branch
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          package-manager-cache: false
-
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          bash ../scripts/ci-retry.sh 3 5 corepack prepare pnpm@9.15.9 --activate
-
-      - name: Generate lockfile from package manifest
-        run: pnpm install --lockfile-only --no-frozen-lockfile
-
-      - name: Upload generated lockfile
-        uses: actions/upload-artifact@v7
-        with:
-          name: identity-refresh-pnpm-lock-${{ github.run_id }}
-          path: frontend/pnpm-lock.yaml
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Commit generated lockfile on implementation PR
-        if: github.event_name == 'pull_request' && github.head_ref == 'feat/distributed-refresh-coordination'
-        run: |
-          if git diff --quiet -- pnpm-lock.yaml; then
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add pnpm-lock.yaml
-          git commit -m 'build: lock iovalkey dependency'
-          git push origin HEAD:${{ github.head_ref }}
-
   real-valkey-contract:
     name: Real Valkey coordination contract
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: frontend
@@ -106,7 +60,7 @@ jobs:
 
       - name: Start Valkey 9.1.2
         run: |
-          docker run -d --name memo-refresh-valkey -p 16379:6379 valkey/valkey:9.1.2-alpine
+          docker run -d --name memo-refresh-valkey -p 6379:6379 valkey/valkey:9.1.2-alpine
           for _ in $(seq 1 30); do
             if docker exec memo-refresh-valkey valkey-cli ping | grep -qx PONG; then
               exit 0
@@ -117,15 +71,16 @@ jobs:
           exit 1
         working-directory: .
 
-      - name: Run refresh coordination contract
+      - name: Run real-Valkey refresh integration
         env:
-          VALKEY_TEST_URL: valkey://127.0.0.1:16379
-        run: >-
-          pnpm test:unit -- --run
-          src/hooks.server.test.ts
-          src/hooks.server.concurrent.test.ts
-          src/lib/server/identity/refreshCoordinator.test.ts
-          src/lib/server/identity/valkeyRefreshCoordinationStore.integration.test.ts
+          VALKEY_TEST_URL: valkey://127.0.0.1:6379
+        run: pnpm test:identity-refresh-integration
+
+      - name: Type and Svelte checks
+        run: pnpm check
+
+      - name: Lint
+        run: pnpm lint
 
       - name: Stop Valkey
         if: always()
