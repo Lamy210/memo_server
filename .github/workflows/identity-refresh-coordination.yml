@@ -1,0 +1,74 @@
+name: Identity refresh coordination
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/src/lib/server/identity/**'
+      - 'frontend/package.json'
+      - 'frontend/pnpm-lock.yaml'
+      - '.github/workflows/identity-refresh-coordination.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/src/lib/server/identity/**'
+      - 'frontend/package.json'
+      - 'frontend/pnpm-lock.yaml'
+      - '.github/workflows/identity-refresh-coordination.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-valkey-contract:
+    name: Real Valkey coordination contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          bash ../scripts/ci-retry.sh 3 5 corepack prepare pnpm@9.15.9 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start Valkey 9.1.2
+        run: |
+          docker run -d --name memo-refresh-valkey -p 16379:6379 valkey/valkey:9.1.2-alpine
+          for _ in $(seq 1 30); do
+            if docker exec memo-refresh-valkey valkey-cli ping | grep -qx PONG; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs memo-refresh-valkey >&2 || true
+          exit 1
+        working-directory: .
+
+      - name: Run refresh coordination contract
+        env:
+          VALKEY_TEST_URL: valkey://127.0.0.1:16379
+        run: pnpm test:unit -- --run src/lib/server/identity/valkeyRefreshCoordinationStore.integration.test.ts
+
+      - name: Stop Valkey
+        if: always()
+        run: docker rm -f memo-refresh-valkey >/dev/null 2>&1 || true
+        working-directory: .
