@@ -146,7 +146,7 @@ describe('coordinated refresh result acceptance', () => {
       {
         schemaVersion: 2,
         accessToken: 'access-still-valid',
-        accessTokenExpiresAt: NOW + 60_000,
+        accessTokenExpiresAt: NOW + 2_000,
         refreshToken: 'refresh-old',
         sessionExpiresAt: NOW + 1_000
       },
