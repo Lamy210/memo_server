@@ -190,9 +190,10 @@ async function restoreWithSharedCoordination(input: {
     Math.max(MIN_ATTEMPT_REPLAY_GUARD_MS, session.sessionExpiresAt - now) +
     ATTEMPT_CLEANUP_MARGIN_MS;
   const decision = await coordinator.acquire({ sealedSession: sealed, replayGuardMs });
+  const decisionNow = Math.max(now, Date.now());
 
   if (decision.kind === 'unavailable') {
-    if (session.accessTokenExpiresAt > now) {
+    if (session.accessTokenExpiresAt > decisionNow) {
       authenticate(locals, session.accessToken);
     } else {
       deleteSessionCookie(cookies);
@@ -206,12 +207,12 @@ async function restoreWithSharedCoordination(input: {
   }
 
   if (decision.kind === 'result') {
-    const resultSession = await openSession(decision.sealedSession, config.sessionKey, now);
+    const resultSession = await openSession(decision.sealedSession, config.sessionKey, decisionNow);
     if (
       !resultSession ||
       !isIdentitySessionV2(resultSession) ||
       resultSession.sessionExpiresAt !== session.sessionExpiresAt ||
-      resultSession.accessTokenExpiresAt <= now
+      resultSession.accessTokenExpiresAt <= decisionNow
     ) {
       deleteSessionCookie(cookies);
       return;
@@ -227,10 +228,17 @@ async function restoreWithSharedCoordination(input: {
     const refreshed = await refreshAccessToken(metadata, config, fetchFn, {
       refreshToken: session.refreshToken
     });
+    const refreshedAt = Math.max(now, Date.now());
+    if (session.sessionExpiresAt <= refreshedAt) {
+      await coordinator.completeFailure({ sealedSession: sealed, owner: decision.owner });
+      deleteSessionCookie(cookies);
+      return;
+    }
+
     const nextSession = refreshedSession(
       session,
       refreshed.accessToken,
-      now + Math.floor(refreshed.expiresIn * 1000),
+      refreshedAt + Math.floor(refreshed.expiresIn * 1000),
       refreshed.refreshToken ?? session.refreshToken
     );
     const nextSealed = await sealSession(nextSession, config.sessionKey);
