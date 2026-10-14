@@ -210,7 +210,8 @@ async function restoreWithSharedCoordination(input: {
     if (
       !resultSession ||
       !isIdentitySessionV2(resultSession) ||
-      resultSession.sessionExpiresAt !== session.sessionExpiresAt
+      resultSession.sessionExpiresAt !== session.sessionExpiresAt ||
+      resultSession.accessTokenExpiresAt <= now
     ) {
       deleteSessionCookie(cookies);
       return;
