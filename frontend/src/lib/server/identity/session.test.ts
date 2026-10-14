@@ -45,6 +45,55 @@ describe('sealed identity session', () => {
     const oversized = { ...session, accessToken: 'x'.repeat(MAX_SEALED_COOKIE_BYTES) };
     await expect(sealSession(oversized, KEY)).rejects.toBeInstanceOf(IdentitySessionTooLargeError);
   });
+
+  it('round-trips a bounded v2 identity session before expiry', async () => {
+    const now = 1_900_000_000_000;
+    const bounded = {
+      schemaVersion: 2 as const,
+      accessToken: 'access-v2',
+      accessTokenExpiresAt: now + 120_000,
+      refreshToken: 'refresh-v2',
+      sessionExpiresAt: now + 3_600_000
+    };
+
+    const sealed = await sealSession(bounded, KEY);
+    await expect(openSession(sealed, KEY, now)).resolves.toEqual(bounded);
+  });
+
+  it('rejects a v2 identity session at sessionExpiresAt', async () => {
+    const now = 1_900_000_000_000;
+    const bounded = {
+      schemaVersion: 2 as const,
+      accessToken: 'access-v2',
+      accessTokenExpiresAt: now + 120_000,
+      refreshToken: 'refresh-v2',
+      sessionExpiresAt: now
+    };
+
+    const sealed = await sealSession(bounded, KEY);
+    await expect(openSession(sealed, KEY, now)).resolves.toBeNull();
+  });
+
+  it('continues to open legacy v1 sessions', async () => {
+    const sealed = await sealSession(session, KEY);
+    await expect(openSession(sealed, KEY, 1_900_000_000_000)).resolves.toEqual(session);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 'tomorrow'])(
+    'rejects malformed v2 lifetime metadata %s',
+    async (sessionExpiresAt) => {
+      const malformed = {
+        schemaVersion: 2 as const,
+        accessToken: 'access-v2',
+        accessTokenExpiresAt: 1_900_000_120_000,
+        refreshToken: 'refresh-v2',
+        sessionExpiresAt
+      };
+
+      const sealed = await sealSession(malformed as never, KEY);
+      await expect(openSession(sealed, KEY, 1_900_000_000_000)).resolves.toBeNull();
+    }
+  );
 });
 
 describe('sealed login transaction', () => {
