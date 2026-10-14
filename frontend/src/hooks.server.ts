@@ -193,7 +193,10 @@ async function restoreWithSharedCoordination(input: {
   const decisionNow = Math.max(now, Date.now());
 
   if (decision.kind === 'unavailable') {
-    if (session.accessTokenExpiresAt > decisionNow) {
+    if (
+      session.sessionExpiresAt > decisionNow &&
+      session.accessTokenExpiresAt > decisionNow
+    ) {
       authenticate(locals, session.accessToken);
     } else {
       deleteSessionCookie(cookies);
