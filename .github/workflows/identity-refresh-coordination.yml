@@ -58,6 +58,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Run refresh handoff security contracts
+        run: >-
+          pnpm test:unit -- --run
+          src/lib/server/identity/refreshCoordinationCrypto.test.ts
+          src/lib/server/identity/refreshResultAdmission.test.ts
+
       - name: Start Valkey 9.1.2
         run: |
           docker run -d --name memo-refresh-valkey -p 6379:6379 valkey/valkey:9.1.2-alpine
