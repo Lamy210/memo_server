@@ -23,12 +23,13 @@ const NOW = 1_900_000_000_000;
 type SetCookieOptions = Parameters<Cookies['set']>[2];
 type DeleteCookieOptions = Parameters<Cookies['delete']>[1];
 
-function identityEnv() {
+function identityEnv(overrides: Record<string, string | undefined> = {}) {
   return {
     IDENTITY_ISSUER: 'https://id.example.test',
     IDENTITY_CLIENT_ID: 'memo-web',
     IDENTITY_CLIENT_SECRET: 'client-secret',
-    IDENTITY_SESSION_KEY: SESSION_KEY
+    IDENTITY_SESSION_KEY: SESSION_KEY,
+    ...overrides
   };
 }
 
@@ -167,6 +168,40 @@ describe('provider-neutral browser auth routes', () => {
       now: NOW
     });
     expect(replay.status).toBe(400);
+  });
+
+  it('creates a bounded v2 session when refresh coordination is configured', async () => {
+    const transaction = await sealLoginTransaction(
+      {
+        state: 'state-1',
+        codeVerifier: 'v'.repeat(43),
+        returnTarget: '/memos',
+        expiresAt: NOW + 60_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies({ [LOGIN_TRANSACTION_COOKIE_NAME]: transaction });
+
+    const response = await completeLogin({
+      url: new URL('https://memo.example.test/auth/callback?code=code-1&state=state-1'),
+      cookies: cookies.api,
+      fetchFn: authFetch(),
+      identityEnv: identityEnv({
+        IDENTITY_REFRESH_COORDINATION_URL: 'valkey://valkey:6379',
+        IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS: '3600'
+      }),
+      now: NOW
+    });
+
+    expect(response.status).toBe(303);
+    const sessionSet = cookies.setCalls.find((call) => call.name === SESSION_COOKIE_NAME);
+    await expect(openSession(sessionSet!.value, SESSION_KEY_BYTES, NOW)).resolves.toEqual({
+      schemaVersion: 2,
+      accessToken: 'access-1',
+      accessTokenExpiresAt: NOW + 300_000,
+      refreshToken: 'refresh-1',
+      sessionExpiresAt: NOW + 3_600_000
+    });
   });
 
   it.each([
