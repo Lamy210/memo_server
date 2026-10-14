@@ -66,4 +66,70 @@ describe('readIdentityConfig', () => {
       expect(() => readIdentityConfig(validEnv({ IDENTITY_SESSION_KEY: value }))).toThrow();
     }
   );
+
+  it('requires bounded browser session age when refresh coordination is enabled', () => {
+    expect(() =>
+      readIdentityConfig(
+        validEnv({
+          IDENTITY_REFRESH_COORDINATION_URL: 'valkey://valkey:6379'
+        })
+      )
+    ).toThrow();
+  });
+
+  it.each(['899', '86401', '900.5', 'abc'])(
+    'rejects invalid browser session age %s',
+    (value) => {
+      expect(() =>
+        readIdentityConfig(
+          validEnv({
+            IDENTITY_REFRESH_COORDINATION_URL: 'valkey://valkey:6379',
+            IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS: value
+          })
+        )
+      ).toThrow();
+    }
+  );
+
+  it.each(['http://valkey.test', 'https://valkey.test', 'file:///tmp/valkey'])(
+    'rejects unsupported coordination URL %s',
+    (url) => {
+      expect(() =>
+        readIdentityConfig(
+          validEnv({
+            IDENTITY_REFRESH_COORDINATION_URL: url,
+            IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS: '3600'
+          })
+        )
+      ).toThrow();
+    }
+  );
+
+  it.each([
+    'valkey://valkey:6379',
+    'valkeys://valkey.example.test:6379',
+    'redis://valkey:6379',
+    'rediss://valkey.example.test:6379'
+  ])('accepts supported coordination URL %s', (url) => {
+    const config = readIdentityConfig(
+      validEnv({
+        IDENTITY_REFRESH_COORDINATION_URL: url,
+        IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS: '3600'
+      })
+    );
+
+    expect(config.refreshCoordinationUrl?.toString()).toBe(url);
+    expect(config.browserSessionMaxAgeSeconds).toBe(3600);
+  });
+
+  it.each(['900', '86400'])('accepts browser session age boundary %s', (value) => {
+    const config = readIdentityConfig(
+      validEnv({
+        IDENTITY_REFRESH_COORDINATION_URL: 'valkey://valkey:6379',
+        IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS: value
+      })
+    );
+
+    expect(config.browserSessionMaxAgeSeconds).toBe(Number(value));
+  });
 });
