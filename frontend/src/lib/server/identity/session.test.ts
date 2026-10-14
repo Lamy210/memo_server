@@ -90,8 +90,7 @@ describe('sealed identity session', () => {
         sessionExpiresAt
       };
 
-      const sealed = await sealSession(malformed as never, KEY);
-      await expect(openSession(sealed, KEY, 1_900_000_000_000)).resolves.toBeNull();
+      await expect(sealSession(malformed as never, KEY)).rejects.toThrow('Invalid identity session');
     }
   );
 });
