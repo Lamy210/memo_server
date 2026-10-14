@@ -16,7 +16,8 @@ import {
   openLoginTransaction,
   sealLoginTransaction,
   sealSession,
-  SESSION_COOKIE_NAME
+  SESSION_COOKIE_NAME,
+  type IdentitySession
 } from './session';
 
 const LOGIN_TRANSACTION_TTL_MS = 10 * 60 * 1000;
@@ -166,14 +167,19 @@ export async function completeLogin({
       codeVerifier: transaction.codeVerifier,
       redirectUri: new URL('/auth/callback', url.origin).toString()
     });
-    const sealedSession = await sealSession(
-      {
-        accessToken: tokenSet.accessToken,
-        accessTokenExpiresAt: now + Math.floor(tokenSet.expiresIn * 1000),
-        refreshToken: tokenSet.refreshToken!
-      },
-      config.sessionKey
-    );
+    const baseSession = {
+      accessToken: tokenSet.accessToken,
+      accessTokenExpiresAt: now + Math.floor(tokenSet.expiresIn * 1000),
+      refreshToken: tokenSet.refreshToken!
+    };
+    const session: IdentitySession = config.browserSessionMaxAgeSeconds
+      ? {
+          schemaVersion: 2,
+          ...baseSession,
+          sessionExpiresAt: now + config.browserSessionMaxAgeSeconds * 1000
+        }
+      : baseSession;
+    const sealedSession = await sealSession(session, config.sessionKey);
 
     cookies.set(SESSION_COOKIE_NAME, sealedSession, {
       path: '/',

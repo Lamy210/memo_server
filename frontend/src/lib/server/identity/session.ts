@@ -9,11 +9,21 @@ const IV_BYTES = 12;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-export type IdentitySession = {
+export type IdentitySessionV1 = {
   accessToken: string;
   accessTokenExpiresAt: number;
   refreshToken: string;
 };
+
+export type IdentitySessionV2 = {
+  schemaVersion: 2;
+  accessToken: string;
+  accessTokenExpiresAt: number;
+  refreshToken: string;
+  sessionExpiresAt: number;
+};
+
+export type IdentitySession = IdentitySessionV1 | IdentitySessionV2;
 
 export type LoginTransaction = {
   state: string;
@@ -96,9 +106,7 @@ async function open(value: string, key: Uint8Array): Promise<unknown | null> {
   }
 }
 
-function isIdentitySession(value: unknown): value is IdentitySession {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Record<string, unknown>;
+function hasBaseIdentitySessionFields(candidate: Record<string, unknown>): boolean {
   return (
     typeof candidate.accessToken === 'string' &&
     candidate.accessToken.length > 0 &&
@@ -106,6 +114,25 @@ function isIdentitySession(value: unknown): value is IdentitySession {
     Number.isFinite(candidate.accessTokenExpiresAt) &&
     typeof candidate.refreshToken === 'string' &&
     candidate.refreshToken.length > 0
+  );
+}
+
+export function isIdentitySessionV2(session: IdentitySession): session is IdentitySessionV2 {
+  return 'schemaVersion' in session && session.schemaVersion === 2;
+}
+
+function isIdentitySession(value: unknown): value is IdentitySession {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  if (!hasBaseIdentitySessionFields(candidate)) return false;
+
+  if (candidate.schemaVersion === undefined) return true;
+  if (candidate.schemaVersion !== 2) return false;
+
+  return (
+    typeof candidate.sessionExpiresAt === 'number' &&
+    Number.isFinite(candidate.sessionExpiresAt) &&
+    candidate.sessionExpiresAt >= 0
   );
 }
 
@@ -129,9 +156,15 @@ export async function sealSession(value: IdentitySession, key: Uint8Array): Prom
   return seal(value, key);
 }
 
-export async function openSession(value: string, key: Uint8Array): Promise<IdentitySession | null> {
+export async function openSession(
+  value: string,
+  key: Uint8Array,
+  now = Date.now()
+): Promise<IdentitySession | null> {
   const decoded = await open(value, key);
-  return isIdentitySession(decoded) ? decoded : null;
+  if (!isIdentitySession(decoded)) return null;
+  if (isIdentitySessionV2(decoded) && decoded.sessionExpiresAt <= now) return null;
+  return decoded;
 }
 
 export async function sealLoginTransaction(
