@@ -114,7 +114,10 @@ jobs:
       - name: Run refresh coordination contract
         env:
           VALKEY_TEST_URL: valkey://127.0.0.1:16379
-        run: pnpm test:unit -- --run src/lib/server/identity/valkeyRefreshCoordinationStore.integration.test.ts
+        run: >-
+          pnpm test:unit -- --run
+          src/lib/server/identity/refreshCoordinator.test.ts
+          src/lib/server/identity/valkeyRefreshCoordinationStore.integration.test.ts
 
       - name: Stop Valkey
         if: always()
