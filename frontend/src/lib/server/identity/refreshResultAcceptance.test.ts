@@ -138,4 +138,49 @@ describe('coordinated refresh result acceptance', () => {
     expect(cookies.setCalls).toHaveLength(0);
     expect(cookies.deleteCalls).toEqual([SESSION_COOKIE_NAME]);
   });
+
+  it('does not authenticate on coordination outage after the fixed v2 session lifetime expires', async () => {
+    let wallNow = NOW;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => wallNow);
+    const oldSealed = await sealSession(
+      {
+        schemaVersion: 2,
+        accessToken: 'access-still-valid',
+        accessTokenExpiresAt: NOW + 60_000,
+        refreshToken: 'refresh-old',
+        sessionExpiresAt: NOW + 1_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const coordinator: RefreshCoordinator = {
+      acquire: vi.fn(async () => {
+        wallNow = NOW + 1_001;
+        return { kind: 'unavailable' as const };
+      }),
+      publishSuccess: vi.fn(async () => true),
+      completeFailure: vi.fn(async () => {}),
+      close: vi.fn(async () => {})
+    };
+    const cookies = cookieJar(oldSealed);
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const fetchFn = vi.fn() as unknown as typeof fetch;
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: coordinatedEnv(),
+        fetchFn,
+        now: NOW,
+        coordinator
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(locals).toEqual({ authenticated: false });
+    expect(cookies.setCalls).toHaveLength(0);
+    expect(cookies.deleteCalls).toEqual([SESSION_COOKIE_NAME]);
+  });
 });
