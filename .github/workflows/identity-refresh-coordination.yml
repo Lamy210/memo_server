@@ -60,9 +60,9 @@ jobs:
 
       - name: Run refresh handoff security contracts
         run: >-
-          pnpm test:unit -- --run
+          pnpm exec vitest run
           src/lib/server/identity/refreshCoordinationCrypto.test.ts
-          src/lib/server/identity/refreshResultAdmission.test.ts
+          src/lib/server/identity/refreshResultAcceptance.test.ts
 
       - name: Start Valkey 9.1.2
         run: |
