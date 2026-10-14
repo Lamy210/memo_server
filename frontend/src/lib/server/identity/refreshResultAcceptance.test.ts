@@ -46,8 +46,17 @@ function coordinatedEnv() {
   };
 }
 
+function resultCoordinator(sealedSession: string): RefreshCoordinator {
+  return {
+    acquire: vi.fn(async () => ({ kind: 'result' as const, sealedSession })),
+    publishSuccess: vi.fn(async () => true),
+    completeFailure: vi.fn(async () => {}),
+    close: vi.fn(async () => {})
+  };
+}
+
 describe('coordinated refresh result acceptance', () => {
-  it('rejects a MAC-verified handoff whose access token is already expired', async () => {
+  it('rejects an authenticated handoff whose access token is already expired', async () => {
     const oldSealed = await sealSession(
       {
         schemaVersion: 2,
@@ -68,12 +77,6 @@ describe('coordinated refresh result acceptance', () => {
       },
       SESSION_KEY_BYTES
     );
-    const coordinator: RefreshCoordinator = {
-      acquire: vi.fn(async () => ({ kind: 'result' as const, sealedSession: staleResult })),
-      publishSuccess: vi.fn(async () => true),
-      completeFailure: vi.fn(async () => {}),
-      close: vi.fn(async () => {})
-    };
     const cookies = cookieJar(oldSealed);
     const locals: { authenticated?: boolean; accessToken?: string } = {};
     const fetchFn = vi.fn() as unknown as typeof fetch;
@@ -84,7 +87,50 @@ describe('coordinated refresh result acceptance', () => {
       env: coordinatedEnv(),
       fetchFn,
       now: NOW,
-      coordinator
+      coordinator: resultCoordinator(staleResult)
+    });
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(locals).toEqual({ authenticated: false });
+    expect(cookies.setCalls).toHaveLength(0);
+    expect(cookies.deleteCalls).toEqual([SESSION_COOKIE_NAME]);
+  });
+
+  it('uses wall-clock time after coordination before admitting a follower result', async () => {
+    const wallNow = Date.now();
+    const requestStartedAt = wallNow - 60_000;
+    const sessionExpiresAt = wallNow + 3_600_000;
+    const oldSealed = await sealSession(
+      {
+        schemaVersion: 2,
+        accessToken: 'access-old',
+        accessTokenExpiresAt: requestStartedAt,
+        refreshToken: 'refresh-old',
+        sessionExpiresAt
+      },
+      SESSION_KEY_BYTES
+    );
+    const expiredDuringWait = await sealSession(
+      {
+        schemaVersion: 2,
+        accessToken: 'access-expired-during-wait',
+        accessTokenExpiresAt: wallNow - 1,
+        refreshToken: 'refresh-new',
+        sessionExpiresAt
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = cookieJar(oldSealed);
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const fetchFn = vi.fn() as unknown as typeof fetch;
+
+    await restoreIdentitySession({
+      cookies: cookies.api,
+      locals,
+      env: coordinatedEnv(),
+      fetchFn,
+      now: requestStartedAt,
+      coordinator: resultCoordinator(expiredDuringWait)
     });
 
     expect(fetchFn).not.toHaveBeenCalled();
