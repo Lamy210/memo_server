@@ -69,7 +69,7 @@ describe('coordinated refresh result admission', () => {
       KEY_BYTES
     );
     const coordinator: RefreshCoordinator = {
-      acquire: vi.fn(async () => ({ kind: 'result', sealedSession: staleS1 })),
+      acquire: vi.fn(async () => ({ kind: 'result' as const, sealedSession: staleS1 })),
       publishSuccess: vi.fn(async () => true),
       completeFailure: vi.fn(async () => {}),
       close: vi.fn(async () => {})
