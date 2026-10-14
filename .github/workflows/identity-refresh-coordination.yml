@@ -17,7 +17,7 @@ on:
       - '.github/workflows/identity-refresh-coordination.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,8 +33,10 @@ jobs:
         working-directory: frontend
 
     steps:
-      - name: Checkout
+      - name: Checkout head branch
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -57,6 +59,18 @@ jobs:
           path: frontend/pnpm-lock.yaml
           if-no-files-found: error
           retention-days: 1
+
+      - name: Commit generated lockfile on implementation PR
+        if: github.event_name == 'pull_request' && github.head_ref == 'feat/distributed-refresh-coordination'
+        run: |
+          if git diff --quiet -- pnpm-lock.yaml; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pnpm-lock.yaml
+          git commit -m 'build: lock iovalkey dependency'
+          git push origin HEAD:${{ github.head_ref }}
 
   real-valkey-contract:
     name: Real Valkey coordination contract
