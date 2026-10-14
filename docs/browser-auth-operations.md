@@ -4,36 +4,152 @@
 
 This document records deployment constraints for the provider-neutral SvelteKit browser authentication boundary. It complements `docs/authentication.md`; it does not change the OAuth/OIDC/JWT contract used by `memo_server`.
 
-## Refresh coordination
+## Browser session model
 
-The current BFF keeps the sealed browser session in a `Secure` + `HttpOnly` cookie and performs refresh-token rotation from the server-side request hook. Concurrent requests carrying the same sealed session are coalesced with a process-local single-flight map so one SvelteKit process does not redeem the same refresh token more than once at the same time.
+The BFF keeps access/refresh state in the existing AES-256-GCM sealed `Secure` + `HttpOnly` browser cookie. Browser JavaScript does not receive access or refresh credentials.
 
-That coordination is intentionally process-local. It does **not** coordinate refresh work between multiple SvelteKit processes or replicas.
+Two session payload generations are supported:
 
-For identity providers that rotate refresh tokens or reject refresh-token reuse, the currently supported production topology is therefore **one active SvelteKit BFF replica for browser-session traffic**. Running multiple replicas without additional coordination can allow two replicas to redeem the same refresh token concurrently; one request may rotate the credential while another receives `invalid_grant`, causing the latter request to invalidate its browser session.
+- legacy V1, with access token, access-token expiry, and refresh token;
+- V2, which additionally contains `schemaVersion: 2` and fixed `sessionExpiresAt`.
 
-Sticky routing can reduce the probability of this race but is not a portable correctness guarantee because failover, deployment replacement, or routing changes can move concurrent requests between replicas.
+`sessionExpiresAt` is established at login and is never extended by refresh. Shared refresh coordination accepts only V2 sessions so replay-attempt state has a bounded retention horizon.
 
-## Requirement before horizontal scaling
+## Coordination modes
 
-Before browser-session traffic is horizontally scaled beyond one active BFF replica, implement and verify one of these coordination models:
+### Shared coordination disabled
 
-1. a shared server-side session store with atomic compare-and-swap or lease semantics for refresh rotation;
-2. a distributed single-flight/lock keyed by an opaque session identifier, with bounded lock lifetime and fail-closed recovery semantics; or
-3. an explicitly documented identity-provider refresh-rotation grace/reuse contract that is tested under concurrent multi-replica refresh and accepted as part of the deployment contract.
+When `IDENTITY_REFRESH_COORDINATION_URL` is absent, refresh uses the existing process-local single-flight map.
 
-Provider-specific grace behavior is not part of the provider-neutral application contract, so options 1 or 2 are preferred for portable horizontal scaling.
+This mode supports only **one active SvelteKit BFF replica for browser-session traffic**. Sticky routing is not a correctness guarantee because failover, deployment replacement, or routing changes can move concurrent requests between replicas.
 
-## Verification expectations
+V1 and V2 sessions can be handled in this mode. A refreshed V2 session keeps its original `sessionExpiresAt`.
 
-A future multi-replica implementation must add deterministic tests covering at least:
+### Shared coordination enabled
 
-- two replicas receiving the same near-expiry sealed session concurrently;
-- exactly one logical refresh redemption when strict rotation is enabled;
-- refresh-token rotation propagation to subsequent requests;
-- lock/session-store timeout and failure behavior;
-- replica termination or failover while refresh coordination is in progress;
-- no fallback to an expired access token after refresh failure;
-- no browser exposure of access or refresh credentials.
+Set both private frontend values:
 
-Until those tests and coordination semantics exist, keep browser-session BFF traffic on one active replica.
+```text
+IDENTITY_REFRESH_COORDINATION_URL=<valkey://, valkeys://, redis://, or rediss:// URL>
+IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS=<900..86400>
+```
+
+When enabled:
+
+- login creates V2 sessions;
+- remaining V1 browser sessions are cleared and require a one-time re-login;
+- access tokens outside the 30-second early-refresh window do not contact Valkey;
+- refreshes inside the window use Valkey-backed cross-replica coordination;
+- the application never falls back to process-local-only refresh if shared coordination is unavailable.
+
+The coordination service is a correctness dependency during refresh, not a disposable cache.
+
+## Coordination invariant
+
+For one old sealed session generation S0:
+
+> Once an upstream refresh attempt has started, S0's old refresh credential is never attempted again.
+
+The coordinator persists an attempt marker before the leader can call the identity token endpoint. A short lease indicates expected leader liveness but lease expiry does not authorize another redemption. If an attempt remains without an active lease or authenticated result, the session is indeterminate and must re-authenticate.
+
+Current timing contract:
+
+- leader lease: 30 seconds;
+- follower wait deadline: 25 seconds;
+- successful result handoff: 120 seconds;
+- poll interval: 100–200 ms with jitter;
+- attempt replay guard: remaining V2 session lifetime plus 60-second cleanup margin.
+
+The 30-second lease accounts for discovery plus token requests, each of which has an independent 10-second HTTP deadline, plus processing margin.
+
+## Shared result security
+
+Valkey never receives plaintext access tokens, refresh tokens, browser cookies, client secrets, or subject identifiers.
+
+The BFF derives coordination-only keys from `IDENTITY_SESSION_KEY` with HKDF-SHA-256. The coordination identifier is a keyed HMAC of the old sealed cookie. A follower result contains only the already-sealed new session plus an HMAC bound to that exact coordination generation.
+
+A copied or modified result fails authentication and causes fail-closed session handling.
+
+## Valkey operational requirements
+
+A multi-replica deployment requires all of the following:
+
+- no eviction of attempt/lease/result keys before their TTL;
+- bounded connection and command timeouts;
+- appropriate authentication and ACLs;
+- private-network placement or TLS (`valkeys://` / `rediss://`) when the network is not trusted;
+- HA/persistence selected consistently with the deployment SLO;
+- one logical write authority for a coordination key at a time.
+
+An eviction policy that can delete these keys under memory pressure is unsupported for multi-replica correctness. Deleting attempt state early can defeat the no-retry invariant.
+
+The application does not implement Redlock across independent primaries and does not claim correctness for conflicting multi-primary writes.
+
+## Failure behavior
+
+### Valkey unavailable while the access token is still valid
+
+If `accessTokenExpiresAt > now`, the current request may continue with that still-valid access token. The BFF does not refresh or rewrite the cookie. A later request can retry coordination.
+
+### Valkey unavailable after the access token has expired
+
+If `accessTokenExpiresAt <= now`, the BFF clears the session and requires login. It never refreshes without shared coordination.
+
+### Leader/upstream ambiguity
+
+If the leader crashes, the token endpoint times out, result publication fails, or another ambiguous outcome occurs after an attempt is persisted:
+
+- the attempt marker is retained;
+- the old refresh credential is not retried;
+- followers do not promote themselves to a new leader;
+- the affected browser session fails closed and requires login unless a valid authenticated result was already published.
+
+### Invalid shared result
+
+A malformed result, MAC failure, cross-generation result, or invalid/decrypt-failing sealed session is rejected. The old refresh credential is not retried.
+
+## Verification coverage
+
+The repository includes deterministic tests for:
+
+- two independent coordinators processing the same near-expiry V2 session against real Valkey;
+- strict single-use refresh semantics with exactly one upstream redemption;
+- follower adoption of the refreshed sealed session;
+- leader loss with the attempt marker retained;
+- publish failure after an upstream success;
+- cross-generation result substitution;
+- result expiry while the replay guard remains;
+- Valkey outage with valid versus expired access tokens;
+- the 30-second lease / 25-second follower deadline timing envelope;
+- no regression of the existing process-local single-flight path when shared coordination is disabled.
+
+The dedicated `Identity refresh coordination` GitHub Actions workflow runs the real-Valkey integration suite together with TypeScript/Svelte checks and linting.
+
+## Deployment sequence
+
+1. Deploy the code while leaving shared coordination disabled; continue with one active BFF replica.
+2. Provision Valkey with the no-eviction, network, ACL/TLS, timeout, HA, and monitoring requirements above.
+3. Enable `IDENTITY_REFRESH_COORDINATION_URL` and `IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS` on one replica. Existing V1 sessions will re-login into bounded V2 sessions.
+4. Exercise normal refresh, Valkey outage, identity-provider failure, and indeterminate-session behavior.
+5. Run a two-replica canary with concurrent near-expiry requests. Confirm exactly one upstream refresh redemption and successful follower handoff.
+6. Monitor refresh failures, indeterminate sessions, coordination-unavailable outcomes, and login-rate changes before increasing traffic.
+
+## Current production topology restriction
+
+The implementation and CI coverage are necessary but not sufficient to declare a real environment ready for horizontal browser-session traffic.
+
+**Keep browser-session BFF traffic on one active replica until the real deployment canary in the previous section succeeds.**
+
+Only after that acceptance should the deployment policy be changed to permit multiple active BFF replicas.
+
+## Rollback
+
+If shared coordination behaves unexpectedly:
+
+1. reduce browser-session traffic to one active BFF replica;
+2. remove or disable `IDENTITY_REFRESH_COORDINATION_URL`;
+3. retain V2 sessions; they remain valid in the single-replica path;
+4. return to process-local single-flight refresh;
+5. leave backend JWT/JWKS configuration unchanged.
+
+Do not disable shared coordination while multiple active replicas continue serving browser-session refresh traffic.
