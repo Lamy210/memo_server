@@ -95,13 +95,15 @@ The application does not implement Redlock across independent primaries and does
 
 ## Failure behavior
 
-### Valkey unavailable while the access token is still valid
+### Valkey unavailable while the access token and V2 session are still valid
 
-If `accessTokenExpiresAt > now`, the current request may continue with that still-valid access token. The BFF does not refresh or rewrite the cookie. A later request can retry coordination.
+The current request may continue with the existing access token only when both `accessTokenExpiresAt > now` and `sessionExpiresAt > now` still hold after the coordination attempt finishes. The BFF does not refresh or rewrite the cookie. A later request can retry coordination.
 
-### Valkey unavailable after the access token has expired
+If the fixed V2 browser-session lifetime expires while Valkey coordination is being attempted, the BFF clears the session even when the access token itself would still be valid.
 
-If `accessTokenExpiresAt <= now`, the BFF clears the session and requires login. It never refreshes without shared coordination.
+### Valkey unavailable after the access token or V2 session has expired
+
+If `accessTokenExpiresAt <= now` or `sessionExpiresAt <= now`, the BFF clears the session and requires login. It never refreshes without shared coordination and never extends the fixed V2 browser-session lifetime because coordination is unavailable.
 
 ### Leader/upstream ambiguity
 
@@ -126,6 +128,7 @@ The repository includes deterministic tests for:
 - result-handoff ciphertext not exposing the replayable browser-cookie value;
 - fresh handoff encryption nonces and independent HKDF encryption/MAC domains;
 - rejection of an authenticated but already-expired handoff access token;
+- rejection when a V2 browser session expires while coordination is unavailable, even if its access token remains valid;
 - leader loss with the attempt marker retained;
 - publish failure after an upstream success;
 - cross-generation result substitution;
