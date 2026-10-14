@@ -14,6 +14,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test:unit": "vitest",
+    "test:identity-refresh-integration": "vitest run src/lib/server/identity/valkeyRefreshCoordinationStore.integration.test.ts src/lib/server/identity/refreshCoordinator.multiReplica.integration.test.ts",
     "test:e2e": "playwright test",
     "test": "pnpm test:unit -- --run",
     "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs"
