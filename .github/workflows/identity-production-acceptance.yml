@@ -9,6 +9,7 @@ on:
       - 'scripts/test_validate_identity_rollout.py'
       - 'backend/src/bin/verify_identity_access_token.rs'
       - 'docs/identity-production-acceptance.md'
+      - 'docs/browser-auth-operations.md'
       - '.github/workflows/identity-production-acceptance.yml'
   push:
     branches:
@@ -20,6 +21,7 @@ on:
       - 'scripts/test_validate_identity_rollout.py'
       - 'backend/src/bin/verify_identity_access_token.rs'
       - 'docs/identity-production-acceptance.md'
+      - 'docs/browser-auth-operations.md'
       - '.github/workflows/identity-production-acceptance.yml'
 
 permissions:
