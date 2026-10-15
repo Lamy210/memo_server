@@ -188,6 +188,45 @@ The additional flag represents real candidate-environment evidence that the cana
 
 The runner does not independently verify that the operator attestation is truthful. It prevents an incomplete evidence set from being mistaken for topology readiness.
 
+## Internal acceptance/result model
+
+Pass topology explicitly into the acceptance function instead of storing it as hidden global/CLI state:
+
+```python
+run_acceptance(
+    config: AcceptanceConfig,
+    evidence: AcceptanceEvidence,
+    browser_topology: BrowserTopology,
+    *,
+    preflight_fn=...,
+    verifier_fn=...,
+) -> AcceptanceResult
+```
+
+`AcceptanceResult` must carry enough closed state to render the new output without reconstructing topology from booleans:
+
+```text
+browser_topology: BrowserTopology | None
+refresh_coordination_canary_validated: bool | None
+```
+
+The rendered canary status is derived deterministically:
+
+```text
+browser_topology is None -> not_run
+single_active -> not_required
+multi_active + evidence true -> true
+multi_active + evidence false -> false
+```
+
+This avoids inventing a fake boolean value for `not_required` and avoids widening the existing generic boolean formatter with topology-specific string states.
+
+CLI semantic consistency is validated before network/token work. For the valid topology cases, `main()` constructs the enum and passes it explicitly to `run_acceptance()`.
+
+For `single-active + --refresh-coordination-canary-validated`, `main()` returns a fixed usage result whose topology is known as `single_active`; no preflight or verifier is called.
+
+For a topology parse failure, the usage result carries `browser_topology=None`, producing `not_run` and never echoing the rejected input.
+
 ## CLI validity matrix
 
 The CLI contract is fixed as follows:
@@ -335,11 +374,14 @@ The topology itself is known, but the combination is invalid usage:
 ```text
 identity_acceptance.browser_topology=single_active
 identity_acceptance.refresh_coordination_canary=not_required
+identity_acceptance.browser_flow=not_run
+identity_acceptance.rotation_rollback=not_run
+identity_acceptance.monitoring=not_run
+identity_acceptance.issuer_preflight=not_run
+identity_acceptance.access_token=not_run
 identity_acceptance.ready=false
 identity_acceptance.failure_phase=usage
 ```
-
-Other evidence fields may remain `not_run` because the invalid combination is rejected before evidence evaluation.
 
 ## Monitoring evidence separation
 
@@ -498,7 +540,7 @@ Required RED coverage:
 - successful multi-active output includes `browser_topology=multi_active`;
 - successful multi-active output includes `refresh_coordination_canary=true`;
 - usage failure before topology parsing renders topology/canary `not_run`;
-- invalid single-active/canary combination renders fixed values without dynamic input;
+- invalid single-active/canary combination renders fixed topology/canary values and all other evidence as `not_run`;
 - existing issuer/JWKS/audience/token privacy assertions remain true;
 - verifier stdin inheritance and output suppression remain unchanged;
 - existing failure ordering for preflight and verifier remains unchanged once operator evidence is complete.
@@ -568,6 +610,8 @@ The change is complete when all of the following are true:
 
 - topology is a required closed input;
 - there is no implicit default topology;
+- topology is passed explicitly into `run_acceptance()`;
+- `AcceptanceResult` can represent `not_run` and derive `not_required` without conflating them with false;
 - single-active readiness does not require refresh-coordination canary evidence;
 - multi-active readiness does require canary evidence;
 - irrelevant canary evidence on single-active is rejected;
