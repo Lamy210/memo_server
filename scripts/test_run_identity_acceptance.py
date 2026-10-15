@@ -6,11 +6,11 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import Mock
 
-import scripts.run_identity_acceptance as acceptance
 from scripts.run_identity_acceptance import (
     AcceptanceConfig,
     AcceptanceEvidence,
     AcceptancePhase,
+    BrowserTopology,
     build_verifier_env,
     main,
     run_acceptance,
@@ -41,22 +41,17 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
             browser_flow_validated=True,
             rotation_rollback_validated=True,
             monitoring_validated=True,
+            refresh_coordination_canary_validated=False,
         )
 
-    def browser_topology(self):
-        topology = getattr(acceptance, "BrowserTopology", None)
-        self.assertIsNotNone(topology, "BrowserTopology contract is not implemented")
-        return topology
-
     def test_single_active_success_renders_topology_and_not_required_canary(self) -> None:
-        topology = self.browser_topology()
         preflight = Mock(return_value={"status": "ok"})
         verifier = Mock(return_value=0)
 
         result = run_acceptance(
             self.config(),
             self.evidence(),
-            topology.SINGLE_ACTIVE,
+            BrowserTopology.SINGLE_ACTIVE,
             preflight_fn=preflight,
             verifier_fn=verifier,
         )
@@ -72,7 +67,6 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         )
 
     def test_multi_active_success_requires_and_renders_true_canary(self) -> None:
-        topology = self.browser_topology()
         evidence = AcceptanceEvidence(
             browser_flow_validated=True,
             rotation_rollback_validated=True,
@@ -83,7 +77,7 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         result = run_acceptance(
             self.config(),
             evidence,
-            topology.MULTI_ACTIVE,
+            BrowserTopology.MULTI_ACTIVE,
             preflight_fn=Mock(return_value={"status": "ok"}),
             verifier_fn=Mock(return_value=0),
         )
@@ -93,7 +87,6 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         self.assertIn("identity_acceptance.refresh_coordination_canary=true", result.render())
 
     def test_multi_active_missing_canary_stops_before_preflight_and_verifier(self) -> None:
-        topology = self.browser_topology()
         preflight = Mock(return_value={"status": "ok"})
         verifier = Mock(return_value=0)
         evidence = AcceptanceEvidence(
@@ -106,7 +99,7 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         result = run_acceptance(
             self.config(),
             evidence,
-            topology.MULTI_ACTIVE,
+            BrowserTopology.MULTI_ACTIVE,
             preflight_fn=preflight,
             verifier_fn=verifier,
         )
@@ -120,7 +113,6 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         verifier.assert_not_called()
 
     def test_unexpected_preflight_failure_keeps_topology_without_leaking_detail(self) -> None:
-        topology = self.browser_topology()
         verifier = Mock(return_value=0)
         sensitive_detail = "https://id.example.test/jwks?credential=must-not-leak"
 
@@ -130,7 +122,7 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         result = run_acceptance(
             self.config(),
             self.evidence(),
-            topology.SINGLE_ACTIVE,
+            BrowserTopology.SINGLE_ACTIVE,
             preflight_fn=exploding_preflight,
             verifier_fn=verifier,
         )
@@ -149,11 +141,13 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
             browser_flow_validated=True,
             rotation_rollback_validated=False,
             monitoring_validated=True,
+            refresh_coordination_canary_validated=False,
         )
 
         result = run_acceptance(
             self.config(),
             incomplete,
+            BrowserTopology.SINGLE_ACTIVE,
             preflight_fn=preflight,
             verifier_fn=verifier,
         )
@@ -173,6 +167,7 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         result = run_acceptance(
             self.config(),
             self.evidence(),
+            BrowserTopology.SINGLE_ACTIVE,
             preflight_fn=failing_preflight,
             verifier_fn=verifier,
         )
@@ -191,6 +186,7 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         result = run_acceptance(
             self.config(),
             self.evidence(),
+            BrowserTopology.SINGLE_ACTIVE,
             preflight_fn=exploding_preflight,
             verifier_fn=verifier,
         )
@@ -219,6 +215,7 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         result = run_acceptance(
             self.config(),
             self.evidence(),
+            BrowserTopology.SINGLE_ACTIVE,
             preflight_fn=preflight,
             verifier_fn=verifier,
         )
@@ -229,6 +226,8 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         rendered = result.render()
         self.assertEqual(
             rendered,
+            "identity_acceptance.browser_topology=single_active\n"
+            "identity_acceptance.refresh_coordination_canary=not_required\n"
             "identity_acceptance.browser_flow=true\n"
             "identity_acceptance.rotation_rollback=true\n"
             "identity_acceptance.monitoring=true\n"
