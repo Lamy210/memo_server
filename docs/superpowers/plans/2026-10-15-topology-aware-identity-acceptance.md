@@ -41,7 +41,7 @@
 
 **Interfaces:**
 - Consumes: existing `AcceptanceConfig`, `AcceptancePhase`, `run_preflight`, `run_verifier`.
-- Produces: `BrowserTopology`; `AcceptanceEvidence(..., refresh_coordination_canary_validated: bool)`; `run_acceptance(config, evidence, browser_topology, *, preflight_fn=..., verifier_fn=...) -> AcceptanceResult`; `AcceptanceResult.browser_topology: BrowserTopology | None`; `AcceptanceResult.refresh_coordination_canary_validated: bool | None`.
+- Produces: `BrowserTopology`; `AcceptanceEvidence(..., refresh_coordination_canary_validated: bool)`; `AcceptanceEvidence.is_complete_for(browser_topology: BrowserTopology) -> bool`; `run_acceptance(config, evidence, browser_topology, *, preflight_fn=..., verifier_fn=...) -> AcceptanceResult`; `AcceptanceResult.browser_topology: BrowserTopology | None`; `AcceptanceResult.refresh_coordination_canary_validated: bool | None`.
 
 - [ ] **Step 1: Write failing model/render tests**
 
@@ -98,7 +98,14 @@ class BrowserTopology(Enum):
     MULTI_ACTIVE = "multi_active"
 ```
 
-Extend `AcceptanceEvidence` with `refresh_coordination_canary_validated: bool` and make completeness topology-dependent through an explicit method/property that receives `BrowserTopology`; do not encode `not_required` as a fake boolean.
+Extend `AcceptanceEvidence` with `refresh_coordination_canary_validated: bool` and implement exactly:
+
+```python
+def is_complete_for(self, browser_topology: BrowserTopology) -> bool:
+    ...
+```
+
+The method requires the existing three evidence booleans for both topologies and additionally requires `refresh_coordination_canary_validated` only for `BrowserTopology.MULTI_ACTIVE`. Do not encode `not_required` as a fake boolean.
 
 Change `run_acceptance()` to:
 
@@ -139,7 +146,7 @@ Run:
 python3 -m unittest scripts.test_run_identity_acceptance -v
 ```
 
-Expected: PASS for direct acceptance/model tests, with any remaining CLI expectations deferred to Task 2.
+Expected: PASS for direct acceptance/model tests, with CLI-specific RED tests deferred to Task 2.
 
 - [ ] **Step 5: Commit Task 1**
 
@@ -162,6 +169,8 @@ git commit -m "feat: model topology-aware identity acceptance"
 
 - [ ] **Step 1: Add failing CLI validity-matrix tests**
 
+Extend imports to `from unittest.mock import Mock, patch`.
+
 Add tests proving:
 
 ```python
@@ -178,27 +187,35 @@ def test_cli_rejects_unknown_topology_without_echoing_value():
 
 def test_cli_rejects_single_active_canary_as_usage_before_evidence_work():
     # single-active + --refresh-coordination-canary-validated
-    # assert exit 2
+    # with patch("scripts.run_identity_acceptance.run_acceptance") as mocked:
+    # assert exit 2, mocked.assert_not_called()
     # assert topology=single_active, canary=not_required
-    # all operator/preflight/token fields not_run
+    # assert browser_flow/rotation/monitoring/preflight/token are not_run
 
 
 def test_cli_accepts_single_active_without_canary():
-    # patch or inject downstream acceptance dependencies as needed
-    # assert semantic validation reaches run_acceptance with SINGLE_ACTIVE
+    # patch("scripts.run_identity_acceptance.run_acceptance")
+    # make mock return a ready AcceptanceResult for SINGLE_ACTIVE
+    # assert exit 0
+    # assert call args contain BrowserTopology.SINGLE_ACTIVE
+    # assert call evidence.refresh_coordination_canary_validated is False
 
 
 def test_cli_multi_active_without_canary_is_operator_evidence_failure():
-    # base three attestations true, multi-active, no canary flag
+    # invoke real main() with base three attestations true, multi-active, no canary
     # assert exit 1, failure_phase=operator_evidence
     # assert topology=multi_active, canary=false
 
 
-def test_cli_multi_active_with_canary_reaches_preflight_then_verifier():
-    # assert successful ordering and final ready=true
+def test_cli_multi_active_with_canary_passes_true_attestation_to_run_acceptance():
+    # patch("scripts.run_identity_acceptance.run_acceptance")
+    # make mock return a ready AcceptanceResult for MULTI_ACTIVE
+    # assert exit 0
+    # assert call args contain BrowserTopology.MULTI_ACTIVE
+    # assert call evidence.refresh_coordination_canary_validated is True
 ```
 
-Also update the existing token-argument rejection test to include an otherwise-valid topology and prove `secret-token`, issuer, JWKS URI, and invalid arguments are still not echoed.
+Update the existing token-argument rejection test to include `--browser-topology single-active` so the unknown `--token` remains the reason for usage failure, and prove `secret-token`, issuer, and JWKS URI are still absent from combined output.
 
 - [ ] **Step 2: Add failing credential/failure-ordering regression tests**
 
@@ -237,12 +254,12 @@ and boolean flag:
 --refresh-coordination-canary-validated
 ```
 
-Parse the CLI spelling into `BrowserTopology` without ever including the rejected raw value in output. `SafeArgumentParser.error()` remains fixed-text only.
+Keep `SafeArgumentParser.error()` fixed-text-only so omitted/unknown choices cannot echo attacker-controlled values. Convert the accepted CLI spellings to `BrowserTopology` only after parsing succeeds.
 
-Before constructing normal acceptance work:
+Before normal acceptance work:
 
-- omitted/unknown topology -> usage result with `browser_topology=None`;
-- `single-active + canary flag` -> usage result with known `BrowserTopology.SINGLE_ACTIVE`, all evidence/network/token fields `not_run`;
+- omitted/unknown topology -> parser usage result with `browser_topology=None`;
+- `single-active + canary flag` -> semantic usage result with known `BrowserTopology.SINGLE_ACTIVE`, all evidence/network/token fields `not_run`;
 - `multi-active + no canary` -> construct evidence with canary false and let topology-dependent `run_acceptance()` return `OPERATOR_EVIDENCE` before network/token work;
 - valid single/multi combinations -> call `run_acceptance(config, evidence, browser_topology)`.
 
@@ -317,7 +334,7 @@ Do not add a workflow or change the existing Python/Rust test commands.
 
 - [ ] **Step 4: Verify documentation/workflow consistency**
 
-Run locally when available:
+Run:
 
 ```bash
 python3 -m unittest scripts.test_validate_identity_rollout -v
@@ -327,7 +344,7 @@ cargo test --locked --manifest-path backend/Cargo.toml --bin verify_identity_acc
 
 Expected: PASS.
 
-Review the docs manually for exact spellings:
+Review the docs for exact spellings:
 
 ```text
 single-active / multi-active    # CLI
