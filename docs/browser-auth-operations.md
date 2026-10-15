@@ -118,6 +118,29 @@ If the leader crashes, the token endpoint times out, result publication fails, o
 
 A malformed envelope, HMAC failure, AES-GCM authentication failure, cross-generation result, invalid/decrypt-failing sealed session, changed `sessionExpiresAt`, or handoff whose `accessTokenExpiresAt <= now` is rejected. The browser session is cleared and the old refresh credential is not retried.
 
+## Refresh coordination observability
+
+Shared refresh attempts expose only a fixed, provider-neutral terminal taxonomy:
+
+- `leader_success`: the elected leader refreshed, published the handoff, and authenticated with the refreshed session;
+- `follower_success`: a follower adopted a valid authenticated shared result;
+- `unavailable_continue`: coordination was unavailable, but the fixed V2 session and current access token were both still valid so the request continued without refresh or cookie rewrite;
+- `unavailable_fail_closed`: coordination was unavailable while the V2 session remained valid but the access token did not, so the session was cleared;
+- `leader_lost`: a persisted attempt no longer had a usable active leader/result state;
+- `wait_timeout`: a follower exhausted the bounded wait deadline;
+- `invalid_result`: the shared result or opened shared session failed the fixed validation contract;
+- `session_expired`: the original fixed V2 `sessionExpiresAt` elapsed while shared coordination or leader work was in progress;
+- `upstream_failure`: elected leader work failed while resolving or redeeming the upstream refresh path;
+- `publish_failure`: upstream refresh succeeded but the refreshed handoff could not be published.
+
+Exactly one terminal outcome is recorded for a request that reaches shared coordination. Requests outside shared coordination, including live tokens outside the early-refresh window, V1 migration rejection, invalid sessions rejected before coordination, and coordination-disabled process-local refresh, do not record a refresh-coordination outcome.
+
+The counters are cumulative and process-local. One fixed aggregate INFO line is emitted every 50 recorded outcomes; counters are not reset after emission. The following outcomes also emit an immediate fixed WARN line: `unavailable_continue`, `unavailable_fail_closed`, `leader_lost`, `wait_timeout`, `invalid_result`, `upstream_failure`, and `publish_failure`. `leader_success`, `follower_success`, and `session_expired` remain aggregate-only.
+
+The observability surface contains only the fixed outcome names and numeric counters. It must not include access/refresh tokens, cookies or sealed-session values, authorization codes, coordination IDs, owner tokens, ciphertext/nonces/MACs, `sub`, user identifiers, `jti`, `kid`, `client_id`, issuer/OIDC/JWKS URLs, Valkey connection details, provider/product names, topology identifiers, raw HTTP details, or raw exception/provider/store errors.
+
+Observability is passive. Logging or recorder failure must not change authentication, refresh, cookie, coordination, retry, TTL, or fail-closed behavior and must not create a dependency on the log collector.
+
 ## Verification coverage
 
 The repository includes deterministic tests for:
@@ -135,18 +158,31 @@ The repository includes deterministic tests for:
 - result expiry while the replay guard remains;
 - Valkey outage with valid versus expired access tokens;
 - the 30-second lease / 25-second follower deadline timing envelope;
-- no regression of the existing process-local single-flight path when shared coordination is disabled.
+- no regression of the existing process-local single-flight path when shared coordination is disabled;
+- all ten refresh-observability terminal outcomes and their classification precedence;
+- exactly-once recording on shared-coordination terminal paths and zero recording outside shared coordination;
+- fixed warning/aggregate output and passive behavior when logging fails.
 
-The dedicated `Identity refresh coordination` GitHub Actions workflow runs the handoff-security contracts, the real-Valkey integration suite, TypeScript/Svelte checks, and linting.
+The dedicated `Identity refresh coordination` GitHub Actions workflow runs the observability contracts, handoff-security contracts, the real-Valkey integration suite, TypeScript/Svelte checks, and linting.
 
 ## Deployment sequence
 
 1. Deploy the code while leaving shared coordination disabled; continue with one active BFF replica.
 2. Provision Valkey with the no-eviction, network, ACL/TLS, timeout, HA, and monitoring requirements above.
 3. Enable `IDENTITY_REFRESH_COORDINATION_URL` and `IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS` on one replica. Existing V1 sessions will re-login into bounded V2 sessions.
-4. Exercise normal refresh, Valkey outage, identity-provider failure, and indeterminate-session behavior.
-5. Run a two-replica canary with concurrent near-expiry requests. Confirm exactly one upstream refresh redemption and successful follower handoff.
-6. Monitor refresh failures, indeterminate sessions, coordination-unavailable outcomes, and login-rate changes before increasing traffic.
+4. Exercise normal refresh, Valkey outage, identity-provider failure, and indeterminate-session behavior. Confirm the expected fixed telemetry categories reach the private operational log path without prohibited sensitive/dynamic values.
+5. Run a controlled two-active-replica canary with concurrent requests for the same near-expiry V2 session generation. Acceptance requires:
+   - exactly one upstream refresh-token redemption for that generation;
+   - at least one observed `leader_success` and at least one observed `follower_success` during the handoff exercise;
+   - zero `leader_lost`, `wait_timeout`, `invalid_result`, `upstream_failure`, and `publish_failure` outcomes during that controlled successful handoff rehearsal;
+   - an intentional coordination-outage exercise produces the expected `unavailable_continue` and/or `unavailable_fail_closed` behavior without process-local refresh fallback;
+   - an intentional fixed-session-lifetime exercise produces `session_expired` without extending the original `sessionExpiresAt`;
+   - sampled application events contain none of the prohibited credential, identity, provider, coordination, topology, connection, or raw-error values;
+   - the deployed log collector/dashboard/alert path can distinguish the documented fixed categories;
+   - login-rate and existing `unauthorized` monitoring show no material unexplained regression relative to the environment baseline.
+6. Review the controlled-canary evidence before increasing browser-session traffic beyond one active replica.
+
+The zero-abnormal-outcome requirement above applies to the controlled successful handoff rehearsal. It is an acceptance condition for that exercise, not a permanent production SLO or a claim that all abnormal outcomes must remain zero in steady state.
 
 ## Current production topology restriction
 
@@ -154,7 +190,7 @@ The implementation and CI coverage are necessary but not sufficient to declare a
 
 **Keep browser-session BFF traffic on one active replica until the real deployment canary in the previous section succeeds.**
 
-Only after that acceptance should the deployment policy be changed to permit multiple active BFF replicas.
+Only after that acceptance should the deployment policy be changed to permit multiple active BFF replicas. This repository change does not itself authorize or perform that topology change.
 
 ## Rollback
 
