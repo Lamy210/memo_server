@@ -59,6 +59,8 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
             self.config().token_type_mode,
             "--max-access-token-lifetime-seconds",
             str(self.config().max_access_token_lifetime_seconds),
+            "--timeout-seconds",
+            str(self.config().timeout_seconds),
             "--browser-flow-validated",
             "--rotation-rollback-validated",
             "--monitoring-validated",
