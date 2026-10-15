@@ -283,11 +283,15 @@ describe('shared refresh coordination observability', () => {
   });
 
   it('prioritizes session_expired at the exact unavailable decision boundary', async () => {
-    const sealed = await v2Session({ accessTokenExpiresAt: SESSION_EXPIRES_AT + 120_000 });
+    const decisionBoundary = NOW + 1_000;
+    const sealed = await v2Session({
+      sessionExpiresAt: decisionBoundary,
+      accessTokenExpiresAt: NOW + 2_000
+    });
     const cookies = fakeCookies(sealed);
     const coordination = fakeCoordinator({ kind: 'unavailable' });
     coordination.acquire.mockImplementation(async () => {
-      vi.spyOn(Date, 'now').mockReturnValue(SESSION_EXPIRES_AT);
+      vi.spyOn(Date, 'now').mockReturnValue(decisionBoundary);
       return { kind: 'unavailable' } as const;
     });
     const recordOutcome = vi.fn();
@@ -303,6 +307,7 @@ describe('shared refresh coordination observability', () => {
       refreshOutcomeRecorder: recordOutcome
     });
 
+    expect(coordination.acquire).toHaveBeenCalledTimes(1);
     expect(recordOutcome).toHaveBeenCalledTimes(1);
     expect(recordOutcome).toHaveBeenCalledWith('session_expired');
     expect(locals).toEqual({ authenticated: false });
@@ -408,6 +413,32 @@ describe('shared refresh coordination observability', () => {
     expect(recordOutcome).toHaveBeenCalledWith('publish_failure');
     expect(coordination.completeFailure).toHaveBeenCalledTimes(1);
     expect(locals).toEqual({ authenticated: false });
+  });
+
+  it('contains recorder failure without changing leader authentication success', async () => {
+    const sealed = await v2Session();
+    const cookies = fakeCookies(sealed);
+    const coordination = fakeCoordinator({ kind: 'leader', owner: 'owner-a' });
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const recordOutcome = vi.fn(() => {
+      throw new Error('telemetry sink failed');
+    });
+
+    await expect(
+      restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: coordinatedEnv(),
+        fetchFn: discoveryAndRefreshFetch(),
+        now: NOW,
+        coordinator: coordination.coordinator,
+        refreshOutcomeRecorder: recordOutcome
+      })
+    ).resolves.toBeUndefined();
+
+    expect(recordOutcome).toHaveBeenCalledTimes(1);
+    expect(locals).toEqual({ authenticated: true, accessToken: 'access-new' });
+    expect(cookies.setCalls).toHaveLength(1);
   });
 
   it('does not record outside shared coordination paths', async () => {
