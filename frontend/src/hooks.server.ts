@@ -10,6 +10,10 @@ import {
   createRefreshCoordinator,
   type RefreshCoordinator
 } from '$lib/server/identity/refreshCoordinator';
+import {
+  recordRefreshCoordinationOutcome,
+  type RefreshCoordinationOutcome
+} from '$lib/server/identity/refreshObservability';
 import { discoverIdentity, refreshAccessToken } from '$lib/server/identity/oidcClient';
 import {
   isIdentitySessionV2,
@@ -52,6 +56,7 @@ type IdentitySessionRestoreInput = {
   fetchFn: typeof fetch;
   now?: number;
   coordinator?: RefreshCoordinator;
+  refreshOutcomeRecorder?: (outcome: RefreshCoordinationOutcome) => void;
 };
 
 function clearIdentityLocals(locals: IdentityLocals): void {
@@ -84,6 +89,17 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
     difference |= left[index] ^ right[index];
   }
   return difference === 0;
+}
+
+function observeRefreshOutcome(
+  recorder: (outcome: RefreshCoordinationOutcome) => void,
+  outcome: RefreshCoordinationOutcome
+): void {
+  try {
+    recorder(outcome);
+  } catch {
+    // Refresh observability is passive and must never change authentication behavior.
+  }
 }
 
 function productionRefreshCoordinator(config: IdentityConfig): RefreshCoordinator {
@@ -178,8 +194,9 @@ async function restoreWithSharedCoordination(input: {
   fetchFn: typeof fetch;
   now: number;
   coordinator?: RefreshCoordinator;
+  recordOutcome: (outcome: RefreshCoordinationOutcome) => void;
 }): Promise<void> {
-  const { sealed, session, config, cookies, locals, fetchFn, now } = input;
+  const { sealed, session, config, cookies, locals, fetchFn, now, recordOutcome } = input;
   if (!isIdentitySessionV2(session)) {
     deleteSessionCookie(cookies);
     return;
@@ -193,23 +210,36 @@ async function restoreWithSharedCoordination(input: {
   const decisionNow = Math.max(now, Date.now());
 
   if (decision.kind === 'unavailable') {
-    if (
-      session.sessionExpiresAt > decisionNow &&
-      session.accessTokenExpiresAt > decisionNow
-    ) {
-      authenticate(locals, session.accessToken);
-    } else {
+    if (session.sessionExpiresAt <= decisionNow) {
       deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'session_expired');
+      return;
     }
+
+    if (session.accessTokenExpiresAt <= decisionNow) {
+      deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'unavailable_fail_closed');
+      return;
+    }
+
+    authenticate(locals, session.accessToken);
+    observeRefreshOutcome(recordOutcome, 'unavailable_continue');
     return;
   }
 
   if (decision.kind === 'indeterminate') {
     deleteSessionCookie(cookies);
+    observeRefreshOutcome(recordOutcome, decision.reason);
     return;
   }
 
   if (decision.kind === 'result') {
+    if (session.sessionExpiresAt <= decisionNow) {
+      deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'session_expired');
+      return;
+    }
+
     const resultSession = await openSession(decision.sealedSession, config.sessionKey, decisionNow);
     if (
       !resultSession ||
@@ -218,11 +248,13 @@ async function restoreWithSharedCoordination(input: {
       resultSession.accessTokenExpiresAt <= decisionNow
     ) {
       deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'invalid_result');
       return;
     }
 
     setSessionCookie(cookies, decision.sealedSession);
     authenticate(locals, resultSession.accessToken);
+    observeRefreshOutcome(recordOutcome, 'follower_success');
     return;
   }
 
@@ -235,6 +267,7 @@ async function restoreWithSharedCoordination(input: {
     if (session.sessionExpiresAt <= refreshedAt) {
       await coordinator.completeFailure({ sealedSession: sealed, owner: decision.owner });
       deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'session_expired');
       return;
     }
 
@@ -253,15 +286,18 @@ async function restoreWithSharedCoordination(input: {
     if (!published) {
       await coordinator.completeFailure({ sealedSession: sealed, owner: decision.owner });
       deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'publish_failure');
       return;
     }
 
     setSessionCookie(cookies, nextSealed);
     authenticate(locals, nextSession.accessToken);
+    observeRefreshOutcome(recordOutcome, 'leader_success');
   } catch {
     await coordinator.completeFailure({ sealedSession: sealed, owner: decision.owner });
     deleteSessionCookie(cookies);
     clearIdentityLocals(locals);
+    observeRefreshOutcome(recordOutcome, 'upstream_failure');
   }
 }
 
@@ -271,7 +307,8 @@ export async function restoreIdentitySession({
   env: identityEnv,
   fetchFn,
   now = Date.now(),
-  coordinator
+  coordinator,
+  refreshOutcomeRecorder
 }: IdentitySessionRestoreInput): Promise<void> {
   clearIdentityLocals(locals);
 
@@ -311,7 +348,8 @@ export async function restoreIdentitySession({
       locals,
       fetchFn,
       now,
-      coordinator
+      coordinator,
+      recordOutcome: refreshOutcomeRecorder ?? recordRefreshCoordinationOutcome
     });
     return;
   }
