@@ -25,6 +25,7 @@ _VERIFIER_COMMAND = [
 ]
 _SIGNATURE_MODES = ("rs256", "rs256-es384", "es384")
 _TOKEN_TYPE_MODES = ("legacy-any", "at-jwt")
+_BROWSER_TOPOLOGY_MODES = ("single-active", "multi-active")
 _SENSITIVE_INHERITED_ENV_KEYS = {
     "ACCESS_TOKEN",
     "BEARER_TOKEN",
@@ -306,16 +307,27 @@ def _parser() -> SafeArgumentParser:
         type=_positive_finite_float,
         default=10.0,
     )
+    parser.add_argument(
+        "--browser-topology",
+        required=True,
+        choices=_BROWSER_TOPOLOGY_MODES,
+    )
     parser.add_argument("--browser-flow-validated", action="store_true")
     parser.add_argument("--rotation-rollback-validated", action="store_true")
     parser.add_argument("--monitoring-validated", action="store_true")
+    parser.add_argument(
+        "--refresh-coordination-canary-validated",
+        action="store_true",
+    )
     return parser
 
 
-def _usage_failure() -> AcceptanceResult:
+def _usage_failure(
+    browser_topology: BrowserTopology | None = None,
+) -> AcceptanceResult:
     return AcceptanceResult(
         phase=AcceptancePhase.USAGE,
-        browser_topology=None,
+        browser_topology=browser_topology,
         refresh_coordination_canary_validated=None,
         browser_flow_validated=None,
         rotation_rollback_validated=None,
@@ -326,11 +338,25 @@ def _usage_failure() -> AcceptanceResult:
     )
 
 
+def _browser_topology(value: str) -> BrowserTopology:
+    if value == "single-active":
+        return BrowserTopology.SINGLE_ACTIVE
+    return BrowserTopology.MULTI_ACTIVE
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
     except AcceptanceUsageError:
         print(_usage_failure().render())
+        return 2
+
+    browser_topology = _browser_topology(args.browser_topology)
+    if (
+        browser_topology is BrowserTopology.SINGLE_ACTIVE
+        and args.refresh_coordination_canary_validated
+    ):
+        print(_usage_failure(browser_topology).render())
         return 2
 
     config = AcceptanceConfig(
@@ -346,9 +372,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         browser_flow_validated=args.browser_flow_validated,
         rotation_rollback_validated=args.rotation_rollback_validated,
         monitoring_validated=args.monitoring_validated,
-        refresh_coordination_canary_validated=False,
+        refresh_coordination_canary_validated=(
+            args.refresh_coordination_canary_validated
+        ),
     )
-    result = run_acceptance(config, evidence, BrowserTopology.SINGLE_ACTIVE)
+    result = run_acceptance(config, evidence, browser_topology)
     print(result.render())
     return 0 if result.ready else 1
 
