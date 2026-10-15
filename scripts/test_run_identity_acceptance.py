@@ -4,12 +4,13 @@ from __future__ import annotations
 import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from scripts.run_identity_acceptance import (
     AcceptanceConfig,
     AcceptanceEvidence,
     AcceptancePhase,
+    AcceptanceResult,
     BrowserTopology,
     build_verifier_env,
     main,
@@ -42,6 +43,43 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
             rotation_rollback_validated=True,
             monitoring_validated=True,
             refresh_coordination_canary_validated=False,
+        )
+
+    def cli_args(self) -> list[str]:
+        return [
+            "--issuer",
+            self.config().issuer,
+            "--jwks-uri",
+            self.config().jwks_uri,
+            "--audience",
+            self.config().audience,
+            "--signature-mode",
+            self.config().signature_mode,
+            "--token-type-mode",
+            self.config().token_type_mode,
+            "--max-access-token-lifetime-seconds",
+            str(self.config().max_access_token_lifetime_seconds),
+            "--browser-flow-validated",
+            "--rotation-rollback-validated",
+            "--monitoring-validated",
+        ]
+
+    def ready_result(
+        self,
+        topology: BrowserTopology,
+        *,
+        canary: bool,
+    ) -> AcceptanceResult:
+        return AcceptanceResult(
+            phase=AcceptancePhase.COMPLETE,
+            browser_topology=topology,
+            refresh_coordination_canary_validated=canary,
+            browser_flow_validated=True,
+            rotation_rollback_validated=True,
+            monitoring_validated=True,
+            issuer_preflight=True,
+            access_token=True,
+            ready=True,
         )
 
     def test_single_active_success_renders_topology_and_not_required_canary(self) -> None:
@@ -239,6 +277,126 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         self.assertNotIn(self.config().jwks_uri, rendered)
         self.assertNotIn(self.config().audience, rendered)
 
+    def test_cli_requires_browser_topology_without_echoing_inputs(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch("scripts.run_identity_acceptance.run_acceptance") as mocked:
+            mocked.return_value = self.ready_result(
+                BrowserTopology.SINGLE_ACTIVE,
+                canary=False,
+            )
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(self.cli_args())
+
+        self.assertEqual(status, 2)
+        mocked.assert_not_called()
+        combined = stdout.getvalue() + stderr.getvalue()
+        self.assertIn("identity_acceptance.browser_topology=not_run", combined)
+        self.assertIn("identity_acceptance.refresh_coordination_canary=not_run", combined)
+        self.assertIn("identity_acceptance.failure_phase=usage", combined)
+        self.assertNotIn(self.config().issuer, combined)
+        self.assertNotIn(self.config().jwks_uri, combined)
+
+    def test_cli_rejects_unknown_topology_without_echoing_value(self) -> None:
+        rejected = "attacker-controlled-topology"
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            status = main(self.cli_args() + ["--browser-topology", rejected])
+
+        self.assertEqual(status, 2)
+        combined = stdout.getvalue() + stderr.getvalue()
+        self.assertIn("identity_acceptance.browser_topology=not_run", combined)
+        self.assertIn("identity_acceptance.failure_phase=usage", combined)
+        self.assertNotIn(rejected, combined)
+
+    def test_cli_rejects_single_active_canary_as_usage_before_evidence_work(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch("scripts.run_identity_acceptance.run_acceptance") as mocked:
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(
+                    self.cli_args()
+                    + [
+                        "--browser-topology",
+                        "single-active",
+                        "--refresh-coordination-canary-validated",
+                    ]
+                )
+
+        self.assertEqual(status, 2)
+        mocked.assert_not_called()
+        combined = stdout.getvalue() + stderr.getvalue()
+        self.assertIn("identity_acceptance.browser_topology=single_active", combined)
+        self.assertIn("identity_acceptance.refresh_coordination_canary=not_required", combined)
+        self.assertIn("identity_acceptance.browser_flow=not_run", combined)
+        self.assertIn("identity_acceptance.issuer_preflight=not_run", combined)
+        self.assertIn("identity_acceptance.access_token=not_run", combined)
+        self.assertIn("identity_acceptance.failure_phase=usage", combined)
+
+    def test_cli_accepts_single_active_without_canary(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch("scripts.run_identity_acceptance.run_acceptance") as mocked:
+            mocked.return_value = self.ready_result(
+                BrowserTopology.SINGLE_ACTIVE,
+                canary=False,
+            )
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(
+                    self.cli_args() + ["--browser-topology", "single-active"]
+                )
+
+        self.assertEqual(status, 0)
+        config, evidence, topology = mocked.call_args.args
+        self.assertEqual(config, self.config())
+        self.assertIs(topology, BrowserTopology.SINGLE_ACTIVE)
+        self.assertFalse(evidence.refresh_coordination_canary_validated)
+
+    def test_cli_multi_active_without_canary_is_operator_evidence_failure(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            status = main(self.cli_args() + ["--browser-topology", "multi-active"])
+
+        self.assertEqual(status, 1)
+        combined = stdout.getvalue() + stderr.getvalue()
+        self.assertIn("identity_acceptance.browser_topology=multi_active", combined)
+        self.assertIn("identity_acceptance.refresh_coordination_canary=false", combined)
+        self.assertIn("identity_acceptance.issuer_preflight=not_run", combined)
+        self.assertIn("identity_acceptance.access_token=not_run", combined)
+        self.assertIn("identity_acceptance.failure_phase=operator_evidence", combined)
+
+    def test_cli_multi_active_with_canary_passes_true_attestation_to_run_acceptance(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch("scripts.run_identity_acceptance.run_acceptance") as mocked:
+            mocked.return_value = self.ready_result(
+                BrowserTopology.MULTI_ACTIVE,
+                canary=True,
+            )
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = main(
+                    self.cli_args()
+                    + [
+                        "--browser-topology",
+                        "multi-active",
+                        "--refresh-coordination-canary-validated",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        config, evidence, topology = mocked.call_args.args
+        self.assertEqual(config, self.config())
+        self.assertIs(topology, BrowserTopology.MULTI_ACTIVE)
+        self.assertTrue(evidence.refresh_coordination_canary_validated)
+
     def test_verifier_environment_is_explicit_and_never_contains_token_material(self) -> None:
         inherited = {
             "PATH": "/usr/bin",
@@ -298,13 +456,10 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
 
         with redirect_stdout(stdout), redirect_stderr(stderr):
             status = main(
-                [
-                    "--issuer",
-                    self.config().issuer,
-                    "--jwks-uri",
-                    self.config().jwks_uri,
-                    "--audience",
-                    self.config().audience,
+                self.cli_args()
+                + [
+                    "--browser-topology",
+                    "single-active",
                     "--token",
                     "secret-token",
                 ]
