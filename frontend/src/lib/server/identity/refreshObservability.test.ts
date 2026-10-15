@@ -66,6 +66,21 @@ describe('recordRefreshCoordinationOutcome', () => {
     );
   });
 
+  it('does not reset counters after an aggregate emission', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const { recordRefreshCoordinationOutcome } = await freshRecorder();
+
+    for (let index = 0; index < 100; index += 1) {
+      recordRefreshCoordinationOutcome('leader_success');
+    }
+
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(info).toHaveBeenNthCalledWith(
+      2,
+      'identity refresh coordination aggregate: total=100 leader_success=100 follower_success=0 unavailable_continue=0 unavailable_fail_closed=0 leader_lost=0 wait_timeout=0 invalid_result=0 session_expired=0 upstream_failure=0 publish_failure=0'
+    );
+  });
+
   it('does not emit an aggregate before total 50', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const { recordRefreshCoordinationOutcome } = await freshRecorder();
