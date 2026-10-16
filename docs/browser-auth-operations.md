@@ -180,7 +180,22 @@ The dedicated `Identity refresh coordination` GitHub Actions workflow runs the o
    - sampled application events contain none of the prohibited credential, identity, provider, coordination, topology, connection, or raw-error values;
    - the deployed log collector/dashboard/alert path can distinguish the documented fixed categories;
    - login-rate and existing `unauthorized` monitoring show no material unexplained regression relative to the environment baseline.
-6. Review the controlled-canary evidence before increasing browser-session traffic beyond one active replica.
+6. Review and retain the controlled-canary evidence while browser-session traffic remains limited to one active replica.
+7. Re-run the provider-neutral production identity acceptance gate with the same production issuer/JWKS/audience/signature/token policy plus:
+
+   ```text
+   --browser-topology multi-active
+   --refresh-coordination-canary-validated
+   ```
+
+   Require both of these machine-readable results:
+
+   ```text
+   identity_acceptance.browser_topology=multi_active
+   identity_acceptance.ready=true
+   ```
+
+8. Only after both the canary and topology-aware acceptance succeed may the independently operated deployment layer permit sustained multi-active browser-session traffic.
 
 The zero-abnormal-outcome requirement above applies to the controlled successful handoff rehearsal. It is an acceptance condition for that exercise, not a permanent production SLO or a claim that all abnormal outcomes must remain zero in steady state.
 
@@ -188,9 +203,9 @@ The zero-abnormal-outcome requirement above applies to the controlled successful
 
 The implementation and CI coverage are necessary but not sufficient to declare a real environment ready for horizontal browser-session traffic.
 
-**Keep browser-session BFF traffic on one active replica until the real deployment canary in the previous section succeeds.**
+**Keep browser-session BFF traffic on one active replica until the real deployment canary succeeds and topology-aware production identity acceptance reports `browser_topology=multi_active` with `ready=true`.**
 
-Only after that acceptance should the deployment policy be changed to permit multiple active BFF replicas. This repository change does not itself authorize or perform that topology change.
+Only after both gates succeed should the external deployment policy be changed to permit multiple active BFF replicas. This repository change does not itself authorize or perform that topology change.
 
 ## Rollback
 

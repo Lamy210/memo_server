@@ -25,6 +25,7 @@ _VERIFIER_COMMAND = [
 ]
 _SIGNATURE_MODES = ("rs256", "rs256-es384", "es384")
 _TOKEN_TYPE_MODES = ("legacy-any", "at-jwt")
+_BROWSER_TOPOLOGY_MODES = ("single-active", "multi-active")
 _SENSITIVE_INHERITED_ENV_KEYS = {
     "ACCESS_TOKEN",
     "BEARER_TOKEN",
@@ -51,6 +52,11 @@ class AcceptancePhase(Enum):
     COMPLETE = "complete"
 
 
+class BrowserTopology(Enum):
+    SINGLE_ACTIVE = "single_active"
+    MULTI_ACTIVE = "multi_active"
+
+
 @dataclass(frozen=True)
 class AcceptanceConfig:
     issuer: str
@@ -67,19 +73,24 @@ class AcceptanceEvidence:
     browser_flow_validated: bool
     rotation_rollback_validated: bool
     monitoring_validated: bool
+    refresh_coordination_canary_validated: bool = False
 
-    @property
-    def complete(self) -> bool:
-        return (
+    def is_complete_for(self, browser_topology: BrowserTopology) -> bool:
+        base_complete = (
             self.browser_flow_validated
             and self.rotation_rollback_validated
             and self.monitoring_validated
         )
+        if browser_topology is BrowserTopology.MULTI_ACTIVE:
+            return base_complete and self.refresh_coordination_canary_validated
+        return base_complete
 
 
 @dataclass(frozen=True)
 class AcceptanceResult:
     phase: AcceptancePhase
+    browser_topology: BrowserTopology | None
+    refresh_coordination_canary_validated: bool | None
     browser_flow_validated: bool | None
     rotation_rollback_validated: bool | None
     monitoring_validated: bool | None
@@ -93,8 +104,23 @@ class AcceptanceResult:
             return "not_run"
         return "true" if value else "false"
 
+    def _topology_status(self) -> str:
+        if self.browser_topology is None:
+            return "not_run"
+        return self.browser_topology.value
+
+    def _refresh_coordination_canary_status(self) -> str:
+        if self.browser_topology is None:
+            return "not_run"
+        if self.browser_topology is BrowserTopology.SINGLE_ACTIVE:
+            return "not_required"
+        return self._status(self.refresh_coordination_canary_validated)
+
     def render(self) -> str:
         lines = [
+            f"identity_acceptance.browser_topology={self._topology_status()}",
+            "identity_acceptance.refresh_coordination_canary="
+            f"{self._refresh_coordination_canary_status()}",
             f"identity_acceptance.browser_flow={self._status(self.browser_flow_validated)}",
             "identity_acceptance.rotation_rollback="
             f"{self._status(self.rotation_rollback_validated)}",
@@ -158,12 +184,17 @@ def _result(
     *,
     phase: AcceptancePhase,
     evidence: AcceptanceEvidence,
+    browser_topology: BrowserTopology,
     issuer_preflight: bool | None,
     access_token: bool | None,
     ready: bool,
 ) -> AcceptanceResult:
     return AcceptanceResult(
         phase=phase,
+        browser_topology=browser_topology,
+        refresh_coordination_canary_validated=(
+            evidence.refresh_coordination_canary_validated
+        ),
         browser_flow_validated=evidence.browser_flow_validated,
         rotation_rollback_validated=evidence.rotation_rollback_validated,
         monitoring_validated=evidence.monitoring_validated,
@@ -176,14 +207,16 @@ def _result(
 def run_acceptance(
     config: AcceptanceConfig,
     evidence: AcceptanceEvidence,
+    browser_topology: BrowserTopology,
     *,
     preflight_fn: Callable[..., object] = run_preflight,
     verifier_fn: Callable[[AcceptanceConfig], int] = run_verifier,
 ) -> AcceptanceResult:
-    if not evidence.complete:
+    if not evidence.is_complete_for(browser_topology):
         return _result(
             phase=AcceptancePhase.OPERATOR_EVIDENCE,
             evidence=evidence,
+            browser_topology=browser_topology,
             issuer_preflight=None,
             access_token=None,
             ready=False,
@@ -200,6 +233,7 @@ def run_acceptance(
         return _result(
             phase=AcceptancePhase.ISSUER_PREFLIGHT,
             evidence=evidence,
+            browser_topology=browser_topology,
             issuer_preflight=False,
             access_token=None,
             ready=False,
@@ -208,6 +242,7 @@ def run_acceptance(
         return _result(
             phase=AcceptancePhase.INTERNAL,
             evidence=evidence,
+            browser_topology=browser_topology,
             issuer_preflight=False,
             access_token=None,
             ready=False,
@@ -217,6 +252,7 @@ def run_acceptance(
         return _result(
             phase=AcceptancePhase.ACCESS_TOKEN,
             evidence=evidence,
+            browser_topology=browser_topology,
             issuer_preflight=True,
             access_token=False,
             ready=False,
@@ -225,6 +261,7 @@ def run_acceptance(
     return _result(
         phase=AcceptancePhase.COMPLETE,
         evidence=evidence,
+        browser_topology=browser_topology,
         issuer_preflight=True,
         access_token=True,
         ready=True,
@@ -270,15 +307,28 @@ def _parser() -> SafeArgumentParser:
         type=_positive_finite_float,
         default=10.0,
     )
+    parser.add_argument(
+        "--browser-topology",
+        required=True,
+        choices=_BROWSER_TOPOLOGY_MODES,
+    )
     parser.add_argument("--browser-flow-validated", action="store_true")
     parser.add_argument("--rotation-rollback-validated", action="store_true")
     parser.add_argument("--monitoring-validated", action="store_true")
+    parser.add_argument(
+        "--refresh-coordination-canary-validated",
+        action="store_true",
+    )
     return parser
 
 
-def _usage_failure() -> AcceptanceResult:
+def _usage_failure(
+    browser_topology: BrowserTopology | None = None,
+) -> AcceptanceResult:
     return AcceptanceResult(
         phase=AcceptancePhase.USAGE,
+        browser_topology=browser_topology,
+        refresh_coordination_canary_validated=None,
         browser_flow_validated=None,
         rotation_rollback_validated=None,
         monitoring_validated=None,
@@ -288,11 +338,25 @@ def _usage_failure() -> AcceptanceResult:
     )
 
 
+def _browser_topology(value: str) -> BrowserTopology:
+    if value == "single-active":
+        return BrowserTopology.SINGLE_ACTIVE
+    return BrowserTopology.MULTI_ACTIVE
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
     except AcceptanceUsageError:
         print(_usage_failure().render())
+        return 2
+
+    browser_topology = _browser_topology(args.browser_topology)
+    if (
+        browser_topology is BrowserTopology.SINGLE_ACTIVE
+        and args.refresh_coordination_canary_validated
+    ):
+        print(_usage_failure(browser_topology).render())
         return 2
 
     config = AcceptanceConfig(
@@ -308,8 +372,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         browser_flow_validated=args.browser_flow_validated,
         rotation_rollback_validated=args.rotation_rollback_validated,
         monitoring_validated=args.monitoring_validated,
+        refresh_coordination_canary_validated=(
+            args.refresh_coordination_canary_validated
+        ),
     )
-    result = run_acceptance(config, evidence)
+    result = run_acceptance(config, evidence, browser_topology)
     print(result.render())
     return 0 if result.ready else 1
 
