@@ -1,0 +1,123 @@
+import { Buffer } from 'node:buffer';
+
+import { describe, expect, it, vi } from 'vitest';
+
+import type { IdentityConfig } from './config';
+import {
+  discoverIdentity,
+  IdentityClientError,
+  refreshAccessToken
+} from './oidcClient';
+
+const MAX_IDENTITY_JSON_BYTES = 64 * 1024;
+
+const config: IdentityConfig = {
+  issuer: new URL('https://id.example.test'),
+  issuerIdentifier: 'https://id.example.test/',
+  clientId: 'memo-web',
+  clientSecret: 'client-secret',
+  sessionKey: new Uint8Array(32)
+};
+
+function discovery(overrides: Record<string, unknown> = {}) {
+  return {
+    issuer: 'https://id.example.test/',
+    authorization_endpoint: 'https://id.example.test/authorize',
+    token_endpoint: 'https://id.example.test/token',
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['client_secret_basic'],
+    ...overrides
+  };
+}
+
+function oversizedJson(payload: Record<string, unknown>): string {
+  return JSON.stringify({ ...payload, padding: 'x'.repeat(MAX_IDENTITY_JSON_BYTES) });
+}
+
+function responseWithContentLength(body: string): Response {
+  return new Response(body, {
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': String(Buffer.byteLength(body))
+    }
+  });
+}
+
+function chunkedResponse(body: string): Response {
+  const bytes = new TextEncoder().encode(body);
+  const midpoint = Math.floor(bytes.byteLength / 2);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes.slice(0, midpoint));
+      controller.enqueue(bytes.slice(midpoint));
+      controller.close();
+    }
+  });
+
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
+async function metadata() {
+  return discoverIdentity(
+    config,
+    vi.fn(async () => Response.json(discovery())) as unknown as typeof fetch
+  );
+}
+
+async function expectInvalidResponse(promise: Promise<unknown>) {
+  try {
+    await promise;
+    throw new Error('expected identity response to be rejected');
+  } catch (error) {
+    expect(error).toBeInstanceOf(IdentityClientError);
+    expect(error).toMatchObject({ kind: 'invalid_response' });
+  }
+}
+
+describe('identity JSON response budget', () => {
+  it('rejects oversized discovery responses declared by Content-Length', async () => {
+    const body = oversizedJson(discovery());
+    const fetchFn = vi.fn(async () => responseWithContentLength(body)) as unknown as typeof fetch;
+
+    await expectInvalidResponse(discoverIdentity(config, fetchFn));
+  });
+
+  it('rejects oversized chunked discovery responses', async () => {
+    const body = oversizedJson(discovery());
+    const fetchFn = vi.fn(async () => chunkedResponse(body)) as unknown as typeof fetch;
+
+    await expectInvalidResponse(discoverIdentity(config, fetchFn));
+  });
+
+  it('rejects oversized token responses declared by Content-Length', async () => {
+    const oidcMetadata = await metadata();
+    const body = oversizedJson({
+      access_token: 'access-1',
+      token_type: 'Bearer',
+      expires_in: 300,
+      refresh_token: 'refresh-2'
+    });
+    const fetchFn = vi.fn(async () => responseWithContentLength(body)) as unknown as typeof fetch;
+
+    await expectInvalidResponse(
+      refreshAccessToken(oidcMetadata, config, fetchFn, { refreshToken: 'refresh-1' })
+    );
+  });
+
+  it('rejects oversized chunked token responses', async () => {
+    const oidcMetadata = await metadata();
+    const body = oversizedJson({
+      access_token: 'access-1',
+      token_type: 'Bearer',
+      expires_in: 300,
+      refresh_token: 'refresh-2'
+    });
+    const fetchFn = vi.fn(async () => chunkedResponse(body)) as unknown as typeof fetch;
+
+    await expectInvalidResponse(
+      refreshAccessToken(oidcMetadata, config, fetchFn, { refreshToken: 'refresh-1' })
+    );
+  });
+});
