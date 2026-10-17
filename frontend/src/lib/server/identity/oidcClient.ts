@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import type { IdentityConfig } from './config';
 
 const IDENTITY_HTTP_TIMEOUT_MS = 10_000;
+const IDENTITY_JSON_MAX_BYTES = 64 * 1024;
 
 export type IdentityClientErrorKind =
   | 'configuration'
@@ -102,10 +103,54 @@ function discoveryUrl(issuer: URL): URL {
 }
 
 async function readJson(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength !== null) {
+    const declaredLength = Number(contentLength);
+    if (Number.isFinite(declaredLength) && declaredLength > IDENTITY_JSON_MAX_BYTES) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Best-effort release only; the public error remains stable.
+      }
+      throw new IdentityClientError('invalid_response');
+    }
+  }
+
+  if (!response.body) {
     throw new IdentityClientError('invalid_response');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let totalBytes = 0;
+  let text = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      totalBytes += value.byteLength;
+      if (totalBytes > IDENTITY_JSON_MAX_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+          // Best-effort release only; the public error remains stable.
+        }
+        throw new IdentityClientError('invalid_response');
+      }
+
+      text += decoder.decode(value, { stream: true });
+    }
+
+    text += decoder.decode();
+    return JSON.parse(text);
+  } catch (error) {
+    if (error instanceof IdentityClientError) throw error;
+    throw new IdentityClientError('invalid_response');
+  } finally {
+    reader.releaseLock();
   }
 }
 
