@@ -47,6 +47,12 @@ type LogoutInput = {
 
 type CallbackErrorCode = 'invalid_callback' | 'access_denied' | 'authentication_failed';
 
+type OAuthCallbackParameters = {
+  state: string;
+  code: string | null;
+  authorizationError: string | null;
+};
+
 function randomBase64Url(size: number, randomBytes: (size: number) => Uint8Array): string {
   return Buffer.from(randomBytes(size))
     .toString('base64')
@@ -64,6 +70,24 @@ function callbackFailure(status: number, error: CallbackErrorCode): Response {
     { error },
     { status, headers: { 'Cache-Control': 'no-store' } }
   );
+}
+
+function readOAuthCallbackParameters(searchParams: URLSearchParams): OAuthCallbackParameters | null {
+  const states = searchParams.getAll('state');
+  const codes = searchParams.getAll('code');
+  const errors = searchParams.getAll('error');
+
+  if (states.length !== 1 || !states[0]) return null;
+
+  if (codes.length === 1 && errors.length === 0 && codes[0]) {
+    return { state: states[0], code: codes[0], authorizationError: null };
+  }
+
+  if (errors.length === 1 && codes.length === 0 && errors[0]) {
+    return { state: states[0], code: null, authorizationError: errors[0] };
+  }
+
+  return null;
 }
 
 export async function startLogin({
@@ -143,19 +167,18 @@ export async function completeLogin({
   }
 
   const transaction = await openLoginTransaction(sealedTransaction, config.sessionKey, now);
-  const state = url.searchParams.get('state');
-  if (!transaction || !state || state !== transaction.state) {
+  const callback = readOAuthCallbackParameters(url.searchParams);
+  if (!transaction || !callback || callback.state !== transaction.state) {
     return callbackFailure(400, 'invalid_callback');
   }
 
-  const authorizationError = url.searchParams.get('error');
-  if (authorizationError) {
-    return authorizationError === 'access_denied'
+  if (callback.authorizationError) {
+    return callback.authorizationError === 'access_denied'
       ? callbackFailure(401, 'access_denied')
       : callbackFailure(502, 'authentication_failed');
   }
 
-  const code = url.searchParams.get('code');
+  const code = callback.code;
   if (!code) {
     return callbackFailure(400, 'invalid_callback');
   }
