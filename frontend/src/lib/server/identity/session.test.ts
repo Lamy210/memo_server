@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -121,7 +123,7 @@ describe('inbound sealed cookie size boundary', () => {
   it.each([
     ['session', (value: string) => openSession(value, KEY)],
     ['login transaction', (value: string) => openLoginTransaction(value, KEY)]
-  ])('rejects oversized %s before AES-GCM decryption', async (_label, openCookie) => {
+  ] as const)('rejects oversized %s before AES-GCM decryption', async (_label, openCookie) => {
     expect(Buffer.byteLength(oversized, 'utf8')).toBeGreaterThan(MAX_SEALED_COOKIE_BYTES);
     const decrypt = vi.spyOn(crypto.subtle, 'decrypt');
     try {
