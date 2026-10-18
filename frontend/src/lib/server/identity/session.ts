@@ -86,6 +86,8 @@ async function seal(value: unknown, key: Uint8Array): Promise<string> {
 }
 
 async function open(value: string, key: Uint8Array): Promise<unknown | null> {
+  if (Buffer.byteLength(value, 'utf8') > MAX_SEALED_COOKIE_BYTES) return null;
+
   const parts = value.split('.');
   if (parts.length !== 3 || parts[0] !== VERSION) return null;
 

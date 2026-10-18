@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { Buffer } from 'node:buffer';
+
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   LOGIN_TRANSACTION_COOKIE_NAME,
@@ -112,6 +114,24 @@ describe('sealed login transaction', () => {
     await expect(
       openLoginTransaction(await sealLoginTransaction(expired, KEY), KEY, now)
     ).resolves.toBeNull();
+  });
+});
+
+describe('inbound sealed cookie size boundary', () => {
+  const oversized = `v1.${'A'.repeat(16)}.${'A'.repeat(MAX_SEALED_COOKIE_BYTES)}`;
+
+  it.each([
+    ['session', (value: string) => openSession(value, KEY)],
+    ['login transaction', (value: string) => openLoginTransaction(value, KEY)]
+  ] as const)('rejects oversized %s before AES-GCM decryption', async (_label, openCookie) => {
+    expect(Buffer.byteLength(oversized, 'utf8')).toBeGreaterThan(MAX_SEALED_COOKIE_BYTES);
+    const decrypt = vi.spyOn(crypto.subtle, 'decrypt');
+    try {
+      await expect(openCookie(oversized)).resolves.toBeNull();
+      expect(decrypt).not.toHaveBeenCalled();
+    } finally {
+      decrypt.mockRestore();
+    }
   });
 });
 
