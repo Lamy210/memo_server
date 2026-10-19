@@ -84,6 +84,31 @@ async function expectInvalidResponse(promise: Promise<unknown>) {
 }
 
 describe('identity JSON response budget', () => {
+  it.each(['invalid', '-1', '1e2', '0x10', ''])(
+    'rejects discovery with malformed Content-Length %j',
+    async (contentLength) => {
+      const fetchFn = vi.fn(async () => new Response(JSON.stringify(discovery()), {
+        headers: { 'Content-Type': 'application/json', 'Content-Length': contentLength }
+      })) as unknown as typeof fetch;
+
+      await expectInvalidResponse(discoverIdentity(config, fetchFn));
+    }
+  );
+
+  it.each(['invalid', '-1', '1e2', '0x10', ''])(
+    'rejects token response with malformed Content-Length %j',
+    async (contentLength) => {
+      const oidcMetadata = await metadata();
+      const fetchFn = vi.fn(async () => new Response(JSON.stringify(tokenDocument()), {
+        headers: { 'Content-Type': 'application/json', 'Content-Length': contentLength }
+      })) as unknown as typeof fetch;
+
+      await expectInvalidResponse(
+        refreshAccessToken(oidcMetadata, config, fetchFn, { refreshToken: 'refresh-1' })
+      );
+    }
+  );
+
   it('rejects discovery responses whose declared Content-Length exceeds the budget', async () => {
     const body = JSON.stringify(discovery());
     const fetchFn = vi.fn(
