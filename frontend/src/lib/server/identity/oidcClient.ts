@@ -106,7 +106,11 @@ async function readJson(response: Response): Promise<unknown> {
   const contentLength = response.headers.get('content-length');
   if (contentLength !== null) {
     const declaredLength = Number(contentLength);
-    if (Number.isFinite(declaredLength) && declaredLength > IDENTITY_JSON_MAX_BYTES) {
+    if (
+      !/^\d+$/.test(contentLength) ||
+      !Number.isSafeInteger(declaredLength) ||
+      declaredLength > IDENTITY_JSON_MAX_BYTES
+    ) {
       try {
         await response.body?.cancel();
       } catch {
