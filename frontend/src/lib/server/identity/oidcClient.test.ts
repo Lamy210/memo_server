@@ -33,6 +33,17 @@ function discovery(overrides: Record<string, unknown> = {}) {
 }
 
 describe('discoverIdentity', () => {
+  it.each([null, [], 'unexpected', 42])(
+    'maps non-object discovery JSON %j to the stable invalid_response category',
+    async (payload) => {
+      const fetchFn = vi.fn(async () => Response.json(payload)) as unknown as typeof fetch;
+      await expect(discoverIdentity(config, fetchFn)).rejects.toMatchObject({
+        name: 'IdentityClientError',
+        kind: 'invalid_response'
+      });
+    }
+  );
+
   it('loads exact issuer metadata without following redirects', async () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('https://id.example.test/.well-known/openid-configuration');

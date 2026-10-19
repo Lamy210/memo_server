@@ -174,7 +174,10 @@ export async function discoverIdentity(
     throw new IdentityClientError(response.status >= 500 ? 'temporarily_unavailable' : 'invalid_response');
   }
 
-  const payload = (await readJson(response)) as DiscoveryDocument;
+  const payload = (await readJson(response)) as DiscoveryDocument | null;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new IdentityClientError('invalid_response');
+  }
   if (payload.issuer !== config.issuerIdentifier) {
     throw new IdentityClientError('invalid_response');
   }
