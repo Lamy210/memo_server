@@ -271,7 +271,8 @@ function validateTokenDocument(payload: unknown): TokenSet {
     typeof token.token_type !== 'string' ||
     token.token_type.toLowerCase() !== 'bearer' ||
     typeof token.expires_in !== 'number' ||
-    !Number.isFinite(token.expires_in) ||
+    !Number.isSafeInteger(token.expires_in) ||
+    !Number.isSafeInteger(token.expires_in * 1000) ||
     token.expires_in <= 0
   ) {
     throw new IdentityClientError('invalid_response');
