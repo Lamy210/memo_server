@@ -84,6 +84,30 @@ async function expectInvalidResponse(promise: Promise<unknown>) {
 }
 
 describe('identity JSON response budget', () => {
+  it('accepts discovery with a valid declared Content-Length', async () => {
+    const body = JSON.stringify(discovery());
+    const fetchFn = vi.fn(async () => new Response(body, {
+      headers: { 'Content-Length': String(new TextEncoder().encode(body).byteLength) }
+    })) as unknown as typeof fetch;
+
+    await expect(discoverIdentity(config, fetchFn)).resolves.toMatchObject({
+      issuer: config.issuerIdentifier
+    });
+  });
+
+  it('accepts token JSON with a valid zero-padded Content-Length', async () => {
+    const oidcMetadata = await metadata();
+    const body = JSON.stringify(tokenDocument());
+    const length = new TextEncoder().encode(body).byteLength;
+    const fetchFn = vi.fn(async () => new Response(body, {
+      headers: { 'Content-Length': String(length).padStart(5, '0') }
+    })) as unknown as typeof fetch;
+
+    await expect(
+      refreshAccessToken(oidcMetadata, config, fetchFn, { refreshToken: 'refresh-1' })
+    ).resolves.toMatchObject({ accessToken: 'access-1', refreshToken: 'refresh-2' });
+  });
+
   it.each(['invalid', '-1', '1e2', '0x10', ''])(
     'rejects discovery with malformed Content-Length %j',
     async (contentLength) => {
