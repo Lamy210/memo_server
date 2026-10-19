@@ -141,6 +141,28 @@ describe('PKCE authorization request', () => {
 });
 
 describe('token endpoint', () => {
+  it.each([0.5, 1.25, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects fractional or unsafe expires_in=%s without accepting the token',
+    async (expiresIn) => {
+      const metadata = await discoverIdentity(
+        config,
+        vi.fn(async () => Response.json(discovery())) as unknown as typeof fetch
+      );
+      const fetchFn = vi.fn(async () =>
+        Response.json({
+          access_token: 'access-unsafe',
+          token_type: 'Bearer',
+          expires_in: expiresIn,
+          refresh_token: 'refresh-unsafe'
+        })
+      ) as unknown as typeof fetch;
+
+      await expect(
+        refreshAccessToken(metadata, config, fetchFn, { refreshToken: 'refresh-current' })
+      ).rejects.toMatchObject({ name: 'IdentityClientError', kind: 'invalid_response' });
+    }
+  );
+
   it('exchanges a code with PKCE and requires an initial refresh token', async () => {
     const metadata = await discoverIdentity(
       config,
