@@ -130,7 +130,7 @@ async function readJson(response: Response): Promise<unknown> {
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let totalBytes = 0;
   let text = '';
 
