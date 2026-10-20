@@ -66,7 +66,6 @@ function chunkedResponse(body: string, splitAt?: number): Response {
   });
 }
 
-
 function responseWithMalformedUtf8(json: string, marker: string): Response {
   const markerOffset = json.indexOf(marker);
   if (markerOffset < 0) throw new Error('UTF-8 fixture marker is missing');
@@ -216,5 +215,28 @@ describe('identity JSON UTF-8 decoding', () => {
     await expect(discoverIdentity(config, fetchFn)).resolves.toMatchObject({
       issuer: config.issuerIdentifier
     });
+  });
+
+  it('cancels an unfinished response stream after encountering malformed UTF-8', async () => {
+    const json = JSON.stringify(discovery({ ignored: 'invalid-byte' }));
+    const bytes = new TextEncoder().encode(json);
+    bytes[json.indexOf('invalid-byte')] = 0xff;
+
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        // Keep the stream open to detect abandoned response bodies.
+      },
+      cancel() {
+        cancelled = true;
+      }
+    });
+    const fetchFn = vi.fn(async () =>
+      new Response(body, { headers: { 'Content-Type': 'application/json' } })
+    ) as unknown as typeof fetch;
+
+    await expectInvalidResponse(discoverIdentity(config, fetchFn));
+    expect(cancelled).toBe(true);
   });
 });
