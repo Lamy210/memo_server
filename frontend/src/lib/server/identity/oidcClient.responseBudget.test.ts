@@ -50,9 +50,9 @@ function responseWithOversizedDeclaredLength(body: string): Response {
   });
 }
 
-function chunkedResponse(body: string): Response {
+function chunkedResponse(body: string, splitAt?: number): Response {
   const bytes = new TextEncoder().encode(body);
-  const midpoint = Math.floor(bytes.byteLength / 2);
+  const midpoint = splitAt ?? Math.floor(bytes.byteLength / 2);
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(bytes.slice(0, midpoint));
@@ -64,6 +64,18 @@ function chunkedResponse(body: string): Response {
   return new Response(stream, {
     headers: { 'Content-Type': 'application/json' }
   });
+}
+
+
+function responseWithMalformedUtf8(json: string, marker: string): Response {
+  const markerOffset = json.indexOf(marker);
+  if (markerOffset < 0) throw new Error('UTF-8 fixture marker is missing');
+
+  // The fixture is ASCII up to the marker, so its character offset equals its byte offset.
+  const bytes = new TextEncoder().encode(json);
+  bytes[markerOffset] = 0xff;
+
+  return new Response(bytes, { headers: { 'Content-Type': 'application/json' } });
 }
 
 async function metadata() {
@@ -169,5 +181,40 @@ describe('identity JSON response budget', () => {
     await expectInvalidResponse(
       refreshAccessToken(oidcMetadata, config, fetchFn, { refreshToken: 'refresh-1' })
     );
+  });
+});
+
+describe('identity JSON UTF-8 decoding', () => {
+  it('rejects malformed UTF-8 in an otherwise valid discovery document', async () => {
+    const body = JSON.stringify(discovery({ ignored: 'invalid-byte' }));
+    const fetchFn = vi.fn(async () =>
+      responseWithMalformedUtf8(body, 'invalid-byte')
+    ) as unknown as typeof fetch;
+
+    await expectInvalidResponse(discoverIdentity(config, fetchFn));
+  });
+
+  it('rejects malformed UTF-8 in access tokens instead of silently replacing bytes', async () => {
+    const oidcMetadata = await metadata();
+    const body = JSON.stringify({ ...tokenDocument(), access_token: 'invalid-token' });
+    const fetchFn = vi.fn(async () =>
+      responseWithMalformedUtf8(body, 'invalid-token')
+    ) as unknown as typeof fetch;
+
+    await expectInvalidResponse(
+      refreshAccessToken(oidcMetadata, config, fetchFn, { refreshToken: 'refresh-1' })
+    );
+  });
+
+  it('accepts valid UTF-8 code points split across response chunks', async () => {
+    const body = JSON.stringify(discovery({ ignored: '雪' }));
+    const markerOffset = new TextEncoder().encode(body.slice(0, body.indexOf('雪'))).byteLength;
+    const fetchFn = vi.fn(async () =>
+      chunkedResponse(body, markerOffset + 1)
+    ) as unknown as typeof fetch;
+
+    await expect(discoverIdentity(config, fetchFn)).resolves.toMatchObject({
+      issuer: config.issuerIdentifier
+    });
   });
 });
