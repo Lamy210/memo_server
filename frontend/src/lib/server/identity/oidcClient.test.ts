@@ -44,6 +44,23 @@ describe('discoverIdentity', () => {
     }
   );
 
+  it.each([
+    ['authorization_endpoint', ' https://id.example.test/authorize'],
+    ['token_endpoint', 'https://id.example.test/token '],
+    ['end_session_endpoint', 'https://id.example.test/\tlogout'],
+    ['authorization_endpoint', '\nhttps://id.example.test/authorize'],
+    ['token_endpoint', 'https://id.example.test/to\rken']
+  ])('rejects ambiguous raw whitespace in %s: %j', async (endpointName, endpointValue) => {
+    const fetchFn = vi.fn(async () =>
+      Response.json(discovery({ [endpointName]: endpointValue }))
+    ) as unknown as typeof fetch;
+
+    await expect(discoverIdentity(config, fetchFn)).rejects.toMatchObject({
+      name: 'IdentityClientError',
+      kind: 'invalid_response'
+    });
+  });
+
   it('loads exact issuer metadata without following redirects', async () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('https://id.example.test/.well-known/openid-configuration');

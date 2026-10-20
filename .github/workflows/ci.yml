@@ -16,7 +16,8 @@ concurrency:
 jobs:
   backend:
     name: Backend
-    runs-on: ubuntu-latest
+    # MongoDB 8.0.x is incompatible with Linux kernels 6.19 through 7.0.13.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: backend
@@ -308,7 +309,8 @@ jobs:
 
   smoke:
     name: Full-stack smoke
-    runs-on: ubuntu-latest
+    # Compose also starts MongoDB 8.0.x; keep this runner kernel compatible.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     needs:
       - backend
