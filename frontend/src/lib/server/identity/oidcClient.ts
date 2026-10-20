@@ -73,7 +73,12 @@ type TokenDocument = {
 };
 
 function parseSecureEndpoint(value: unknown): URL {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value !== value.trim() ||
+    /[\u0000-\u0020\u007f]/u.test(value)
+  ) {
     throw new IdentityClientError('invalid_response');
   }
 
