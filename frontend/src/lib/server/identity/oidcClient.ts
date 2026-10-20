@@ -130,7 +130,7 @@ async function readJson(response: Response): Promise<unknown> {
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let totalBytes = 0;
   let text = '';
 
@@ -157,6 +157,11 @@ async function readJson(response: Response): Promise<unknown> {
     return JSON.parse(text);
   } catch (error) {
     if (error instanceof IdentityClientError) throw error;
+    try {
+      await reader.cancel();
+    } catch {
+      // Best-effort cleanup for malformed UTF-8 or a failed response stream.
+    }
     throw new IdentityClientError('invalid_response');
   } finally {
     reader.releaseLock();
