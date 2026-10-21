@@ -160,8 +160,8 @@ describe('PKCE authorization request', () => {
 describe('token endpoint', () => {
   it.each([
     'access token',
-    'access\\ntoken',
-    'access\\ttoken',
+    'access\ntoken',
+    'access\ttoken',
     'access:token',
     'access%token',
     'access雪token',
