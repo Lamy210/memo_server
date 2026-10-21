@@ -293,8 +293,17 @@ impl JwtVerifier {
         if force_refresh {
             let now = Instant::now();
             if !forced_refresh_allowed(refresh_state.last_forced_attempt, now) {
-                if let Some((set, _)) = cached {
-                    return observe_jwks_refresh(trigger, JwksRefreshOutcome::Throttled, Ok(set));
+                // Throttling must not bypass the same stale-key horizon enforced
+                // when a scheduled JWKS refresh fails. Never resurrect an
+                // arbitrarily old verification key set during issuer outages.
+                if let Some((set, fetched_at)) = cached {
+                    if fetched_at.elapsed() < self.jwks_cache_policy.stale_if_error_ttl {
+                        return observe_jwks_refresh(
+                            trigger,
+                            JwksRefreshOutcome::Throttled,
+                            Ok(set),
+                        );
+                    }
                 }
                 return observe_jwks_refresh(
                     trigger,
