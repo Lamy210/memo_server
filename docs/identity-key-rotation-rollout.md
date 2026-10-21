@@ -93,6 +93,10 @@ The HTTP-backed regression additionally exercises the canonical verifier's real 
 
 The fixture injects an HTTP client **only in the test**; the production JWKS client remains HTTPS-only with redirects disabled. The HTTP fixture does not prove certificate validation or the behavior of a real deployed issuer.
 
+The multi-replica regression checks two verifier instances with independent JWKS caches during a staged rotation: one instance learns the new key while the other sees an HTTP 503, continues accepting the still-valid old key, rejects the unknown new key during forced-refresh cooldown, then converges after the issuer recovers. Another HTTP fixture deliberately stalls after a partial response body to verify that the JWKS request deadline covers streaming and that incomplete key sets are never cached.
+
+These tests exercise an in-process, deterministic loopback fixture. They do not substitute for staging multi-replica rollout, external HTTPS/TLS trust-chain validation, real network partition testing, or operational evidence from the production issuer.
+
 The regression covers:
 
 1. `old` only: an `old` token verifies;
