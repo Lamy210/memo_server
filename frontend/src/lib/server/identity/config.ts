@@ -23,7 +23,9 @@ function requireNonBlank(value: string | undefined): string {
 }
 
 function parseIssuer(value: string): URL {
-  if (value !== value.trim()) {
+  // WHATWG URL parsing normalizes raw tabs/newlines and treats backslashes as
+  // separators in HTTPS URLs. Never reinterpret the configured OIDC issuer.
+  if (value !== value.trim() || /[\\\u0000-\u0020\u007f]/u.test(value)) {
     throw new IdentityConfigurationError();
   }
 
