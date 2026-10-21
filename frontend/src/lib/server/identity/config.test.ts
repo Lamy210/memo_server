@@ -40,6 +40,24 @@ describe('readIdentityConfig', () => {
   });
 
   it.each([
+    'https://id.exa\nmple.test',
+    'https://id.example.test/ten\tant',
+    'https://id.example.test/ten\rant',
+    'https://id.example.test\\tenant',
+    'https://id.example.test/\u007f'
+  ])('rejects issuer URLs with raw control characters or backslashes %j', (issuer) => {
+    expect(() => readIdentityConfig(validEnv({ IDENTITY_ISSUER: issuer }))).toThrow();
+  });
+
+  it('preserves exact valid issuer path identifiers used for OIDC comparison', () => {
+    const issuer = 'https://id.example.test/tenant';
+    const config = readIdentityConfig(validEnv({ IDENTITY_ISSUER: issuer }));
+
+    expect(config.issuerIdentifier).toBe(issuer);
+    expect(config.issuer.toString()).toBe(issuer);
+  });
+
+  it.each([
     ['IDENTITY_CLIENT_ID', ''],
     ['IDENTITY_CLIENT_ID', '   '],
     ['IDENTITY_CLIENT_SECRET', ''],
