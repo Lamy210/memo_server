@@ -124,6 +124,178 @@ mod auth_under_test {
             );
         }
 
+        fn jwks_http_document(include_new: bool) -> String {
+            let mut keys = vec![serde_json::json!({
+                "kty": "EC",
+                "use": "sig",
+                "key_ops": ["verify"],
+                "alg": "ES384",
+                "kid": "ec-test",
+                "crv": "P-384",
+                "x": OLD_EC_X,
+                "y": OLD_EC_Y
+            })];
+            if include_new {
+                keys.push(serde_json::json!({
+                    "kty": "EC",
+                    "use": "sig",
+                    "key_ops": ["verify"],
+                    "alg": "ES384",
+                    "kid": "ec-next",
+                    "crv": "P-384",
+                    "x": NEW_EC_X,
+                    "y": NEW_EC_Y
+                }));
+            }
+            serde_json::json!({ "keys": keys }).to_string()
+        }
+
+        async fn jwks_http_fixture(
+            responses: Vec<(u16, String)>,
+        ) -> (JwtVerifier, tokio::task::JoinHandle<()>) {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            // The production verifier remains HTTPS-only. The local HTTP
+            // override is confined to this test and exercises its real
+            // reqwest fetch/validation/cache implementation end-to-end.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("fixture listener must bind loopback");
+            let address = listener.local_addr().expect("fixture address must exist");
+            let mut verifier = verifier();
+            verifier.jwks_uri = format!("http://{address}/jwks");
+            verifier.client = Client::builder()
+                .https_only(false)
+                .redirect(Policy::none())
+                .no_proxy()
+                .build()
+                .expect("test-only client must initialize");
+
+            let server = tokio::spawn(async move {
+                for (status, body) in responses {
+                    let (mut socket, _) =
+                        tokio::time::timeout(Duration::from_secs(10), listener.accept())
+                            .await
+                            .expect("expected another JWKS HTTP request")
+                            .expect("fixture must accept connection");
+                    let mut request = [0_u8; 2048];
+                    let received = socket
+                        .read(&mut request)
+                        .await
+                        .expect("HTTP read must succeed");
+                    assert!(
+                        request[..received].starts_with(b"GET /jwks HTTP/1.1"),
+                        "verifier must request the fixture JWKS path"
+                    );
+                    let reason = match status {
+                        200 => "OK",
+                        503 => "Service Unavailable",
+                        _ => panic!("unsupported fixture status"),
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("HTTP response must be written");
+                    socket
+                        .shutdown()
+                        .await
+                        .expect("fixture must close connection");
+                }
+            });
+            (verifier, server)
+        }
+
+        async fn age_cached_jwks(verifier: &JwtVerifier, age: Duration) {
+            let mut cached = verifier.jwks.write().await;
+            cached
+                .as_mut()
+                .expect("fixture must have installed JWKS")
+                .fetched_at = Instant::now() - age;
+        }
+
+        async fn assert_fixture_requests_complete(server: tokio::task::JoinHandle<()>) {
+            tokio::time::timeout(Duration::from_secs(12), server)
+                .await
+                .expect("all expected JWKS requests must have completed")
+                .expect("fixture server must not panic");
+        }
+
+        #[tokio::test]
+        async fn http_jwks_rotation_outage_invalid_json_and_recovery_preserve_cache_bounds() {
+            // Request sequence: initial publication, key overlap, temporary
+            // upstream 503, malformed JSON, expired-cache 503, recovery.
+            let (verifier, server) = jwks_http_fixture(vec![
+                (200, jwks_http_document(false)),
+                (200, jwks_http_document(true)),
+                (503, "temporarily unavailable".into()),
+                (200, "{invalid-json".into()),
+                (503, "temporarily unavailable".into()),
+                (200, jwks_http_document(true)),
+            ])
+            .await;
+
+            assert_valid(&verifier, OLD_TOKEN).await;
+            // Unknown kid fetches an overlapping JWKS snapshot over HTTP.
+            assert_valid(&verifier, NEW_TOKEN).await;
+
+            // Both failure modes retain known public keys within the
+            // bounded stale-if-error horizon.
+            age_cached_jwks(&verifier, Duration::from_secs(301)).await;
+            assert_valid(&verifier, OLD_TOKEN).await;
+            age_cached_jwks(&verifier, Duration::from_secs(301)).await;
+            assert_valid(&verifier, NEW_TOKEN).await;
+
+            // No stale fallback once the configured maximum has elapsed.
+            age_cached_jwks(
+                &verifier,
+                JWKS_STALE_IF_ERROR_TTL_MAX + Duration::from_secs(1),
+            )
+            .await;
+            assert!(matches!(
+                verifier.verify(OLD_TOKEN).await,
+                Err(AppError::ServiceUnavailable(_))
+            ));
+
+            // The next healthy response atomically replaces the stale cache.
+            assert_valid(&verifier, OLD_TOKEN).await;
+            assert_valid(&verifier, NEW_TOKEN).await;
+            assert_fixture_requests_complete(server).await;
+        }
+
+        #[tokio::test]
+        async fn http_jwks_unknown_kid_outage_fails_closed_and_recovers_after_cooldown() {
+            let (verifier, server) = jwks_http_fixture(vec![
+                (200, jwks_http_document(false)),
+                (503, "temporarily unavailable".into()),
+                (200, jwks_http_document(true)),
+            ])
+            .await;
+
+            assert_valid(&verifier, OLD_TOKEN).await;
+            assert!(matches!(
+                verifier.verify(NEW_TOKEN).await,
+                Err(AppError::ServiceUnavailable(_))
+            ));
+            // A throttled retry must not turn an unavailable unknown-kid
+            // rotation into successful verification or another HTTP fetch.
+            assert!(matches!(
+                verifier.verify(NEW_TOKEN).await,
+                Err(AppError::Unauthorized(_))
+            ));
+            assert_valid(&verifier, OLD_TOKEN).await;
+
+            // Expire the fixture's cooldown without sleeping for five seconds.
+            verifier.refresh_state.lock().await.last_forced_attempt =
+                Some(Instant::now() - JWKS_FORCED_REFRESH_COOLDOWN);
+            assert_valid(&verifier, NEW_TOKEN).await;
+            assert_valid(&verifier, OLD_TOKEN).await;
+            assert_fixture_requests_complete(server).await;
+        }
+
         #[tokio::test]
         async fn signing_key_overlap_supports_cutover_and_issuer_rollback() {
             let verifier = verifier();

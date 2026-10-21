@@ -89,6 +89,10 @@ A short-lived `unknown_kid` or `invalid_signature` followed by `success` can be 
 
 The deterministic test fixtures contain only public JWK material and pre-signed non-production tokens. No production/staging private signing key or credential belongs in the repository.
 
+The HTTP-backed regression additionally exercises the canonical verifier's real JWKS fetching, caching and cryptographic verification against a loopback fixture: initial key publication, unknown-kid discovery of overlapping keys, temporary HTTP 503 errors, malformed JSON, rejection after the bounded stale horizon, recovery, and forced-refresh cooldown without extra HTTP requests.
+
+The fixture injects an HTTP client **only in the test**; the production JWKS client remains HTTPS-only with redirects disabled. The HTTP fixture does not prove certificate validation or the behavior of a real deployed issuer.
+
 The regression covers:
 
 1. `old` only: an `old` token verifies;
