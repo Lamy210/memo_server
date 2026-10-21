@@ -449,6 +449,163 @@ describe('restoreIdentitySession', () => {
     expect(locals).toEqual({ authenticated: true, accessToken: 'access-new' });
   });
 
+  it('rejects a follower token that expires while the shared result is being opened', async () => {
+    const sealed = await v2Session(NOW + 10_000);
+    const result = await sealSession(
+      {
+        schemaVersion: 2,
+        accessToken: 'access-new',
+        accessTokenExpiresAt: NOW + 1_000,
+        refreshToken: 'refresh-new',
+        sessionExpiresAt: SESSION_EXPIRES_AT
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies(sealed);
+    const coordination = fakeCoordinator({ kind: 'result', sealedSession: result });
+    const fetchFn = vi.fn() as unknown as typeof fetch;
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const outcomes: string[] = [];
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(NOW + 500).mockReturnValue(NOW + 2_000);
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: coordinatedEnv(),
+        fetchFn,
+        now: NOW,
+        coordinator: coordination.coordinator,
+        refreshOutcomeRecorder: (outcome) => outcomes.push(outcome)
+      });
+
+      expect(locals).toEqual({ authenticated: false });
+      expect(cookies.setCalls).toHaveLength(0);
+      expect(cookies.deleteCalls).toHaveLength(1);
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(outcomes).toEqual(['invalid_result']);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('rejects a follower handoff when the fixed browser session expires during result opening', async () => {
+    const sealed = await v2Session(NOW + 10_000);
+    const result = await sealSession(
+      {
+        schemaVersion: 2,
+        accessToken: 'access-new',
+        accessTokenExpiresAt: NOW + 120_000,
+        refreshToken: 'refresh-new',
+        sessionExpiresAt: SESSION_EXPIRES_AT
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies(sealed);
+    const coordination = fakeCoordinator({ kind: 'result', sealedSession: result });
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const outcomes: string[] = [];
+    const clock = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(SESSION_EXPIRES_AT - 500)
+      .mockReturnValue(SESSION_EXPIRES_AT + 1);
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: coordinatedEnv(),
+        fetchFn: vi.fn() as unknown as typeof fetch,
+        now: NOW,
+        coordinator: coordination.coordinator,
+        refreshOutcomeRecorder: (outcome) => outcomes.push(outcome)
+      });
+
+      expect(locals).toEqual({ authenticated: false });
+      expect(cookies.setCalls).toHaveLength(0);
+      expect(cookies.deleteCalls).toHaveLength(1);
+      expect(outcomes).toEqual(['session_expired']);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not adopt a leader token that expires while the shared result is published', async () => {
+    const sealed = await v2Session(NOW);
+    const cookies = fakeCookies(sealed);
+    const coordination = fakeCoordinator({ kind: 'leader', owner: 'owner-a' });
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const outcomes: string[] = [];
+    let current = NOW;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => current);
+    coordination.publishSuccess.mockImplementation(async () => {
+      current = NOW + 2_000;
+      return true;
+    });
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: coordinatedEnv(),
+        fetchFn: discoveryAndRefreshFetch({ expiresIn: 1 }),
+        now: NOW,
+        coordinator: coordination.coordinator,
+        refreshOutcomeRecorder: (outcome) => outcomes.push(outcome)
+      });
+
+      expect(coordination.publishSuccess).toHaveBeenCalledTimes(1);
+      expect(locals).toEqual({ authenticated: false });
+      expect(cookies.setCalls).toHaveLength(0);
+      expect(cookies.deleteCalls).toHaveLength(1);
+      expect(outcomes).toEqual(['invalid_result']);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not adopt a leader handoff after the fixed session expires during publication', async () => {
+    const sealed = await sealSession(
+      {
+        schemaVersion: 2,
+        accessToken: 'access-old',
+        accessTokenExpiresAt: NOW,
+        refreshToken: 'refresh-old',
+        sessionExpiresAt: NOW + 3_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies(sealed);
+    const coordination = fakeCoordinator({ kind: 'leader', owner: 'owner-a' });
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const outcomes: string[] = [];
+    let current = NOW;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => current);
+    coordination.publishSuccess.mockImplementation(async () => {
+      current = NOW + 5_000;
+      return true;
+    });
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: coordinatedEnv(),
+        fetchFn: discoveryAndRefreshFetch(),
+        now: NOW,
+        coordinator: coordination.coordinator,
+        refreshOutcomeRecorder: (outcome) => outcomes.push(outcome)
+      });
+
+      expect(coordination.publishSuccess).toHaveBeenCalledTimes(1);
+      expect(locals).toEqual({ authenticated: false });
+      expect(cookies.setCalls).toHaveLength(0);
+      expect(cookies.deleteCalls).toHaveLength(1);
+      expect(outcomes).toEqual(['session_expired']);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('fails closed when the leader cannot publish a successful upstream refresh', async () => {
     const sealed = await v2Session(NOW + 10_000);
     const cookies = fakeCookies(sealed);
