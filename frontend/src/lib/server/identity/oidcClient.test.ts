@@ -61,6 +61,22 @@ describe('discoverIdentity', () => {
     });
   });
 
+  it.each([
+    ['authorization_endpoint', 'https://login.example.test\\authorize'],
+    ['token_endpoint', 'https://tokens.example.test\\token'],
+    ['end_session_endpoint', 'https://logout.example.test\\end-session'],
+    ['authorization_endpoint', 'https://login.example.test\\@other.example.test/authorize']
+  ])('rejects raw backslashes in %s: %j', async (endpointName, endpointValue) => {
+    const fetchFn = vi.fn(async () =>
+      Response.json(discovery({ [endpointName]: endpointValue }))
+    ) as unknown as typeof fetch;
+
+    await expect(discoverIdentity(config, fetchFn)).rejects.toMatchObject({
+      name: 'IdentityClientError',
+      kind: 'invalid_response'
+    });
+  });
+
   it('loads exact issuer metadata without following redirects', async () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('https://id.example.test/.well-known/openid-configuration');
