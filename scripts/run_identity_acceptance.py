@@ -248,7 +248,22 @@ def run_acceptance(
             ready=False,
         )
 
-    if verifier_fn(config) != 0:
+    try:
+        verification_exit_code = verifier_fn(config)
+    except Exception:
+        # Do not leak subprocess or upstream diagnostics into the public
+        # acceptance report. An unexpected verifier failure is not a token
+        # rejection; it is a fail-closed internal failure.
+        return _result(
+            phase=AcceptancePhase.INTERNAL,
+            evidence=evidence,
+            browser_topology=browser_topology,
+            issuer_preflight=True,
+            access_token=False,
+            ready=False,
+        )
+
+    if verification_exit_code != 0:
         return _result(
             phase=AcceptancePhase.ACCESS_TOKEN,
             evidence=evidence,

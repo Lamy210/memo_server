@@ -236,6 +236,54 @@ class IdentityAcceptanceRunnerTests(unittest.TestCase):
         self.assertNotIn(sensitive_detail, result.render())
         verifier.assert_not_called()
 
+    def test_unexpected_verifier_exception_is_fail_closed_and_redacted(self) -> None:
+        secret = "https://id.example.test/jwks?credential=private-token"
+        for topology in (BrowserTopology.SINGLE_ACTIVE, BrowserTopology.MULTI_ACTIVE):
+            with self.subTest(topology=topology):
+                evidence = AcceptanceEvidence(
+                    browser_flow_validated=True,
+                    rotation_rollback_validated=True,
+                    monitoring_validated=True,
+                    refresh_coordination_canary_validated=(
+                        topology is BrowserTopology.MULTI_ACTIVE
+                    ),
+                )
+                preflight = Mock(return_value={"status": "ok"})
+                verifier = Mock(side_effect=RuntimeError(secret))
+
+                result = run_acceptance(
+                    self.config(),
+                    evidence,
+                    topology,
+                    preflight_fn=preflight,
+                    verifier_fn=verifier,
+                )
+
+                preflight.assert_called_once()
+                verifier.assert_called_once_with(self.config())
+                self.assertEqual(result.phase, AcceptancePhase.INTERNAL)
+                self.assertFalse(result.ready)
+                self.assertTrue(result.issuer_preflight)
+                self.assertFalse(result.access_token)
+                self.assertIn("identity_acceptance.failure_phase=internal", result.render())
+                self.assertNotIn(secret, result.render())
+                self.assertNotIn(self.config().jwks_uri, result.render())
+
+    def test_verifier_nonzero_exit_is_a_token_failure_not_an_internal_error(self) -> None:
+        result = run_acceptance(
+            self.config(),
+            self.evidence(),
+            BrowserTopology.SINGLE_ACTIVE,
+            preflight_fn=Mock(return_value={"status": "ok"}),
+            verifier_fn=Mock(return_value=1),
+        )
+
+        self.assertEqual(result.phase, AcceptancePhase.ACCESS_TOKEN)
+        self.assertFalse(result.ready)
+        self.assertTrue(result.issuer_preflight)
+        self.assertFalse(result.access_token)
+        self.assertIn("identity_acceptance.failure_phase=access_token", result.render())
+
     def test_success_runs_preflight_before_verifier_and_returns_non_identifying_evidence(self) -> None:
         calls: list[str] = []
 
