@@ -351,12 +351,20 @@ export async function restoreIdentitySession({
     return;
   }
 
+  // Decrypting a session is asynchronous. The request-start timestamp must
+  // not authorize a token or V2 browser session that expired during decryption.
+  const checkedAt = Math.max(now, Date.now());
+  if (isIdentitySessionV2(session) && session.sessionExpiresAt <= checkedAt) {
+    deleteSessionCookie(cookies);
+    return;
+  }
+
   if (config.refreshCoordinationUrl && !isIdentitySessionV2(session)) {
     deleteSessionCookie(cookies);
     return;
   }
 
-  if (session.accessTokenExpiresAt > now + ACCESS_TOKEN_REFRESH_WINDOW_MS) {
+  if (session.accessTokenExpiresAt > checkedAt + ACCESS_TOKEN_REFRESH_WINDOW_MS) {
     authenticate(locals, session.accessToken);
     return;
   }
@@ -369,7 +377,7 @@ export async function restoreIdentitySession({
       cookies,
       locals,
       fetchFn,
-      now,
+      now: checkedAt,
       coordinator,
       recordOutcome: refreshOutcomeRecorder ?? recordRefreshCoordinationOutcome
     });
@@ -377,7 +385,7 @@ export async function restoreIdentitySession({
   }
 
   try {
-    const refreshed = await refreshIdentitySession(sealed, session, config, fetchFn, now);
+    const refreshed = await refreshIdentitySession(sealed, session, config, fetchFn, checkedAt);
     const receivedAt = Math.max(now, Date.now());
     if (
       refreshed.session.accessTokenExpiresAt <= receivedAt ||
