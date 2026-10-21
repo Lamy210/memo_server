@@ -297,6 +297,107 @@ mod auth_under_test {
         }
 
         #[tokio::test]
+        async fn http_jwks_multi_replica_rotation_converges_after_partial_issuer_outage() {
+            // Two API replicas intentionally have separate JWKS caches while
+            // consulting the same issuer. Responses represent prepublication,
+            // overlap, a transient outage on replica B, and recovery.
+            let (replica_a, server) = jwks_http_fixture(vec![
+                (200, jwks_http_document(false)),
+                (200, jwks_http_document(false)),
+                (200, jwks_http_document(true)),
+                (503, "temporarily unavailable".into()),
+                (200, jwks_http_document(true)),
+            ])
+            .await;
+            let mut replica_b = verifier();
+            replica_b.jwks_uri = replica_a.jwks_uri.clone();
+            replica_b.client = replica_a.client.clone();
+
+            assert_valid(&replica_a, OLD_TOKEN).await;
+            assert_valid(&replica_b, OLD_TOKEN).await;
+
+            // Replica A learns about the newly published key, while B still
+            // holds the old snapshot and cannot infer keys from A's cache.
+            assert_valid(&replica_a, NEW_TOKEN).await;
+            assert_valid(&replica_a, OLD_TOKEN).await;
+            assert!(matches!(
+                replica_b.verify(NEW_TOKEN).await,
+                Err(AppError::ServiceUnavailable(_))
+            ));
+            assert_valid(&replica_b, OLD_TOKEN).await;
+
+            // The forced-refresh cooldown does not create an extra HTTP
+            // request and must not authenticate a token with an unknown kid.
+            assert!(matches!(
+                replica_b.verify(NEW_TOKEN).await,
+                Err(AppError::Unauthorized(_))
+            ));
+            assert_valid(&replica_a, NEW_TOKEN).await;
+
+            // After the cooldown, B independently retrieves the overlap and
+            // converges without invalidating the old signing key.
+            replica_b.refresh_state.lock().await.last_forced_attempt =
+                Some(Instant::now() - JWKS_FORCED_REFRESH_COOLDOWN);
+            assert_valid(&replica_b, NEW_TOKEN).await;
+            assert_valid(&replica_b, OLD_TOKEN).await;
+            assert_valid(&replica_a, OLD_TOKEN).await;
+            assert_fixture_requests_complete(server).await;
+        }
+
+        #[tokio::test]
+        async fn http_jwks_partial_body_timeout_fails_closed_without_caching_keys() {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("fixture listener must bind loopback");
+            let address = listener.local_addr().expect("fixture address must exist");
+            let mut verifier = verifier();
+            verifier.jwks_uri = format!("http://{address}/jwks");
+            verifier.client = Client::builder()
+                .https_only(false)
+                .redirect(Policy::none())
+                .no_proxy()
+                .build()
+                .expect("test-only client must initialize");
+
+            // Return successful HTTP headers and a truncated JSON fragment,
+            // then hold the socket open. The transport deadline must cover
+            // the response stream, not merely receipt of response headers.
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener
+                    .accept()
+                    .await
+                    .expect("fixture must accept JWKS request");
+                let mut request = [0_u8; 2048];
+                let received = socket
+                    .read(&mut request)
+                    .await
+                    .expect("fixture must read request");
+                assert!(request[..received].starts_with(b"GET /jwks HTTP/1.1"));
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4096\r\nConnection: close\r\n\r\n{\"keys\":[")
+                    .await
+                    .expect("fixture must send partial response");
+                tokio::time::sleep(JWKS_REQUEST_TIMEOUT + Duration::from_secs(4)).await;
+            });
+
+            let result = tokio::time::timeout(
+                JWKS_REQUEST_TIMEOUT + Duration::from_secs(2),
+                verifier.verify(OLD_TOKEN),
+            )
+            .await
+            .expect("JWKS request must finish within its configured deadline");
+            assert!(matches!(result, Err(AppError::ServiceUnavailable(_))));
+            assert!(
+                verifier.jwks.read().await.is_none(),
+                "incomplete JWKS must never enter the verification cache"
+            );
+            server.abort();
+            let _ = server.await;
+        }
+
+        #[tokio::test]
         async fn signing_key_overlap_supports_cutover_and_issuer_rollback() {
             let verifier = verifier();
 
