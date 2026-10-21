@@ -44,7 +44,7 @@ describe('readIdentityConfig', () => {
     "https://id.example.test/ten\tant",
     "https://id.example.test/ten\rant",
     "https://id.example.test\\tenant",
-    "https://id.example.test/",
+    "https://id.example.test/\u007f"
   ])('rejects issuer URLs with raw control characters or backslashes %j', (issuer) => {
     expect(() => readIdentityConfig(validEnv({ IDENTITY_ISSUER: issuer }))).toThrow();
   });
