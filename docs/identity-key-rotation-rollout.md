@@ -62,6 +62,7 @@ Consequences for operations:
 - publish a new key before first use; do not depend on the first request racing a publication event;
 - do not use cache expiry as a substitute for a correct overlap window;
 - removing a key upstream does not imply every replica immediately forgets a previously cached copy;
+- a throttled forced refresh may reuse a cached snapshot only while it remains within the same bounded stale-if-error horizon used for scheduled-refresh failures; once this horizon has passed, verification fails closed rather than reviving an arbitrarily old key set;
 - retirement checks therefore concern the token-validity horizon and fleet convergence, not an instantaneous global rejection point;
 - rollback should be safe even if different replicas temporarily observe different valid JWKS snapshots during normal propagation, because both keys remain published throughout the overlap.
 
