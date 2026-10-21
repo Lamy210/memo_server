@@ -173,15 +173,16 @@ mod auth_under_test {
 
             let server = tokio::spawn(async move {
                 for (status, body) in responses {
-                    let (mut socket, _) = tokio::time::timeout(
-                        Duration::from_secs(10),
-                        listener.accept(),
-                    )
-                    .await
-                    .expect("expected another JWKS HTTP request")
-                    .expect("fixture must accept connection");
+                    let (mut socket, _) =
+                        tokio::time::timeout(Duration::from_secs(10), listener.accept())
+                            .await
+                            .expect("expected another JWKS HTTP request")
+                            .expect("fixture must accept connection");
                     let mut request = [0_u8; 2048];
-                    let received = socket.read(&mut request).await.expect("HTTP read must succeed");
+                    let received = socket
+                        .read(&mut request)
+                        .await
+                        .expect("HTTP read must succeed");
                     assert!(
                         request[..received].starts_with(b"GET /jwks HTTP/1.1"),
                         "verifier must request the fixture JWKS path"
@@ -199,7 +200,10 @@ mod auth_under_test {
                         .write_all(response.as_bytes())
                         .await
                         .expect("HTTP response must be written");
-                    socket.shutdown().await.expect("fixture must close connection");
+                    socket
+                        .shutdown()
+                        .await
+                        .expect("fixture must close connection");
                 }
             });
             (verifier, server)
@@ -246,7 +250,11 @@ mod auth_under_test {
             assert_valid(&verifier, NEW_TOKEN).await;
 
             // No stale fallback once the configured maximum has elapsed.
-            age_cached_jwks(&verifier, JWKS_STALE_IF_ERROR_TTL_MAX + Duration::from_secs(1)).await;
+            age_cached_jwks(
+                &verifier,
+                JWKS_STALE_IF_ERROR_TTL_MAX + Duration::from_secs(1),
+            )
+            .await;
             assert!(matches!(
                 verifier.verify(OLD_TOKEN).await,
                 Err(AppError::ServiceUnavailable(_))
