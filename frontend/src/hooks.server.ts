@@ -242,11 +242,18 @@ async function restoreWithSharedCoordination(input: {
     }
 
     const resultSession = await openSession(decision.sealedSession, config.sessionKey, decisionNow);
+    const acceptedAt = Math.max(decisionNow, Date.now());
+    if (session.sessionExpiresAt <= acceptedAt) {
+      deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'session_expired');
+      return;
+    }
+
     if (
       !resultSession ||
       !isIdentitySessionV2(resultSession) ||
       resultSession.sessionExpiresAt !== session.sessionExpiresAt ||
-      resultSession.accessTokenExpiresAt <= decisionNow
+      resultSession.accessTokenExpiresAt <= acceptedAt
     ) {
       deleteSessionCookie(cookies);
       observeRefreshOutcome(recordOutcome, 'invalid_result');
@@ -288,6 +295,20 @@ async function restoreWithSharedCoordination(input: {
       await coordinator.completeFailure({ sealedSession: sealed, owner: decision.owner });
       deleteSessionCookie(cookies);
       observeRefreshOutcome(recordOutcome, 'publish_failure');
+      return;
+    }
+
+    // Publishing a handoff can outlive a short access token or the fixed V2
+    // session. Never authenticate the leader with an already-expired result.
+    const acceptedAt = Math.max(refreshedAt, Date.now());
+    if (session.sessionExpiresAt <= acceptedAt) {
+      deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'session_expired');
+      return;
+    }
+    if (nextSession.accessTokenExpiresAt <= acceptedAt) {
+      deleteSessionCookie(cookies);
+      observeRefreshOutcome(recordOutcome, 'invalid_result');
       return;
     }
 
