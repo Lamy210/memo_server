@@ -158,6 +158,54 @@ describe('PKCE authorization request', () => {
 });
 
 describe('token endpoint', () => {
+  it.each([
+    'access token',
+    'access\\ntoken',
+    'access\\ttoken',
+    'access:token',
+    'access%token',
+    'access雪token',
+    '=',
+    'access=token'
+  ])('rejects an access token outside the RFC 6750 Bearer syntax: %j', async (accessToken) => {
+    const metadata = await discoverIdentity(
+      config,
+      vi.fn(async () => Response.json(discovery())) as unknown as typeof fetch
+    );
+    const fetchFn = vi.fn(async () =>
+      Response.json({
+        access_token: accessToken,
+        token_type: 'Bearer',
+        expires_in: 120,
+        refresh_token: 'refresh-valid'
+      })
+    ) as unknown as typeof fetch;
+
+    await expect(
+      refreshAccessToken(metadata, config, fetchFn, { refreshToken: 'refresh-current' })
+    ).rejects.toMatchObject({ name: 'IdentityClientError', kind: 'invalid_response' });
+  });
+
+  it('accepts RFC 6750 Bearer token characters without changing the opaque token', async () => {
+    const metadata = await discoverIdentity(
+      config,
+      vi.fn(async () => Response.json(discovery())) as unknown as typeof fetch
+    );
+    const accessToken = 'aAzZ09._~+/-===';
+    const fetchFn = vi.fn(async () =>
+      Response.json({
+        access_token: accessToken,
+        token_type: 'Bearer',
+        expires_in: 120,
+        refresh_token: 'refresh-valid'
+      })
+    ) as unknown as typeof fetch;
+
+    await expect(
+      refreshAccessToken(metadata, config, fetchFn, { refreshToken: 'refresh-current' })
+    ).resolves.toMatchObject({ accessToken });
+  });
+
   it.each([0.5, 1.25, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1])(
     'rejects fractional or unsafe expires_in=%s without accepting the token',
     async (expiresIn) => {
