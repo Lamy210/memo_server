@@ -193,6 +193,93 @@ describe('restoreIdentitySession', () => {
     });
   });
 
+  it('starts an uncoordinated refreshed token lifetime when the upstream refresh completes', async () => {
+    const sealed = await sealSession(
+      { accessToken: 'access-old', accessTokenExpiresAt: NOW, refreshToken: 'refresh-old' },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies(sealed);
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW + 15_000);
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: identityEnv(),
+        fetchFn: discoveryAndRefreshFetch({ expiresIn: 120 }),
+        now: NOW
+      });
+
+      expect(locals).toEqual({ authenticated: true, accessToken: 'access-new' });
+      expect(cookies.setCalls).toHaveLength(1);
+      const restored = await openSession(cookies.setCalls[0].value, SESSION_KEY_BYTES, NOW);
+      expect(restored?.accessTokenExpiresAt).toBe(NOW + 15_000 + 120_000);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not authenticate with a token that expires during uncoordinated refresh processing', async () => {
+    const sealed = await sealSession(
+      { accessToken: 'access-old', accessTokenExpiresAt: NOW, refreshToken: 'refresh-old' },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies(sealed);
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const clock = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(NOW + 15_000)
+      .mockReturnValue(NOW + 17_000);
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: identityEnv(),
+        fetchFn: discoveryAndRefreshFetch({ expiresIn: 1 }),
+        now: NOW
+      });
+
+      expect(locals).toEqual({ authenticated: false });
+      expect(cookies.setCalls).toHaveLength(0);
+      expect(cookies.deleteCalls).toContainEqual({ name: SESSION_COOKIE_NAME, options: { path: '/' } });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not extend a v2 session that expires while uncoordinated refresh is in flight', async () => {
+    const sealed = await sealSession(
+      {
+        schemaVersion: 2,
+        accessToken: 'access-old',
+        accessTokenExpiresAt: NOW,
+        refreshToken: 'refresh-old',
+        sessionExpiresAt: NOW + 3_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies(sealed);
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW + 5_000);
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: identityEnv(),
+        fetchFn: discoveryAndRefreshFetch(),
+        now: NOW
+      });
+
+      expect(locals).toEqual({ authenticated: false });
+      expect(cookies.setCalls).toHaveLength(0);
+      expect(cookies.deleteCalls).toContainEqual({ name: SESSION_COOKIE_NAME, options: { path: '/' } });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('retains the prior refresh credential when refresh omits a replacement', async () => {
     const sealed = await sealSession(
       { accessToken: 'access-old', accessTokenExpiresAt: NOW, refreshToken: 'refresh-old' },
