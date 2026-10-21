@@ -190,19 +190,41 @@ export async function completeLogin({
       codeVerifier: transaction.codeVerifier,
       redirectUri: new URL('/auth/callback', url.origin).toString()
     });
+    // The authorization code exchange is asynchronous. Do not issue a session
+    // from a callback that expired while talking to the identity provider.
+    const receivedAt = Math.max(now, Date.now());
+    if (transaction.expiresAt <= receivedAt) {
+      cookies.delete(SESSION_COOKIE_NAME, { path: '/' });
+      return callbackFailure(400, 'invalid_callback');
+    }
+
     const baseSession = {
       accessToken: tokenSet.accessToken,
-      accessTokenExpiresAt: now + Math.floor(tokenSet.expiresIn * 1000),
+      accessTokenExpiresAt: receivedAt + Math.floor(tokenSet.expiresIn * 1000),
       refreshToken: tokenSet.refreshToken!
     };
     const session: IdentitySession = config.browserSessionMaxAgeSeconds
       ? {
           schemaVersion: 2,
           ...baseSession,
-          sessionExpiresAt: now + config.browserSessionMaxAgeSeconds * 1000
+          sessionExpiresAt: receivedAt + config.browserSessionMaxAgeSeconds * 1000
         }
       : baseSession;
     const sealedSession = await sealSession(session, config.sessionKey);
+
+    // Session sealing may also be delayed; fail closed before setting a cookie.
+    const issuedAt = Math.max(receivedAt, Date.now());
+    if (transaction.expiresAt <= issuedAt) {
+      cookies.delete(SESSION_COOKIE_NAME, { path: '/' });
+      return callbackFailure(400, 'invalid_callback');
+    }
+    if (
+      session.accessTokenExpiresAt <= issuedAt ||
+      ('sessionExpiresAt' in session && session.sessionExpiresAt <= issuedAt)
+    ) {
+      cookies.delete(SESSION_COOKIE_NAME, { path: '/' });
+      return callbackFailure(502, 'authentication_failed');
+    }
 
     cookies.set(SESSION_COOKIE_NAME, sealedSession, {
       path: '/',

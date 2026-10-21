@@ -66,7 +66,7 @@ function discoveryPayload() {
   };
 }
 
-function authFetch(input: { refreshToken?: string | null } = {}) {
+function authFetch(input: { refreshToken?: string | null; expiresIn?: number } = {}) {
   return vi.fn(async (request: RequestInfo | URL, init?: RequestInit) => {
     const url = String(request);
     if (url.endsWith('/.well-known/openid-configuration')) {
@@ -83,7 +83,7 @@ function authFetch(input: { refreshToken?: string | null } = {}) {
     return Response.json({
       access_token: 'access-1',
       token_type: 'Bearer',
-      expires_in: 300,
+      expires_in: input.expiresIn ?? 300,
       ...(input.refreshToken === null
         ? {}
         : { refresh_token: input.refreshToken ?? 'refresh-1' })
@@ -168,6 +168,164 @@ describe('provider-neutral browser auth routes', () => {
       now: NOW
     });
     expect(replay.status).toBe(400);
+  });
+
+  it.each([
+    {
+      mode: 'single replica',
+      env: identityEnv(),
+      expectedSessionExpiry: undefined
+    },
+    {
+      mode: 'shared coordination',
+      env: identityEnv({
+        IDENTITY_REFRESH_COORDINATION_URL: 'valkey://valkey:6379',
+        IDENTITY_BROWSER_SESSION_MAX_AGE_SECONDS: '3600'
+      }),
+      expectedSessionExpiry: NOW + 15_000 + 3_600_000
+    }
+  ])('uses token response time for %s callback session expiry', async ({ env, expectedSessionExpiry }) => {
+    const transaction = await sealLoginTransaction(
+      {
+        state: 'state-1',
+        codeVerifier: 'v'.repeat(43),
+        returnTarget: '/memos',
+        expiresAt: NOW + 60_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies({ [LOGIN_TRANSACTION_COOKIE_NAME]: transaction });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW + 15_000);
+
+    try {
+      const response = await completeLogin({
+        url: new URL('https://memo.example.test/auth/callback?code=code-1&state=state-1'),
+        cookies: cookies.api,
+        fetchFn: authFetch(),
+        identityEnv: env,
+        now: NOW
+      });
+
+      expect(response.status).toBe(303);
+      const sealed = cookies.values.get(SESSION_COOKIE_NAME);
+      expect(sealed).toBeTruthy();
+      const opened = await openSession(sealed!, SESSION_KEY_BYTES, NOW);
+      expect(opened).toMatchObject({
+        accessToken: 'access-1',
+        accessTokenExpiresAt: NOW + 15_000 + 300_000,
+        refreshToken: 'refresh-1'
+      });
+      if (expectedSessionExpiry === undefined) {
+        expect(opened).not.toHaveProperty('sessionExpiresAt');
+      } else {
+        expect(opened).toMatchObject({
+          schemaVersion: 2,
+          sessionExpiresAt: expectedSessionExpiry
+        });
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not create a session when the login transaction expires during code exchange', async () => {
+    const transaction = await sealLoginTransaction(
+      {
+        state: 'state-1',
+        codeVerifier: 'v'.repeat(43),
+        returnTarget: '/memos',
+        expiresAt: NOW + 60_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies({ [LOGIN_TRANSACTION_COOKIE_NAME]: transaction });
+    const fetchFn = authFetch();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW + 60_001);
+
+    try {
+      const response = await completeLogin({
+        url: new URL('https://memo.example.test/auth/callback?code=code-1&state=state-1'),
+        cookies: cookies.api,
+        fetchFn,
+        identityEnv: identityEnv(),
+        now: NOW
+      });
+
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'invalid_callback' });
+      expect(cookies.values.has(SESSION_COOKIE_NAME)).toBe(false);
+      expect(cookies.values.has(LOGIN_TRANSACTION_COOKIE_NAME)).toBe(false);
+      expect(cookies.setCalls).toHaveLength(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not adopt a callback session when the transaction expires during encryption', async () => {
+    const transaction = await sealLoginTransaction(
+      {
+        state: 'state-1',
+        codeVerifier: 'v'.repeat(43),
+        returnTarget: '/memos',
+        expiresAt: NOW + 60_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies({ [LOGIN_TRANSACTION_COOKIE_NAME]: transaction });
+    const clock = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(NOW + 500)
+      .mockReturnValue(NOW + 60_001);
+
+    try {
+      const response = await completeLogin({
+        url: new URL('https://memo.example.test/auth/callback?code=code-1&state=state-1'),
+        cookies: cookies.api,
+        fetchFn: authFetch(),
+        identityEnv: identityEnv(),
+        now: NOW
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'invalid_callback' });
+      expect(cookies.values.has(SESSION_COOKIE_NAME)).toBe(false);
+      expect(cookies.setCalls).toHaveLength(0);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('does not adopt an access token that expires before callback cookie issuance', async () => {
+    const transaction = await sealLoginTransaction(
+      {
+        state: 'state-1',
+        codeVerifier: 'v'.repeat(43),
+        returnTarget: '/memos',
+        expiresAt: NOW + 60_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies({ [LOGIN_TRANSACTION_COOKIE_NAME]: transaction });
+    const clock = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(NOW)
+      .mockReturnValue(NOW + 2_000);
+
+    try {
+      const response = await completeLogin({
+        url: new URL('https://memo.example.test/auth/callback?code=code-1&state=state-1'),
+        cookies: cookies.api,
+        fetchFn: authFetch({ expiresIn: 1 }),
+        identityEnv: identityEnv(),
+        now: NOW
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toEqual({ error: 'authentication_failed' });
+      expect(cookies.values.has(SESSION_COOKIE_NAME)).toBe(false);
+      expect(cookies.setCalls).toHaveLength(0);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('creates a bounded v2 session when refresh coordination is configured', async () => {
