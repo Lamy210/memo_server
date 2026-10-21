@@ -293,8 +293,17 @@ impl JwtVerifier {
         if force_refresh {
             let now = Instant::now();
             if !forced_refresh_allowed(refresh_state.last_forced_attempt, now) {
-                if let Some((set, _)) = cached {
-                    return observe_jwks_refresh(trigger, JwksRefreshOutcome::Throttled, Ok(set));
+                // Throttling must not bypass the same stale-key horizon enforced
+                // when a scheduled JWKS refresh fails. Never resurrect an
+                // arbitrarily old verification key set during issuer outages.
+                if let Some((set, fetched_at)) = cached {
+                    if fetched_at.elapsed() < self.jwks_cache_policy.stale_if_error_ttl {
+                        return observe_jwks_refresh(
+                            trigger,
+                            JwksRefreshOutcome::Throttled,
+                            Ok(set),
+                        );
+                    }
                 }
                 return observe_jwks_refresh(
                     trigger,
@@ -1288,6 +1297,52 @@ mod tests {
                 stale_if_error_ttl: JWKS_STALE_IF_ERROR_TTL_MAX,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn throttled_forced_jwks_refresh_reuses_cache_only_within_stale_horizon() {
+        let verifier = JwtVerifier::new(
+            TEST_ISSUER.to_string(),
+            TEST_AUDIENCE.to_string(),
+            "https://unused.test/.well-known/jwks.json".to_string(),
+            JwtSignatureMode::Rs256,
+            JwtAccessTokenTypeMode::LegacyAny,
+            300,
+        )
+        .expect("test verifier must initialize");
+        let key = jwk(serde_json::json!({
+            "kty": "RSA",
+            "alg": "RS256",
+            "kid": "cached-key",
+            "n": TEST_RSA_MODULUS,
+            "e": TEST_RSA_EXPONENT
+        }));
+        let cached = Arc::new(JwkSet { keys: vec![key] });
+
+        // A recent failed forced refresh should not fan out another JWKS fetch.
+        // A cached snapshot is eligible only while still within its bounded
+        // stale-if-error horizon (token lifetime + verifier clock skew).
+        verifier.refresh_state.lock().await.last_forced_attempt = Some(Instant::now());
+        *verifier.jwks.write().await = Some(CachedJwks {
+            set: cached.clone(),
+            fetched_at: Instant::now() - Duration::from_secs(310),
+        });
+        let within_horizon = verifier
+            .jwks(Some(JwksRefreshTrigger::UnknownKid))
+            .await
+            .expect("throttled refresh may return bounded stale cache");
+        assert!(Arc::ptr_eq(&within_horizon, &cached));
+
+        // A second cooldown hit must never resurrect a key set after the
+        // configured 330-second stale horizon, even if the issuer is offline.
+        *verifier.jwks.write().await = Some(CachedJwks {
+            set: cached,
+            fetched_at: Instant::now() - Duration::from_secs(331),
+        });
+        assert!(matches!(
+            verifier.jwks(Some(JwksRefreshTrigger::UnknownKid)).await,
+            Err(AppError::ServiceUnavailable(_))
+        ));
     }
 
     #[test]
