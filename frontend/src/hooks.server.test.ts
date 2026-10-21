@@ -157,6 +157,104 @@ describe('restoreIdentitySession', () => {
     expect(cookies.setCalls).toHaveLength(0);
   });
 
+  it('refreshes a token that expired while the sealed cookie was being opened', async () => {
+    const sealed = await sealSession(
+      {
+        accessToken: 'access-old',
+        accessTokenExpiresAt: NOW + 45_000,
+        refreshToken: 'refresh-old'
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies(sealed);
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const fetchFn = discoveryAndRefreshFetch();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW + 60_000);
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: identityEnv(),
+        fetchFn,
+        now: NOW
+      });
+
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(locals).toEqual({ authenticated: true, accessToken: 'access-new' });
+      expect(cookies.setCalls).toHaveLength(1);
+      const updated = await openSession(cookies.setCalls[0].value, SESSION_KEY_BYTES, NOW);
+      expect(updated?.accessTokenExpiresAt).toBe(NOW + 60_000 + 120_000);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('rejects a fixed V2 session that expired during cookie opening before contacting coordination', async () => {
+    const sealed = await sealSession(
+      {
+        schemaVersion: 2,
+        accessToken: 'access-old',
+        accessTokenExpiresAt: NOW + 120_000,
+        refreshToken: 'refresh-old',
+        sessionExpiresAt: NOW + 10_000
+      },
+      SESSION_KEY_BYTES
+    );
+    const cookies = fakeCookies(sealed);
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const coordinator = fakeCoordinator({ kind: 'leader', owner: 'owner-a' });
+    const fetchFn = vi.fn() as unknown as typeof fetch;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW + 10_001);
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: coordinatedEnv(),
+        fetchFn,
+        now: NOW,
+        coordinator: coordinator.coordinator
+      });
+
+      expect(locals).toEqual({ authenticated: false });
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(coordinator.acquire).not.toHaveBeenCalled();
+      expect(cookies.setCalls).toHaveLength(0);
+      expect(cookies.deleteCalls).toContainEqual({ name: SESSION_COOKIE_NAME, options: { path: '/' } });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('enters shared coordination when cookie decryption consumes the early-refresh window', async () => {
+    const sealed = await v2Session(NOW + 55_000);
+    const cookies = fakeCookies(sealed);
+    const locals: { authenticated?: boolean; accessToken?: string } = {};
+    const coordinator = fakeCoordinator({ kind: 'leader', owner: 'owner-a' });
+    const fetchFn = discoveryAndRefreshFetch();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW + 40_000);
+
+    try {
+      await restoreIdentitySession({
+        cookies: cookies.api,
+        locals,
+        env: coordinatedEnv(),
+        fetchFn,
+        now: NOW,
+        coordinator: coordinator.coordinator
+      });
+
+      expect(coordinator.acquire).toHaveBeenCalledTimes(1);
+      expect(coordinator.publishSuccess).toHaveBeenCalledTimes(1);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(locals).toEqual({ authenticated: true, accessToken: 'access-new' });
+      expect(cookies.setCalls).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('refreshes an expiring access token and rotates the refresh credential', async () => {
     const sealed = await sealSession(
       {
@@ -228,6 +326,7 @@ describe('restoreIdentitySession', () => {
     const cookies = fakeCookies(sealed);
     const locals: { authenticated?: boolean; accessToken?: string } = {};
     const clock = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(NOW)
       .mockReturnValueOnce(NOW + 15_000)
       .mockReturnValue(NOW + 17_000);
 
@@ -261,7 +360,7 @@ describe('restoreIdentitySession', () => {
     );
     const cookies = fakeCookies(sealed);
     const locals: { authenticated?: boolean; accessToken?: string } = {};
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW + 5_000);
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(NOW).mockReturnValue(NOW + 5_000);
 
     try {
       await restoreIdentitySession({
@@ -466,7 +565,7 @@ describe('restoreIdentitySession', () => {
     const fetchFn = vi.fn() as unknown as typeof fetch;
     const locals: { authenticated?: boolean; accessToken?: string } = {};
     const outcomes: string[] = [];
-    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(NOW + 500).mockReturnValue(NOW + 2_000);
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(NOW).mockReturnValueOnce(NOW + 500).mockReturnValue(NOW + 2_000);
 
     try {
       await restoreIdentitySession({
@@ -506,6 +605,7 @@ describe('restoreIdentitySession', () => {
     const locals: { authenticated?: boolean; accessToken?: string } = {};
     const outcomes: string[] = [];
     const clock = vi.spyOn(Date, 'now')
+      .mockReturnValueOnce(NOW)
       .mockReturnValueOnce(SESSION_EXPIRES_AT - 500)
       .mockReturnValue(SESSION_EXPIRES_AT + 1);
 
