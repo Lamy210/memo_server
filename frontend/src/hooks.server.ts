@@ -162,10 +162,11 @@ async function refreshIdentitySession(
     const refreshed = await refreshAccessToken(metadata, config, fetchFn, {
       refreshToken: session.refreshToken
     });
+    const refreshedAt = Math.max(now, Date.now());
     const nextSession = refreshedSession(
       session,
       refreshed.accessToken,
-      now + Math.floor(refreshed.expiresIn * 1000),
+      refreshedAt + Math.floor(refreshed.expiresIn * 1000),
       refreshed.refreshToken ?? session.refreshToken
     );
 
@@ -356,6 +357,15 @@ export async function restoreIdentitySession({
 
   try {
     const refreshed = await refreshIdentitySession(sealed, session, config, fetchFn, now);
+    const receivedAt = Math.max(now, Date.now());
+    if (
+      refreshed.session.accessTokenExpiresAt <= receivedAt ||
+      (isIdentitySessionV2(refreshed.session) && refreshed.session.sessionExpiresAt <= receivedAt)
+    ) {
+      deleteSessionCookie(cookies);
+      return;
+    }
+
     setSessionCookie(cookies, refreshed.sealed);
     authenticate(locals, refreshed.session.accessToken);
   } catch {
