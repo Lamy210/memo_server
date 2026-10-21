@@ -4,6 +4,8 @@ import type { IdentityConfig } from './config';
 
 const IDENTITY_HTTP_TIMEOUT_MS = 10_000;
 const IDENTITY_JSON_MAX_BYTES = 64 * 1024;
+// RFC 6750 section 2.1 b64token, not an arbitrary JSON string.
+const BEARER_TOKEN_PATTERN = /^[A-Za-z0-9._~+\/-]+=*$/u;
 
 export type IdentityClientErrorKind =
   | 'configuration'
@@ -281,7 +283,7 @@ function validateTokenDocument(payload: unknown): TokenSet {
   const token = payload as TokenDocument;
   if (
     typeof token.access_token !== 'string' ||
-    token.access_token.length === 0 ||
+    !BEARER_TOKEN_PATTERN.test(token.access_token) ||
     typeof token.token_type !== 'string' ||
     token.token_type.toLowerCase() !== 'bearer' ||
     typeof token.expires_in !== 'number' ||
