@@ -182,97 +182,97 @@ impl ProjectionReconciler {
             pending_intents = pending_intents.saturating_add(page_len as u64);
 
             for event in events {
-            seen_event_ids.insert(event.event_id);
-            let now = Instant::now();
-            if !self.is_due(event.event_id, now) {
-                continue;
-            }
-
-            match self.reconcile_event(&event).await {
-                Ok(ReconcileOutcome::Completed) => {
-                    self.record_completed(event.event_id);
-                    pending_intents = pending_intents.saturating_sub(1);
+                seen_event_ids.insert(event.event_id);
+                let now = Instant::now();
+                if !self.is_due(event.event_id, now) {
+                    continue;
                 }
-                Ok(ReconcileOutcome::WaitingForTarget) => {
-                    if self.is_stale_unreached(event.event_id, now) {
-                        // The authoritative mutation may have become visible since
-                        // the first read. Re-run reconciliation before retiring an
-                        // abandoned target, so a newly reachable event is projected
-                        // rather than acknowledged without touching secondaries.
-                        match self.reconcile_event(&event).await {
-                            Ok(ReconcileOutcome::Completed) => {
-                                self.record_completed(event.event_id);
-                                pending_intents = pending_intents.saturating_sub(1);
-                            }
-                            Ok(ReconcileOutcome::InactiveMemoRoute) => {
-                                // Cutover owns the outbox; do not stale-drop it.
-                            }
-                            Ok(ReconcileOutcome::WaitingForTarget) => {
-                                match self
-                                    .authoritative_store
-                                    .acknowledge_projection_intent(&event)
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        self.clear_retry_state(event.event_id);
-                                        self.counters
-                                            .stale_dropped_total
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        pending_intents = pending_intents.saturating_sub(1);
-                                        log::warn!(
-                                            "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
-                                            event.event_id,
-                                            event.memo_id,
-                                            event.user_id,
-                                            event.target
-                                        );
-                                    }
-                                    Err(error) => {
-                                        let retry_after =
-                                            self.defer_after_failure(event.event_id, now);
-                                        log::warn!(
-                                            "Stale projection intent acknowledgement deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
-                                            event.event_id,
-                                            event.memo_id,
-                                            event.user_id,
-                                            event.target,
-                                            retry_after.as_secs()
-                                        );
+
+                match self.reconcile_event(&event).await {
+                    Ok(ReconcileOutcome::Completed) => {
+                        self.record_completed(event.event_id);
+                        pending_intents = pending_intents.saturating_sub(1);
+                    }
+                    Ok(ReconcileOutcome::WaitingForTarget) => {
+                        if self.is_stale_unreached(event.event_id, now) {
+                            // The authoritative mutation may have become visible since
+                            // the first read. Re-run reconciliation before retiring an
+                            // abandoned target, so a newly reachable event is projected
+                            // rather than acknowledged without touching secondaries.
+                            match self.reconcile_event(&event).await {
+                                Ok(ReconcileOutcome::Completed) => {
+                                    self.record_completed(event.event_id);
+                                    pending_intents = pending_intents.saturating_sub(1);
+                                }
+                                Ok(ReconcileOutcome::InactiveMemoRoute) => {
+                                    // Cutover owns the outbox; do not stale-drop it.
+                                }
+                                Ok(ReconcileOutcome::WaitingForTarget) => {
+                                    match self
+                                        .authoritative_store
+                                        .acknowledge_projection_intent(&event)
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            self.clear_retry_state(event.event_id);
+                                            self.counters
+                                                .stale_dropped_total
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            pending_intents = pending_intents.saturating_sub(1);
+                                            log::warn!(
+                                                "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
+                                                event.event_id,
+                                                event.memo_id,
+                                                event.user_id,
+                                                event.target
+                                            );
+                                        }
+                                        Err(error) => {
+                                            let retry_after =
+                                                self.defer_after_failure(event.event_id, now);
+                                            log::warn!(
+                                                "Stale projection intent acknowledgement deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                                                event.event_id,
+                                                event.memo_id,
+                                                event.user_id,
+                                                event.target,
+                                                retry_after.as_secs()
+                                            );
+                                        }
                                     }
                                 }
-                            }
-                            Err(error) => {
-                                // A transient read, projection, or ACK failure
-                                // during recheck must keep the durable intent.
-                                let retry_after = self.defer_after_failure(event.event_id, now);
-                                log::warn!(
-                                    "Stale projection intent recheck deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
-                                    event.event_id,
-                                    event.memo_id,
-                                    event.user_id,
-                                    event.target,
-                                    retry_after.as_secs()
-                                );
+                                Err(error) => {
+                                    // A transient read, projection, or ACK failure
+                                    // during recheck must keep the durable intent.
+                                    let retry_after = self.defer_after_failure(event.event_id, now);
+                                    log::warn!(
+                                        "Stale projection intent recheck deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                                        event.event_id,
+                                        event.memo_id,
+                                        event.user_id,
+                                        event.target,
+                                        retry_after.as_secs()
+                                    );
+                                }
                             }
                         }
                     }
+                    Ok(ReconcileOutcome::InactiveMemoRoute) => {
+                        // This outbox belongs to the other authoritative generation.
+                        // Do not acknowledge, stale-drop, or touch secondary state.
+                    }
+                    Err(error) => {
+                        let retry_after = self.defer_after_failure(event.event_id, now);
+                        log::warn!(
+                            "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                            event.event_id,
+                            event.memo_id,
+                            event.user_id,
+                            event.target,
+                            retry_after.as_secs()
+                        );
+                    }
                 }
-                Ok(ReconcileOutcome::InactiveMemoRoute) => {
-                    // This outbox belongs to the other authoritative generation.
-                    // Do not acknowledge, stale-drop, or touch secondary state.
-                }
-                Err(error) => {
-                    let retry_after = self.defer_after_failure(event.event_id, now);
-                    log::warn!(
-                        "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
-                        event.event_id,
-                        event.memo_id,
-                        event.user_id,
-                        event.target,
-                        retry_after.as_secs()
-                    );
-                }
-            }
             }
 
             if page_len < INTENT_PAGE_SIZE {
