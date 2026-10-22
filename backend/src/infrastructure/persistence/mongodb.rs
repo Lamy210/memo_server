@@ -1526,6 +1526,67 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires a local MongoDB replica set"]
+    async fn mongodb_projection_intent_pages_are_bounded_ordered_and_complete() {
+        let uri = std::env::var("MONGODB_TEST_URI")
+            .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
+        let database_name = format!("{}_outbox_{}", TEST_DATABASE_NAME, Uuid::new_v4().simple());
+        let store = MongoDbAuthoritativeStore::new(&uri, &database_name)
+            .await
+            .unwrap();
+        let owner = Uuid::new_v4();
+        let mut expected = Vec::new();
+        for _ in 0..133 {
+            let intent = store
+                .enqueue_projection_intent(owner, Uuid::new_v4(), ProjectionTarget::Version(1))
+                .await
+                .unwrap();
+            expected.push(intent.event_id);
+        }
+        expected.sort_unstable();
+
+        assert!(store.list_projection_intents_page(None, 0).await.is_err());
+        let mut cursor = None;
+        let mut actual = Vec::new();
+        loop {
+            let page = store.list_projection_intents_page(cursor, 17).await.unwrap();
+            assert!(page.len() <= 17);
+            if page.is_empty() {
+                break;
+            }
+            let previous = cursor;
+            cursor = page.last().map(|intent| intent.event_id);
+            assert!(previous.is_none_or(|before| cursor.unwrap() > before));
+            actual.extend(page.iter().map(|intent| intent.event_id));
+            if page.len() < 17 {
+                break;
+            }
+        }
+
+        assert_eq!(actual, expected);
+        assert!(store
+            .list_projection_intents_page(cursor, 17)
+            .await
+            .unwrap()
+            .is_empty());
+        let encrypted_page =
+            HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents_page(
+                &store, None, 17,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            encrypted_page
+                .iter()
+                .map(|intent| intent.event_id)
+                .collect::<Vec<_>>(),
+            expected[..17]
+        );
+
+        store.database.drop().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local MongoDB replica set"]
     async fn mongodb_encrypted_authoritative_store_preserves_atomic_outbox_and_versioning() {
         let uri = std::env::var("MONGODB_TEST_URI")
             .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
