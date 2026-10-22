@@ -176,7 +176,11 @@ impl ProjectionReconciler {
                 Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
                 Ok(ReconcileOutcome::WaitingForTarget) => {
                     if self.is_stale_unreached(event.event_id, now) {
-                        match self.authoritative_store.acknowledge_projection_intent(&event).await {
+                        match self
+                            .authoritative_store
+                            .acknowledge_projection_intent(&event)
+                            .await
+                        {
                             Ok(()) => {
                                 self.clear_retry_state(event.event_id);
                                 self.counters
@@ -629,7 +633,9 @@ mod tests {
         async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
             self.events.push("ack");
             if self.fail_ack_for.lock().unwrap().as_ref() == Some(&event.event_id) {
-                return Err(AppError::DatabaseError("injected acknowledgement outage".into()));
+                return Err(AppError::DatabaseError(
+                    "injected acknowledgement outage".into(),
+                ));
             }
             self.pending
                 .lock()
@@ -904,8 +910,10 @@ mod tests {
         let owner = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
         let memo = test_memo(owner, memo_id);
-        let stale = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version + 1));
-        let healthy = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version));
+        let stale =
+            ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version + 1));
+        let healthy =
+            ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version));
         let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
         *store.pending.lock().unwrap() = vec![stale.clone(), healthy.clone()];
         *store.fail_ack_for.lock().unwrap() = Some(stale.event_id);
