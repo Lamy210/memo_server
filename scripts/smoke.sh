@@ -313,6 +313,17 @@ resilience_created="$(memo_curl -fsS \
   http://localhost:8083/api/v1/memos)"
 resilience_id="$(jq -er '.id' <<<"$resilience_created")"
 
+# Seed a searchable version before the outage. Manticore must remove the old
+# indexed term after the authoritative memo is updated while projections are offline.
+update_candidate="$(memo_curl -fsS \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"beforeoutageprobe","content":"old secondary projection","tags":["ci","resilience"]}' \
+  http://localhost:8083/api/v1/memos)"
+update_candidate_id="$(jq -er '.id' <<<"$update_candidate")"
+update_candidate_version="$(jq -er '.version' <<<"$update_candidate")"
+before_outage_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=beforeoutageprobe&page=1&limit=20')"
+jq -e --arg id "$update_candidate_id" '.items | any(.id == $id)' <<<"$before_outage_search" >/dev/null
+
 docker compose stop valkey manticore >/dev/null
 
 degraded_ready="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
@@ -333,12 +344,32 @@ outage_created="$(memo_curl -fsS \
   http://localhost:8083/api/v1/memos)"
 outage_id="$(jq -er '.id' <<<"$outage_created")"
 
+# Two writes during simultaneous cache/search outages must reconcile to v3,
+# never to the older v1/v2 snapshots (including after backend restart).
+for updated_title in duringoutageprobe afteroutagefinalprobe; do
+  update_payload="$(jq -nc \
+    --arg title "$updated_title" \
+    --argjson version "$update_candidate_version" \
+    '{title:$title,content:"latest authoritative content",tags:["ci","resilience"],version:$version}')"
+  updated_during_outage="$(memo_curl -fsS \
+    -X PATCH -H 'Content-Type: application/json' \
+    -d "$update_payload" \
+    "http://localhost:8083/api/v1/memos/$update_candidate_id")"
+  update_candidate_version="$(jq -er '.version' <<<"$updated_during_outage")"
+  jq -e --arg title "$updated_title" '.title == $title' <<<"$updated_during_outage" >/dev/null
+done
+[[ "$update_candidate_version" -eq 3 ]]
+
 memo_curl -fsS -X DELETE "http://localhost:8083/api/v1/memos/$resilience_id" >/dev/null
 memo_curl -fsS "http://localhost:8083/api/v1/memos/$outage_id" \
   | jq -e --arg id "$outage_id" '.id == $id' >/dev/null
 
 docker compose restart backend >/dev/null
 wait_for_url "http://localhost:8083/api/v1/health/live" 60 3
+memo_curl -fsS "http://localhost:8083/api/v1/memos/$update_candidate_id" \
+  | jq -e --arg id "$update_candidate_id" --argjson version "$update_candidate_version" \
+      '.id == $id and .version == $version and .title == "afteroutagefinalprobe"' >/dev/null
+
 restart_degraded="$(curl -fsS "http://localhost:8083/api/v1/health/ready")"
 jq -e '
   .ready == true
@@ -367,9 +398,14 @@ fi
 projection_recovered=0
 for _ in $(seq 1 60); do
   if outage_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Outage%20write&page=1&limit=20' 2>/dev/null)" \
-    && deleted_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Resilience%20memo&page=1&limit=20' 2>/dev/null)"; then
+    && deleted_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=Resilience%20memo&page=1&limit=20' 2>/dev/null)" \
+    && old_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=beforeoutageprobe&page=1&limit=20' 2>/dev/null)" \
+    && updated_search="$(memo_curl -fsS 'http://localhost:8083/api/v1/memos/search?query=afteroutagefinalprobe&page=1&limit=20' 2>/dev/null)"; then
     if jq -e --arg id "$outage_id" '.items | any(.id == $id)' <<<"$outage_search" >/dev/null \
-      && jq -e --arg id "$resilience_id" '.items | all(.id != $id)' <<<"$deleted_search" >/dev/null; then
+      && jq -e --arg id "$resilience_id" '.items | all(.id != $id)' <<<"$deleted_search" >/dev/null \
+      && jq -e --arg id "$update_candidate_id" '.items | all(.id != $id)' <<<"$old_search" >/dev/null \
+      && jq -e --arg id "$update_candidate_id" --argjson version "$update_candidate_version" \
+          '.items | any(.id == $id and .version == $version and .title == "afteroutagefinalprobe")' <<<"$updated_search" >/dev/null; then
       projection_recovered=1
       break
     fi
@@ -377,10 +413,42 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 if [[ "$projection_recovered" -ne 1 ]]; then
-  echo "Projection reconciliation did not recover create/delete changes after secondary stores returned" >&2
+  echo "Projection reconciliation did not recover create/update/delete changes after secondary stores returned" >&2
   docker compose logs --no-color --tail=200 backend manticore valkey >&2 || true
   exit 1
 fi
+
+# Search convergence is insufficient: verify actual Valkey materialization,
+# deleted-key absence and durable MongoDB outbox acknowledgement as well.
+secondary_state_recovered=0
+for _ in $(seq 1 60); do
+  updated_cache="$(docker compose exec -T valkey valkey-cli --raw GET \
+    "memo:$DEVELOPMENT_USER_ID:$update_candidate_id" 2>/dev/null)" || true
+  created_cache="$(docker compose exec -T valkey valkey-cli --raw GET \
+    "memo:$DEVELOPMENT_USER_ID:$outage_id" 2>/dev/null)" || true
+  deleted_cache_exists="$(docker compose exec -T valkey valkey-cli --raw EXISTS \
+    "memo:$DEVELOPMENT_USER_ID:$resilience_id" 2>/dev/null)" || true
+  pending_intents="$(docker compose exec -T mongodb mongosh --quiet memo_app --eval \
+    "db.projection_intents.countDocuments({memo_id: {\$in: ['$resilience_id', '$outage_id', '$update_candidate_id']}})" \
+    2>/dev/null | tr -d '\r' | tail -n 1)" || true
+
+  if jq -e --arg id "$update_candidate_id" --argjson version "$update_candidate_version" \
+      '.id == $id and .version == $version and .title == "afteroutagefinalprobe"' \
+      <<<"$updated_cache" >/dev/null 2>&1 \
+    && jq -e --arg id "$outage_id" '.id == $id and .version == 1' \
+      <<<"$created_cache" >/dev/null 2>&1 \
+    && [[ "$deleted_cache_exists" == "0" && "$pending_intents" == "0" ]]; then
+    secondary_state_recovered=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$secondary_state_recovered" -ne 1 ]]; then
+  echo "Cache projection or durable outbox did not converge after secondary recovery" >&2
+  docker compose logs --no-color --tail=200 backend manticore valkey mongodb >&2 || true
+  exit 1
+fi
+echo "Smoke milestone: secondary outage replay, cache and outbox converged"
 
 docker compose stop mongodb >/dev/null
 unavailable_body="$(mktemp)"
