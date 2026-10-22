@@ -986,7 +986,11 @@ mod tests {
             (INTENT_PAGE_SIZE + 3) as u64
         );
         assert_eq!(
-            events.snapshot().iter().filter(|event| **event == "ack").count(),
+            events
+                .snapshot()
+                .iter()
+                .filter(|event| **event == "ack")
+                .count(),
             INTENT_PAGE_SIZE + 3
         );
     }
