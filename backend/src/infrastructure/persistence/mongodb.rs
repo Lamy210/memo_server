@@ -1163,6 +1163,14 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
         <Self as MemoAuthoritativeStore>::list_projection_intents(self).await
     }
 
+    async fn list_encrypted_projection_intents_page(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<ProjectionIntent>> {
+        <Self as MemoAuthoritativeStore>::list_projection_intents_page(self, after, limit).await
+    }
+
     async fn acknowledge_encrypted_projection_intent(
         &self,
         event: &ProjectionIntent,
@@ -1290,6 +1298,41 @@ impl MemoAuthoritativeStore for MongoDbAuthoritativeStore {
             .await
             .map_err(|error| mongo_error("read MongoDB projection intent cursor", error))?;
 
+        documents
+            .into_iter()
+            .map(ProjectionIntentDocument::try_into_intent)
+            .collect()
+    }
+
+    async fn list_projection_intents_page(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<ProjectionIntent>> {
+        // MongoDB treats a limit of zero as unlimited, so reject it before
+        // submitting any query. Sorting on _id uses the built-in index.
+        let bound = i64::try_from(limit).map_err(|_| {
+            AppError::DatabaseError("Projection intent page size is too large".into())
+        })?;
+        if bound == 0 {
+            return Err(AppError::DatabaseError(
+                "Projection intent page size must be positive".into(),
+            ));
+        }
+        let mut filter = doc! {};
+        if let Some(cursor) = after {
+            filter.insert("_id", doc! { "$gt": cursor.to_string() });
+        }
+        let documents: Vec<ProjectionIntentDocument> = self
+            .projection_intents
+            .find(filter)
+            .sort(doc! { "_id": 1 })
+            .limit(bound)
+            .await
+            .map_err(|error| mongo_error("page MongoDB projection intents", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read MongoDB projection intent page", error))?;
         documents
             .into_iter()
             .map(ProjectionIntentDocument::try_into_intent)
