@@ -125,6 +125,26 @@ pub trait HighEncryptedMemoAuthoritativeStore: Send + Sync {
 
     async fn list_encrypted_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>>;
 
+    /// Return at most `limit` intents in ascending event-ID order.
+    /// The default supports test doubles; production stores should override
+    /// it to enforce the bound at the database.
+    async fn list_encrypted_projection_intents_page(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<ProjectionIntent>> {
+        if limit == 0 {
+            return Err(AppError::DatabaseError(
+                "Projection intent page size must be positive".into(),
+            ));
+        }
+        let mut events = self.list_encrypted_projection_intents().await?;
+        events.retain(|event| after.is_none_or(|cursor| event.event_id > cursor));
+        events.sort_unstable_by_key(|event| event.event_id);
+        events.truncate(limit);
+        Ok(events)
+    }
+
     async fn acknowledge_encrypted_projection_intent(
         &self,
         event: &ProjectionIntent,
@@ -180,6 +200,27 @@ pub trait MemoAuthoritativeStore: Send + Sync {
     ) -> AppResult<ProjectionIntent>;
 
     async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>>;
+
+    /// Read a bounded page in ascending event-ID order; `after` is an
+    /// exclusive cursor. New intents behind the cursor are picked up in the
+    /// next complete scan. The default preserves compatibility for fakes and
+    /// legacy stores; MongoDB overrides it with a bounded indexed query.
+    async fn list_projection_intents_page(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<ProjectionIntent>> {
+        if limit == 0 {
+            return Err(AppError::DatabaseError(
+                "Projection intent page size must be positive".into(),
+            ));
+        }
+        let mut events = self.list_projection_intents().await?;
+        events.retain(|event| after.is_none_or(|cursor| event.event_id > cursor));
+        events.sort_unstable_by_key(|event| event.event_id);
+        events.truncate(limit);
+        Ok(events)
+    }
 
     async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()>;
 }
