@@ -143,16 +143,10 @@ impl MemoRepository for MemoRepositoryImpl {
     }
 
     async fn exists(&self, user_id: Uuid, id: Uuid) -> AppResult<bool> {
-        match self.cache.memo_exists(user_id, id).await {
-            Ok(true) => return Ok(true),
-            Ok(false) => {}
-            Err(error) => {
-                log::warn!(
-                    "Cache existence check failed; falling back to authoritative store: memo_id={id} user_id={user_id} error={error}"
-                );
-            }
-        }
-
+        // A cached positive can survive a committed delete when post-commit
+        // eviction fails or another replica still holds stale data. Unlike a
+        // cache hint, the authoritative store can establish current existence.
+        // Always use the owner-scoped primary query for this boolean contract.
         self.authoritative_store.exists(user_id, id).await
     }
 }
