@@ -69,7 +69,11 @@ impl MemoAuthoritativeStore for DurableStore {
 
     async fn save_with_projection_intent(&self, memo: &Memo) -> AppResult<ProjectionIntent> {
         *self.current.lock().unwrap() = Some(memo.clone());
-        Ok(self.record(memo.user_id, memo.id, ProjectionTarget::Version(memo.version)))
+        Ok(self.record(
+            memo.user_id,
+            memo.id,
+            ProjectionTarget::Version(memo.version),
+        ))
     }
 
     async fn delete_with_projection_intent(
@@ -169,7 +173,9 @@ impl RecoverableSearch {
         if self.online.load(Ordering::Relaxed) {
             Ok(())
         } else {
-            Err(AppError::ServiceUnavailable("injected search outage".into()))
+            Err(AppError::ServiceUnavailable(
+                "injected search outage".into(),
+            ))
         }
     }
 }
@@ -218,12 +224,8 @@ async fn replay_after_cache_and_search_outages_converges_create_update_delete() 
         None,
         guard.clone(),
     ));
-    let repository = MemoRepositoryImpl::new(
-        store.clone(),
-        cache.clone(),
-        search.clone(),
-        reconciler,
-    );
+    let repository =
+        MemoRepositoryImpl::new(store.clone(), cache.clone(), search.clone(), reconciler);
 
     // Both projections are offline. Writes still succeed because the durable
     // authoritative state and outbox are the source of truth.
@@ -234,7 +236,12 @@ async fn replay_after_cache_and_search_outages_converges_create_update_delete() 
     repository.save(&memo).await.unwrap();
     assert_eq!(store.pending().len(), 2);
     assert_eq!(
-        store.find_by_id(owner, memo.id).await.unwrap().unwrap().version,
+        store
+            .find_by_id(owner, memo.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .version,
         2
     );
 
@@ -257,7 +264,10 @@ async fn replay_after_cache_and_search_outages_converges_create_update_delete() 
         cache.get_memo(owner, memo.id).await.unwrap().unwrap().title,
         "v2"
     );
-    assert_eq!(search.rows.lock().unwrap().get(&memo.id).unwrap().version, 2);
+    assert_eq!(
+        search.rows.lock().unwrap().get(&memo.id).unwrap().version,
+        2
+    );
 
     // A delete while projections are offline must also remain in the outbox.
     cache.set_online(false);
@@ -268,7 +278,8 @@ async fn replay_after_cache_and_search_outages_converges_create_update_delete() 
 
     cache.set_online(true);
     search.set_online(true);
-    let restarted = ProjectionReconciler::new(store.clone(), cache.clone(), search.clone(), None, guard);
+    let restarted =
+        ProjectionReconciler::new(store.clone(), cache.clone(), search.clone(), None, guard);
     for event in store.pending() {
         restarted.reconcile_now(&event).await;
     }
