@@ -283,6 +283,44 @@ async fn committed_update_and_delete_evict_cache_even_when_reconciliation_is_blo
 }
 
 #[tokio::test]
+async fn deleted_memo_does_not_exist_when_cache_eviction_was_unavailable() {
+    let owner = Uuid::new_v4();
+    let other_owner = Uuid::new_v4();
+    let store = Arc::new(DurableStore::default());
+    let cache = Arc::new(RecoverableCache::default());
+    let search = Arc::new(RecoverableSearch::default());
+    cache.set_online(true);
+    search.set_online(true);
+
+    let memo = Memo::new("cached".into(), "body".into(), vec![], owner);
+    store.save_with_projection_intent(&memo).await.unwrap();
+    cache.set_memo(&memo, None).await.unwrap();
+    let reconciler = Arc::new(ProjectionReconciler::new(
+        store.clone(),
+        cache.clone(),
+        search.clone(),
+        None,
+        Arc::new(UnavailableMutationGuard),
+    ));
+    let repository = MemoRepositoryImpl::new(store.clone(), cache.clone(), search, reconciler);
+    assert!(repository.exists(owner, memo.id).await.unwrap());
+    assert!(!repository.exists(other_owner, memo.id).await.unwrap());
+
+    // Authoritative deletion commits, but cache eviction cannot reach Valkey.
+    // A later cache recovery exposes the original row until outbox replay.
+    cache.set_online(false);
+    repository.delete(owner, memo.id).await.unwrap();
+    assert!(store.find_by_id(owner, memo.id).await.unwrap().is_none());
+    cache.set_online(true);
+    assert!(cache.memo_exists(owner, memo.id).await.unwrap());
+
+    // A positive cache hint is not proof of authoritative existence.
+    assert!(!repository.exists(owner, memo.id).await.unwrap());
+    assert!(!repository.exists(other_owner, memo.id).await.unwrap());
+    assert_eq!(store.pending().len(), 2);
+}
+
+#[tokio::test]
 async fn replay_after_cache_and_search_outages_converges_create_update_delete() {
     let owner = Uuid::new_v4();
     let store = Arc::new(DurableStore::default());
