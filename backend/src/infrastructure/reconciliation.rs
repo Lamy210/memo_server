@@ -176,31 +176,55 @@ impl ProjectionReconciler {
                 Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
                 Ok(ReconcileOutcome::WaitingForTarget) => {
                     if self.is_stale_unreached(event.event_id, now) {
-                        match self
-                            .authoritative_store
-                            .acknowledge_projection_intent(&event)
-                            .await
-                        {
-                            Ok(()) => {
-                                self.clear_retry_state(event.event_id);
-                                self.counters
-                                    .stale_dropped_total
-                                    .fetch_add(1, Ordering::Relaxed);
-                                log::warn!(
-                                    "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
-                                    event.event_id,
-                                    event.memo_id,
-                                    event.user_id,
-                                    event.target
-                                );
+                        // The authoritative mutation may have become visible since
+                        // the first read. Re-run reconciliation before retiring an
+                        // abandoned target, so a newly reachable event is projected
+                        // rather than acknowledged without touching secondaries.
+                        match self.reconcile_event(&event).await {
+                            Ok(ReconcileOutcome::Completed) => {
+                                self.record_completed(event.event_id);
+                            }
+                            Ok(ReconcileOutcome::InactiveMemoRoute) => {
+                                // Cutover owns the outbox; do not stale-drop it.
+                            }
+                            Ok(ReconcileOutcome::WaitingForTarget) => {
+                                match self
+                                    .authoritative_store
+                                    .acknowledge_projection_intent(&event)
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        self.clear_retry_state(event.event_id);
+                                        self.counters
+                                            .stale_dropped_total
+                                            .fetch_add(1, Ordering::Relaxed);
+                                        log::warn!(
+                                            "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
+                                            event.event_id,
+                                            event.memo_id,
+                                            event.user_id,
+                                            event.target
+                                        );
+                                    }
+                                    Err(error) => {
+                                        let retry_after = self.defer_after_failure(event.event_id, now);
+                                        log::warn!(
+                                            "Stale projection intent acknowledgement deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                                            event.event_id,
+                                            event.memo_id,
+                                            event.user_id,
+                                            event.target,
+                                            retry_after.as_secs()
+                                        );
+                                    }
+                                }
                             }
                             Err(error) => {
-                                // An unavailable primary acknowledgement must not
-                                // prevent unrelated intents in this pass from progressing.
-                                // Keep the durable event and retry with bounded backoff.
+                                // A transient read, projection, or ACK failure
+                                // during recheck must keep the durable intent.
                                 let retry_after = self.defer_after_failure(event.event_id, now);
                                 log::warn!(
-                                    "Stale projection intent acknowledgement deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                                    "Stale projection intent recheck deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
                                     event.event_id,
                                     event.memo_id,
                                     event.user_id,
@@ -565,6 +589,7 @@ mod tests {
 
     struct FakeAuthoritativeStore {
         memo: Mutex<Option<crate::domain::memo::entity::Memo>>,
+        after_first_read: Mutex<Option<crate::domain::memo::entity::Memo>>,
         pending: Mutex<Vec<ProjectionIntent>>,
         fail_ack_for: Mutex<Option<Uuid>>,
         acknowledged: AtomicU64,
@@ -578,7 +603,11 @@ mod tests {
             _user_id: Uuid,
             _id: Uuid,
         ) -> AppResult<Option<crate::domain::memo::entity::Memo>> {
-            Ok(self.memo.lock().unwrap().clone())
+            let snapshot = self.memo.lock().unwrap().clone();
+            if let Some(replacement) = self.after_first_read.lock().unwrap().take() {
+                *self.memo.lock().unwrap() = Some(replacement);
+            }
+            Ok(snapshot)
         }
 
         async fn find_many_by_ids(
@@ -875,6 +904,7 @@ mod tests {
         let events = Arc::new(TestEvents::default());
         let store = Arc::new(FakeAuthoritativeStore {
             memo: Mutex::new(memo),
+            after_first_read: Mutex::new(None),
             pending: Mutex::new(Vec::new()),
             fail_ack_for: Mutex::new(None),
             acknowledged: AtomicU64::new(0),
@@ -903,6 +933,83 @@ mod tests {
             high,
             events,
         )
+    }
+
+    #[tokio::test]
+    async fn stale_intent_becoming_reachable_is_projected_before_acknowledgement() {
+        let owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let previous = test_memo(owner, memo_id);
+        let mut committed = previous.clone();
+        committed.version += 1;
+        committed.content = "now visible in authoritative store".into();
+        let event = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(committed.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(previous), false, false);
+        *store.pending.lock().unwrap() = vec![event.clone()];
+        // The initial read sees the earlier version; the recheck sees the
+        // committed target. The old implementation discarded this event.
+        *store.after_first_read.lock().unwrap() = Some(committed);
+        let now = Instant::now();
+        reconciler.retry_states().insert(
+            event.event_id,
+            RetryState {
+                first_seen: now - STALE_INTENT_GRACE - Duration::from_secs(1),
+                attempt_count: 0,
+                next_attempt_at: now,
+            },
+        );
+
+        reconciler.run_once().await.unwrap();
+
+        assert!(store.pending.lock().unwrap().is_empty());
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+        assert_eq!(reconciler.stats().reconciled_total, 1);
+        assert_eq!(reconciler.stats().stale_dropped_total, 0);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "legacy-index",
+                "high-index",
+                "cache-delete",
+                "cache-set",
+                "guard-release",
+                "ack"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_intent_recheck_projection_failure_keeps_durable_event() {
+        let owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let previous = test_memo(owner, memo_id);
+        let mut committed = previous.clone();
+        committed.version += 1;
+        let event = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(committed.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(previous), true, false);
+        *store.pending.lock().unwrap() = vec![event.clone()];
+        *store.after_first_read.lock().unwrap() = Some(committed);
+        let now = Instant::now();
+        reconciler.retry_states().insert(
+            event.event_id,
+            RetryState {
+                first_seen: now - STALE_INTENT_GRACE - Duration::from_secs(1),
+                attempt_count: 0,
+                next_attempt_at: now,
+            },
+        );
+
+        reconciler.run_once().await.unwrap();
+
+        let pending = store.pending.lock().unwrap().clone();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].event_id, event.event_id);
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
+        assert_eq!(reconciler.stats().stale_dropped_total, 0);
+        assert_eq!(reconciler.stats().retry_deferred_total, 1);
+        assert!(events.snapshot().contains(&"high-index"));
+        assert!(!events.snapshot().contains(&"ack"));
     }
 
     #[tokio::test]
@@ -1336,6 +1443,7 @@ mod tests {
         let events = Arc::new(TestEvents::default());
         let store = Arc::new(FakeAuthoritativeStore {
             memo: Mutex::new(Some(memo)),
+            after_first_read: Mutex::new(None),
             pending: Mutex::new(Vec::new()),
             fail_ack_for: Mutex::new(None),
             acknowledged: AtomicU64::new(0),
