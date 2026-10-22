@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::time::sleep;
+use tokio::{sync::Mutex as AsyncMutex, time::sleep};
 use uuid::Uuid;
 
 use crate::{
@@ -27,6 +27,7 @@ use crate::{
 
 const CACHE_TTL: Duration = Duration::from_secs(3600);
 const INTENT_PAGE_SIZE: usize = 128;
+const MAX_PAGES_PER_PASS: usize = 2;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const STALE_INTENT_GRACE: Duration = Duration::from_secs(15 * 60);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(5 * 60);
@@ -54,6 +55,7 @@ struct RetryState {
     first_seen: Instant,
     attempt_count: u32,
     next_attempt_at: Instant,
+    last_seen_scan: u64,
 }
 
 impl RetryState {
@@ -62,6 +64,24 @@ impl RetryState {
             first_seen: now,
             attempt_count: 0,
             next_attempt_at: now,
+            last_seen_scan: 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ReconciliationScan {
+    after: Option<Uuid>,
+    epoch: u64,
+    pending_intents: u64,
+}
+
+impl Default for ReconciliationScan {
+    fn default() -> Self {
+        Self {
+            after: None,
+            epoch: 1,
+            pending_intents: 0,
         }
     }
 }
@@ -82,6 +102,7 @@ pub struct ProjectionReconciler {
     memo_route_scope: Option<(Arc<dyn HighMemoAccessGuard>, HighMemoDataRoute)>,
     search_route_reader: Option<Arc<dyn HighSearchQueryRouteReader>>,
     retry_states: Mutex<HashMap<Uuid, RetryState>>,
+    scan: AsyncMutex<ReconciliationScan>,
     counters: ReconciliationCounters,
 }
 
@@ -102,6 +123,7 @@ impl ProjectionReconciler {
             memo_route_scope: None,
             search_route_reader: None,
             retry_states: Mutex::new(HashMap::new()),
+            scan: AsyncMutex::new(ReconciliationScan::default()),
             counters: ReconciliationCounters::default(),
         }
     }
@@ -162,36 +184,35 @@ impl ProjectionReconciler {
     }
 
     async fn run_once(&self) -> AppResult<()> {
-        let mut pending_intents = 0_u64;
-        let mut seen_event_ids = HashSet::new();
-        let mut after = None;
+        // Only the background worker calls this method in production. The
+        // asynchronous lock also protects a scan cursor if two invocations
+        // overlap in a test or future worker implementation.
+        let mut scan = self.scan.lock().await;
+        let mut completed_cycle = false;
 
-        loop {
-            // Keep each authoritative-store fetch bounded. A complete pass
-            // scans all cursor pages, so events that are deferred or owned by
-            // another route cannot starve later entries in the outbox.
+        for _ in 0..MAX_PAGES_PER_PASS {
             let events = self
                 .authoritative_store
-                .list_projection_intents_page(after, INTENT_PAGE_SIZE)
+                .list_projection_intents_page(scan.after, INTENT_PAGE_SIZE)
                 .await?;
             if events.is_empty() {
+                completed_cycle = true;
                 break;
             }
             let page_len = events.len();
-            after = events.last().map(|event| event.event_id);
-            pending_intents = pending_intents.saturating_add(page_len as u64);
+            scan.after = events.last().map(|event| event.event_id);
+            scan.pending_intents = scan.pending_intents.saturating_add(page_len as u64);
 
             for event in events {
-                seen_event_ids.insert(event.event_id);
                 let now = Instant::now();
-                if !self.is_due(event.event_id, now) {
+                if !self.is_due(event.event_id, now, scan.epoch) {
                     continue;
                 }
 
                 match self.reconcile_event(&event).await {
                     Ok(ReconcileOutcome::Completed) => {
                         self.record_completed(event.event_id);
-                        pending_intents = pending_intents.saturating_sub(1);
+                        scan.pending_intents = scan.pending_intents.saturating_sub(1);
                     }
                     Ok(ReconcileOutcome::WaitingForTarget) => {
                         if self.is_stale_unreached(event.event_id, now) {
@@ -202,7 +223,7 @@ impl ProjectionReconciler {
                             match self.reconcile_event(&event).await {
                                 Ok(ReconcileOutcome::Completed) => {
                                     self.record_completed(event.event_id);
-                                    pending_intents = pending_intents.saturating_sub(1);
+                                    scan.pending_intents = scan.pending_intents.saturating_sub(1);
                                 }
                                 Ok(ReconcileOutcome::InactiveMemoRoute) => {
                                     // Cutover owns the outbox; do not stale-drop it.
@@ -218,7 +239,7 @@ impl ProjectionReconciler {
                                             self.counters
                                                 .stale_dropped_total
                                                 .fetch_add(1, Ordering::Relaxed);
-                                            pending_intents = pending_intents.saturating_sub(1);
+                                            scan.pending_intents = scan.pending_intents.saturating_sub(1);
                                             log::warn!(
                                                 "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
                                                 event.event_id,
@@ -276,14 +297,24 @@ impl ProjectionReconciler {
             }
 
             if page_len < INTENT_PAGE_SIZE {
+                completed_cycle = true;
                 break;
             }
         }
 
-        self.prune_retry_states(&seen_event_ids);
+        // The counter is the remaining backlog observed in this scan, not an
+        // exact concurrent MongoDB count. An incomplete cycle may undercount.
         self.counters
             .pending_intents
-            .store(pending_intents, Ordering::Relaxed);
+            .store(scan.pending_intents, Ordering::Relaxed);
+        if completed_cycle {
+            // Only prune after a *complete* traversal: otherwise retry state
+            // for events on earlier/later pages is inadvertently reset.
+            self.prune_retry_states(scan.epoch);
+            scan.after = None;
+            scan.pending_intents = 0;
+            scan.epoch = scan.epoch.wrapping_add(1).max(1);
+        }
         Ok(())
     }
 
@@ -480,11 +511,12 @@ impl ProjectionReconciler {
             .or_insert_with(|| RetryState::new(now));
     }
 
-    fn is_due(&self, event_id: Uuid, now: Instant) -> bool {
+    fn is_due(&self, event_id: Uuid, now: Instant, scan_epoch: u64) -> bool {
         let mut states = self.retry_states();
         let state = states
             .entry(event_id)
             .or_insert_with(|| RetryState::new(now));
+        state.last_seen_scan = scan_epoch;
         now >= state.next_attempt_at
     }
 
@@ -521,9 +553,9 @@ impl ProjectionReconciler {
         self.retry_states().remove(&event_id);
     }
 
-    fn prune_retry_states(&self, seen_event_ids: &HashSet<Uuid>) {
+    fn prune_retry_states(&self, completed_scan: u64) {
         self.retry_states()
-            .retain(|event_id, _| seen_event_ids.contains(event_id));
+            .retain(|_, state| state.last_seen_scan == completed_scan);
     }
 
     fn retry_states(&self) -> std::sync::MutexGuard<'_, HashMap<Uuid, RetryState>> {
@@ -996,6 +1028,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bounded_scan_resumes_without_resetting_retries_on_earlier_pages() {
+        let owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(owner, memo_id);
+        let (reconciler, store, _, _) = test_reconciler(Some(memo.clone()), false, false);
+        let mut pending = (0..INTENT_PAGE_SIZE * MAX_PAGES_PER_PASS + 3)
+            .map(|_| ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version)))
+            .collect::<Vec<_>>();
+        pending.sort_unstable_by_key(|event| event.event_id);
+        let blocked = pending[0].event_id;
+        *store.pending.lock().unwrap() = pending;
+        *store.fail_ack_for.lock().unwrap() = Some(blocked);
+
+        reconciler.run_once().await.unwrap();
+        assert_eq!(
+            store.acknowledged.load(Ordering::Relaxed),
+            (INTENT_PAGE_SIZE * MAX_PAGES_PER_PASS - 1) as u64
+        );
+        assert_eq!(reconciler.stats().pending_intents, 1);
+        let state = *reconciler.retry_states().get(&blocked).unwrap();
+        assert_eq!(state.attempt_count, 1);
+        assert!(state.next_attempt_at > Instant::now());
+
+        // Finish the cursor cycle without revisiting the deferred first page.
+        // Pruning at a per-poll boundary would drop its backoff state.
+        reconciler.run_once().await.unwrap();
+        assert_eq!(
+            store.acknowledged.load(Ordering::Relaxed),
+            (INTENT_PAGE_SIZE * MAX_PAGES_PER_PASS + 2) as u64
+        );
+        assert_eq!(reconciler.stats().pending_intents, 1);
+        let retained = *reconciler.retry_states().get(&blocked).unwrap();
+        assert_eq!(retained.attempt_count, 1);
+        assert_eq!(retained.first_seen, state.first_seen);
+        assert_eq!(retained.next_attempt_at, state.next_attempt_at);
+
+        *store.fail_ack_for.lock().unwrap() = None;
+        reconciler.retry_states().get_mut(&blocked).unwrap().next_attempt_at =
+            Instant::now() - Duration::from_secs(1);
+        reconciler.run_once().await.unwrap();
+
+        assert!(store.pending.lock().unwrap().is_empty());
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), (INTENT_PAGE_SIZE * MAX_PAGES_PER_PASS + 3) as u64);
+        assert_eq!(reconciler.stats().pending_intents, 0);
+        assert_eq!(reconciler.stats().retry_deferred_total, 1);
+    }
+
+    #[tokio::test]
     async fn stale_intent_becoming_reachable_is_projected_before_acknowledgement() {
         let owner = Uuid::new_v4();
         let memo_id = Uuid::new_v4();
@@ -1017,6 +1097,7 @@ mod tests {
                 first_seen: now - STALE_INTENT_GRACE - Duration::from_secs(1),
                 attempt_count: 0,
                 next_attempt_at: now,
+                last_seen_scan: 0,
             },
         );
 
@@ -1060,6 +1141,7 @@ mod tests {
                 first_seen: now - STALE_INTENT_GRACE - Duration::from_secs(1),
                 attempt_count: 0,
                 next_attempt_at: now,
+                last_seen_scan: 0,
             },
         );
 
@@ -1097,6 +1179,7 @@ mod tests {
                 first_seen: now - STALE_INTENT_GRACE - Duration::from_secs(1),
                 attempt_count: 0,
                 next_attempt_at: now,
+                last_seen_scan: 0,
             },
         );
 
