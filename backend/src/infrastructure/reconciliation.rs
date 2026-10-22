@@ -303,11 +303,17 @@ impl ProjectionReconciler {
             }
         }
 
-        // The counter is the remaining backlog observed in this scan, not an
-        // exact concurrent MongoDB count. An incomplete cycle may undercount.
+        // Partial scans cannot distinguish an empty backlog from events
+        // beyond the cursor. Keep the operational gauge nonzero until the
+        // entire cursor cycle has completed, never falsely signalling drained.
+        let observed_pending = if completed_cycle {
+            scan.pending_intents
+        } else {
+            scan.pending_intents.max(1)
+        };
         self.counters
             .pending_intents
-            .store(scan.pending_intents, Ordering::Relaxed);
+            .store(observed_pending, Ordering::Relaxed);
         if completed_cycle {
             // Only prune after a *complete* traversal: otherwise retry state
             // for events on earlier/later pages is inadvertently reset.
@@ -1026,6 +1032,28 @@ mod tests {
                 .count(),
             INTENT_PAGE_SIZE + 3
         );
+    }
+
+    #[tokio::test]
+    async fn incomplete_scan_does_not_report_zero_backlog() {
+        let owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(owner, memo_id);
+        let (reconciler, store, _, _) = test_reconciler(Some(memo.clone()), false, false);
+        *store.pending.lock().unwrap() = (0..INTENT_PAGE_SIZE * MAX_PAGES_PER_PASS + 1)
+            .map(|_| ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version)))
+            .collect();
+
+        reconciler.run_once().await.unwrap();
+        assert_eq!(
+            store.acknowledged.load(Ordering::Relaxed),
+            (INTENT_PAGE_SIZE * MAX_PAGES_PER_PASS) as u64
+        );
+        assert_eq!(reconciler.stats().pending_intents, 1);
+
+        reconciler.run_once().await.unwrap();
+        assert!(store.pending.lock().unwrap().is_empty());
+        assert_eq!(reconciler.stats().pending_intents, 0);
     }
 
     #[tokio::test]
