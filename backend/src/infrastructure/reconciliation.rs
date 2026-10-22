@@ -26,6 +26,7 @@ use crate::{
 };
 
 const CACHE_TTL: Duration = Duration::from_secs(3600);
+const INTENT_PAGE_SIZE: usize = 128;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const STALE_INTENT_GRACE: Duration = Duration::from_secs(15 * 60);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(5 * 60);
@@ -161,13 +162,26 @@ impl ProjectionReconciler {
     }
 
     async fn run_once(&self) -> AppResult<()> {
-        let events = self.authoritative_store.list_projection_intents().await?;
-        // Track the unresolved remainder of this pass, rather than reporting
-        // the pre-reconciliation snapshot as if every event were still pending.
-        let mut pending_intents = events.len() as u64;
+        let mut pending_intents = 0_u64;
         let mut seen_event_ids = HashSet::new();
+        let mut after = None;
 
-        for event in events {
+        loop {
+            // Keep each authoritative-store fetch bounded. A complete pass
+            // scans all cursor pages, so events that are deferred or owned by
+            // another route cannot starve later entries in the outbox.
+            let events = self
+                .authoritative_store
+                .list_projection_intents_page(after, INTENT_PAGE_SIZE)
+                .await?;
+            if events.is_empty() {
+                break;
+            }
+            let page_len = events.len();
+            after = events.last().map(|event| event.event_id);
+            pending_intents = pending_intents.saturating_add(page_len as u64);
+
+            for event in events {
             seen_event_ids.insert(event.event_id);
             let now = Instant::now();
             if !self.is_due(event.event_id, now) {
@@ -258,6 +272,11 @@ impl ProjectionReconciler {
                         retry_after.as_secs()
                     );
                 }
+            }
+            }
+
+            if page_len < INTENT_PAGE_SIZE {
+                break;
             }
         }
 
@@ -941,6 +960,35 @@ mod tests {
             high,
             events,
         )
+    }
+
+    #[tokio::test]
+    async fn outbox_scan_reconciles_every_event_across_multiple_pages() {
+        let owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(owner, memo_id);
+        let (reconciler, store, _, events) = test_reconciler(Some(memo.clone()), false, false);
+        let pending = (0..INTENT_PAGE_SIZE + 3)
+            .map(|_| ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version)))
+            .collect::<Vec<_>>();
+        *store.pending.lock().unwrap() = pending;
+
+        reconciler.run_once().await.unwrap();
+
+        assert!(store.pending.lock().unwrap().is_empty());
+        assert_eq!(
+            store.acknowledged.load(Ordering::Relaxed),
+            (INTENT_PAGE_SIZE + 3) as u64
+        );
+        assert_eq!(reconciler.stats().pending_intents, 0);
+        assert_eq!(
+            reconciler.stats().reconciled_total,
+            (INTENT_PAGE_SIZE + 3) as u64
+        );
+        assert_eq!(
+            events.snapshot().iter().filter(|event| **event == "ack").count(),
+            INTENT_PAGE_SIZE + 3
+        );
     }
 
     #[tokio::test]
