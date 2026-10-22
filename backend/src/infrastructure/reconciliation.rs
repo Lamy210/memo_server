@@ -162,7 +162,9 @@ impl ProjectionReconciler {
 
     async fn run_once(&self) -> AppResult<()> {
         let events = self.authoritative_store.list_projection_intents().await?;
-        let pending_intents = events.len() as u64;
+        // Track the unresolved remainder of this pass, rather than reporting
+        // the pre-reconciliation snapshot as if every event were still pending.
+        let mut pending_intents = events.len() as u64;
         let mut seen_event_ids = HashSet::new();
 
         for event in events {
@@ -173,7 +175,10 @@ impl ProjectionReconciler {
             }
 
             match self.reconcile_event(&event).await {
-                Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
+                Ok(ReconcileOutcome::Completed) => {
+                    self.record_completed(event.event_id);
+                    pending_intents = pending_intents.saturating_sub(1);
+                }
                 Ok(ReconcileOutcome::WaitingForTarget) => {
                     if self.is_stale_unreached(event.event_id, now) {
                         // The authoritative mutation may have become visible since
@@ -183,6 +188,7 @@ impl ProjectionReconciler {
                         match self.reconcile_event(&event).await {
                             Ok(ReconcileOutcome::Completed) => {
                                 self.record_completed(event.event_id);
+                                pending_intents = pending_intents.saturating_sub(1);
                             }
                             Ok(ReconcileOutcome::InactiveMemoRoute) => {
                                 // Cutover owns the outbox; do not stale-drop it.
@@ -198,6 +204,7 @@ impl ProjectionReconciler {
                                         self.counters
                                             .stale_dropped_total
                                             .fetch_add(1, Ordering::Relaxed);
+                                        pending_intents = pending_intents.saturating_sub(1);
                                         log::warn!(
                                             "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
                                             event.event_id,
@@ -967,6 +974,7 @@ mod tests {
         assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
         assert_eq!(reconciler.stats().reconciled_total, 1);
         assert_eq!(reconciler.stats().stale_dropped_total, 0);
+        assert_eq!(reconciler.stats().pending_intents, 0);
         assert_eq!(
             events.snapshot(),
             vec![
@@ -1011,6 +1019,7 @@ mod tests {
         assert_eq!(store.acknowledged.load(Ordering::Relaxed), 0);
         assert_eq!(reconciler.stats().stale_dropped_total, 0);
         assert_eq!(reconciler.stats().retry_deferred_total, 1);
+        assert_eq!(reconciler.stats().pending_intents, 1);
         assert!(events.snapshot().contains(&"high-index"));
         assert!(!events.snapshot().contains(&"ack"));
     }
@@ -1048,6 +1057,7 @@ mod tests {
         assert!(events.snapshot().contains(&"cache-set"));
 
         let counters = reconciler.stats();
+        assert_eq!(counters.pending_intents, 1);
         assert_eq!(counters.stale_dropped_total, 0);
         assert_eq!(counters.reconciled_total, 1);
         assert_eq!(counters.retry_deferred_total, 1);
@@ -1068,6 +1078,7 @@ mod tests {
         assert_eq!(store.acknowledged.load(Ordering::Relaxed), 2);
         assert_eq!(reconciler.stats().stale_dropped_total, 1);
         assert_eq!(reconciler.stats().reconciled_total, 1);
+        assert_eq!(reconciler.stats().pending_intents, 0);
     }
 
     #[tokio::test]
