@@ -26,6 +26,7 @@ use crate::{
 };
 
 const CACHE_TTL: Duration = Duration::from_secs(3600);
+const INTENT_PAGE_SIZE: usize = 128;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const STALE_INTENT_GRACE: Duration = Duration::from_secs(15 * 60);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(5 * 60);
@@ -161,103 +162,121 @@ impl ProjectionReconciler {
     }
 
     async fn run_once(&self) -> AppResult<()> {
-        let events = self.authoritative_store.list_projection_intents().await?;
-        // Track the unresolved remainder of this pass, rather than reporting
-        // the pre-reconciliation snapshot as if every event were still pending.
-        let mut pending_intents = events.len() as u64;
+        let mut pending_intents = 0_u64;
         let mut seen_event_ids = HashSet::new();
+        let mut after = None;
 
-        for event in events {
-            seen_event_ids.insert(event.event_id);
-            let now = Instant::now();
-            if !self.is_due(event.event_id, now) {
-                continue;
+        loop {
+            // Keep each authoritative-store fetch bounded. A complete pass
+            // scans all cursor pages, so events that are deferred or owned by
+            // another route cannot starve later entries in the outbox.
+            let events = self
+                .authoritative_store
+                .list_projection_intents_page(after, INTENT_PAGE_SIZE)
+                .await?;
+            if events.is_empty() {
+                break;
             }
+            let page_len = events.len();
+            after = events.last().map(|event| event.event_id);
+            pending_intents = pending_intents.saturating_add(page_len as u64);
 
-            match self.reconcile_event(&event).await {
-                Ok(ReconcileOutcome::Completed) => {
-                    self.record_completed(event.event_id);
-                    pending_intents = pending_intents.saturating_sub(1);
+            for event in events {
+                seen_event_ids.insert(event.event_id);
+                let now = Instant::now();
+                if !self.is_due(event.event_id, now) {
+                    continue;
                 }
-                Ok(ReconcileOutcome::WaitingForTarget) => {
-                    if self.is_stale_unreached(event.event_id, now) {
-                        // The authoritative mutation may have become visible since
-                        // the first read. Re-run reconciliation before retiring an
-                        // abandoned target, so a newly reachable event is projected
-                        // rather than acknowledged without touching secondaries.
-                        match self.reconcile_event(&event).await {
-                            Ok(ReconcileOutcome::Completed) => {
-                                self.record_completed(event.event_id);
-                                pending_intents = pending_intents.saturating_sub(1);
-                            }
-                            Ok(ReconcileOutcome::InactiveMemoRoute) => {
-                                // Cutover owns the outbox; do not stale-drop it.
-                            }
-                            Ok(ReconcileOutcome::WaitingForTarget) => {
-                                match self
-                                    .authoritative_store
-                                    .acknowledge_projection_intent(&event)
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        self.clear_retry_state(event.event_id);
-                                        self.counters
-                                            .stale_dropped_total
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        pending_intents = pending_intents.saturating_sub(1);
-                                        log::warn!(
-                                            "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
-                                            event.event_id,
-                                            event.memo_id,
-                                            event.user_id,
-                                            event.target
-                                        );
-                                    }
-                                    Err(error) => {
-                                        let retry_after =
-                                            self.defer_after_failure(event.event_id, now);
-                                        log::warn!(
-                                            "Stale projection intent acknowledgement deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
-                                            event.event_id,
-                                            event.memo_id,
-                                            event.user_id,
-                                            event.target,
-                                            retry_after.as_secs()
-                                        );
+
+                match self.reconcile_event(&event).await {
+                    Ok(ReconcileOutcome::Completed) => {
+                        self.record_completed(event.event_id);
+                        pending_intents = pending_intents.saturating_sub(1);
+                    }
+                    Ok(ReconcileOutcome::WaitingForTarget) => {
+                        if self.is_stale_unreached(event.event_id, now) {
+                            // The authoritative mutation may have become visible since
+                            // the first read. Re-run reconciliation before retiring an
+                            // abandoned target, so a newly reachable event is projected
+                            // rather than acknowledged without touching secondaries.
+                            match self.reconcile_event(&event).await {
+                                Ok(ReconcileOutcome::Completed) => {
+                                    self.record_completed(event.event_id);
+                                    pending_intents = pending_intents.saturating_sub(1);
+                                }
+                                Ok(ReconcileOutcome::InactiveMemoRoute) => {
+                                    // Cutover owns the outbox; do not stale-drop it.
+                                }
+                                Ok(ReconcileOutcome::WaitingForTarget) => {
+                                    match self
+                                        .authoritative_store
+                                        .acknowledge_projection_intent(&event)
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            self.clear_retry_state(event.event_id);
+                                            self.counters
+                                                .stale_dropped_total
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            pending_intents = pending_intents.saturating_sub(1);
+                                            log::warn!(
+                                                "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
+                                                event.event_id,
+                                                event.memo_id,
+                                                event.user_id,
+                                                event.target
+                                            );
+                                        }
+                                        Err(error) => {
+                                            let retry_after =
+                                                self.defer_after_failure(event.event_id, now);
+                                            log::warn!(
+                                                "Stale projection intent acknowledgement deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                                                event.event_id,
+                                                event.memo_id,
+                                                event.user_id,
+                                                event.target,
+                                                retry_after.as_secs()
+                                            );
+                                        }
                                     }
                                 }
-                            }
-                            Err(error) => {
-                                // A transient read, projection, or ACK failure
-                                // during recheck must keep the durable intent.
-                                let retry_after = self.defer_after_failure(event.event_id, now);
-                                log::warn!(
-                                    "Stale projection intent recheck deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
-                                    event.event_id,
-                                    event.memo_id,
-                                    event.user_id,
-                                    event.target,
-                                    retry_after.as_secs()
-                                );
+                                Err(error) => {
+                                    // A transient read, projection, or ACK failure
+                                    // during recheck must keep the durable intent.
+                                    let retry_after = self.defer_after_failure(event.event_id, now);
+                                    log::warn!(
+                                        "Stale projection intent recheck deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                                        event.event_id,
+                                        event.memo_id,
+                                        event.user_id,
+                                        event.target,
+                                        retry_after.as_secs()
+                                    );
+                                }
                             }
                         }
                     }
+                    Ok(ReconcileOutcome::InactiveMemoRoute) => {
+                        // This outbox belongs to the other authoritative generation.
+                        // Do not acknowledge, stale-drop, or touch secondary state.
+                    }
+                    Err(error) => {
+                        let retry_after = self.defer_after_failure(event.event_id, now);
+                        log::warn!(
+                            "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                            event.event_id,
+                            event.memo_id,
+                            event.user_id,
+                            event.target,
+                            retry_after.as_secs()
+                        );
+                    }
                 }
-                Ok(ReconcileOutcome::InactiveMemoRoute) => {
-                    // This outbox belongs to the other authoritative generation.
-                    // Do not acknowledge, stale-drop, or touch secondary state.
-                }
-                Err(error) => {
-                    let retry_after = self.defer_after_failure(event.event_id, now);
-                    log::warn!(
-                        "Projection reconciliation retry failed: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
-                        event.event_id,
-                        event.memo_id,
-                        event.user_id,
-                        event.target,
-                        retry_after.as_secs()
-                    );
-                }
+            }
+
+            if page_len < INTENT_PAGE_SIZE {
+                break;
             }
         }
 
@@ -941,6 +960,39 @@ mod tests {
             high,
             events,
         )
+    }
+
+    #[tokio::test]
+    async fn outbox_scan_reconciles_every_event_across_multiple_pages() {
+        let owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(owner, memo_id);
+        let (reconciler, store, _, events) = test_reconciler(Some(memo.clone()), false, false);
+        let pending = (0..INTENT_PAGE_SIZE + 3)
+            .map(|_| ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version)))
+            .collect::<Vec<_>>();
+        *store.pending.lock().unwrap() = pending;
+
+        reconciler.run_once().await.unwrap();
+
+        assert!(store.pending.lock().unwrap().is_empty());
+        assert_eq!(
+            store.acknowledged.load(Ordering::Relaxed),
+            (INTENT_PAGE_SIZE + 3) as u64
+        );
+        assert_eq!(reconciler.stats().pending_intents, 0);
+        assert_eq!(
+            reconciler.stats().reconciled_total,
+            (INTENT_PAGE_SIZE + 3) as u64
+        );
+        assert_eq!(
+            events
+                .snapshot()
+                .iter()
+                .filter(|event| **event == "ack")
+                .count(),
+            INTENT_PAGE_SIZE + 3
+        );
     }
 
     #[tokio::test]

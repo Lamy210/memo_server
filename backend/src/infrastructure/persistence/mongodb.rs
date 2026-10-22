@@ -1163,6 +1163,14 @@ impl HighEncryptedMemoAuthoritativeStore for MongoDbAuthoritativeStore {
         <Self as MemoAuthoritativeStore>::list_projection_intents(self).await
     }
 
+    async fn list_encrypted_projection_intents_page(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<ProjectionIntent>> {
+        <Self as MemoAuthoritativeStore>::list_projection_intents_page(self, after, limit).await
+    }
+
     async fn acknowledge_encrypted_projection_intent(
         &self,
         event: &ProjectionIntent,
@@ -1290,6 +1298,41 @@ impl MemoAuthoritativeStore for MongoDbAuthoritativeStore {
             .await
             .map_err(|error| mongo_error("read MongoDB projection intent cursor", error))?;
 
+        documents
+            .into_iter()
+            .map(ProjectionIntentDocument::try_into_intent)
+            .collect()
+    }
+
+    async fn list_projection_intents_page(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<ProjectionIntent>> {
+        // MongoDB treats a limit of zero as unlimited, so reject it before
+        // submitting any query. Sorting on _id uses the built-in index.
+        let bound = i64::try_from(limit).map_err(|_| {
+            AppError::DatabaseError("Projection intent page size is too large".into())
+        })?;
+        if bound == 0 {
+            return Err(AppError::DatabaseError(
+                "Projection intent page size must be positive".into(),
+            ));
+        }
+        let mut filter = doc! {};
+        if let Some(cursor) = after {
+            filter.insert("_id", doc! { "$gt": cursor.to_string() });
+        }
+        let documents: Vec<ProjectionIntentDocument> = self
+            .projection_intents
+            .find(filter)
+            .sort(doc! { "_id": 1 })
+            .limit(bound)
+            .await
+            .map_err(|error| mongo_error("page MongoDB projection intents", error))?
+            .try_collect()
+            .await
+            .map_err(|error| mongo_error("read MongoDB projection intent page", error))?;
         documents
             .into_iter()
             .map(ProjectionIntentDocument::try_into_intent)
@@ -1479,6 +1522,70 @@ mod tests {
                 .target,
             ProjectionTarget::Deleted
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local MongoDB replica set"]
+    async fn mongodb_projection_intent_pages_are_bounded_ordered_and_complete() {
+        let uri = std::env::var("MONGODB_TEST_URI")
+            .unwrap_or_else(|_| "mongodb://localhost:27017/?replicaSet=rs0".to_string());
+        let database_name = format!("{}_outbox_{}", TEST_DATABASE_NAME, Uuid::new_v4().simple());
+        let store = MongoDbAuthoritativeStore::new(&uri, &database_name)
+            .await
+            .unwrap();
+        let owner = Uuid::new_v4();
+        let mut expected = Vec::new();
+        for _ in 0..133 {
+            let intent = store
+                .enqueue_projection_intent(owner, Uuid::new_v4(), ProjectionTarget::Version(1))
+                .await
+                .unwrap();
+            expected.push(intent.event_id);
+        }
+        expected.sort_unstable();
+
+        assert!(store.list_projection_intents_page(None, 0).await.is_err());
+        let mut cursor = None;
+        let mut actual = Vec::new();
+        loop {
+            let page = store
+                .list_projection_intents_page(cursor, 17)
+                .await
+                .unwrap();
+            assert!(page.len() <= 17);
+            if page.is_empty() {
+                break;
+            }
+            let previous = cursor;
+            cursor = page.last().map(|intent| intent.event_id);
+            assert!(previous.is_none_or(|before| cursor.unwrap() > before));
+            actual.extend(page.iter().map(|intent| intent.event_id));
+            if page.len() < 17 {
+                break;
+            }
+        }
+
+        assert_eq!(actual, expected);
+        assert!(store
+            .list_projection_intents_page(cursor, 17)
+            .await
+            .unwrap()
+            .is_empty());
+        let encrypted_page =
+            HighEncryptedMemoAuthoritativeStore::list_encrypted_projection_intents_page(
+                &store, None, 17,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            encrypted_page
+                .iter()
+                .map(|intent| intent.event_id)
+                .collect::<Vec<_>>(),
+            expected[..17]
+        );
+
+        store.database.drop().await.unwrap();
     }
 
     #[tokio::test]
