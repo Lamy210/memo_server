@@ -1094,8 +1094,11 @@ mod tests {
         assert_eq!(retained.next_attempt_at, state.next_attempt_at);
 
         *store.fail_ack_for.lock().unwrap() = None;
-        reconciler.retry_states().get_mut(&blocked).unwrap().next_attempt_at =
-            Instant::now() - Duration::from_secs(1);
+        reconciler
+            .retry_states()
+            .get_mut(&blocked)
+            .unwrap()
+            .next_attempt_at = Instant::now() - Duration::from_secs(1);
         reconciler.run_once().await.unwrap();
 
         assert!(store.pending.lock().unwrap().is_empty());
