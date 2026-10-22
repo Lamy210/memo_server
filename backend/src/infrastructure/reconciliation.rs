@@ -176,20 +176,35 @@ impl ProjectionReconciler {
                 Ok(ReconcileOutcome::Completed) => self.record_completed(event.event_id),
                 Ok(ReconcileOutcome::WaitingForTarget) => {
                     if self.is_stale_unreached(event.event_id, now) {
-                        self.authoritative_store
-                            .acknowledge_projection_intent(&event)
-                            .await?;
-                        self.clear_retry_state(event.event_id);
-                        self.counters
-                            .stale_dropped_total
-                            .fetch_add(1, Ordering::Relaxed);
-                        log::warn!(
-                            "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
-                            event.event_id,
-                            event.memo_id,
-                            event.user_id,
-                            event.target
-                        );
+                        match self.authoritative_store.acknowledge_projection_intent(&event).await {
+                            Ok(()) => {
+                                self.clear_retry_state(event.event_id);
+                                self.counters
+                                    .stale_dropped_total
+                                    .fetch_add(1, Ordering::Relaxed);
+                                log::warn!(
+                                    "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
+                                    event.event_id,
+                                    event.memo_id,
+                                    event.user_id,
+                                    event.target
+                                );
+                            }
+                            Err(error) => {
+                                // An unavailable primary acknowledgement must not
+                                // prevent unrelated intents in this pass from progressing.
+                                // Keep the durable event and retry with bounded backoff.
+                                let retry_after = self.defer_after_failure(event.event_id, now);
+                                log::warn!(
+                                    "Stale projection intent acknowledgement deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
+                                    event.event_id,
+                                    event.memo_id,
+                                    event.user_id,
+                                    event.target,
+                                    retry_after.as_secs()
+                                );
+                            }
+                        }
                     }
                 }
                 Ok(ReconcileOutcome::InactiveMemoRoute) => {
@@ -546,6 +561,8 @@ mod tests {
 
     struct FakeAuthoritativeStore {
         memo: Mutex<Option<crate::domain::memo::entity::Memo>>,
+        pending: Mutex<Vec<ProjectionIntent>>,
+        fail_ack_for: Mutex<Option<Uuid>>,
         acknowledged: AtomicU64,
         events: Arc<TestEvents>,
     }
@@ -606,11 +623,18 @@ mod tests {
         }
 
         async fn list_projection_intents(&self) -> AppResult<Vec<ProjectionIntent>> {
-            Ok(Vec::new())
+            Ok(self.pending.lock().unwrap().clone())
         }
 
-        async fn acknowledge_projection_intent(&self, _event: &ProjectionIntent) -> AppResult<()> {
+        async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
             self.events.push("ack");
+            if self.fail_ack_for.lock().unwrap().as_ref() == Some(&event.event_id) {
+                return Err(AppError::DatabaseError("injected acknowledgement outage".into()));
+            }
+            self.pending
+                .lock()
+                .unwrap()
+                .retain(|pending| pending.event_id != event.event_id);
             self.acknowledged.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
@@ -845,6 +869,8 @@ mod tests {
         let events = Arc::new(TestEvents::default());
         let store = Arc::new(FakeAuthoritativeStore {
             memo: Mutex::new(memo),
+            pending: Mutex::new(Vec::new()),
+            fail_ack_for: Mutex::new(None),
             acknowledged: AtomicU64::new(0),
             events: events.clone(),
         });
@@ -871,6 +897,59 @@ mod tests {
             high,
             events,
         )
+    }
+
+    #[tokio::test]
+    async fn failed_stale_ack_defers_only_that_event_and_allows_healthy_reconciliation() {
+        let owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(owner, memo_id);
+        let stale = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version + 1));
+        let healthy = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        *store.pending.lock().unwrap() = vec![stale.clone(), healthy.clone()];
+        *store.fail_ack_for.lock().unwrap() = Some(stale.event_id);
+
+        // A known stale target must already have aged past the grace interval.
+        let now = Instant::now();
+        reconciler.retry_states().insert(
+            stale.event_id,
+            RetryState {
+                first_seen: now - STALE_INTENT_GRACE - Duration::from_secs(1),
+                attempt_count: 0,
+                next_attempt_at: now,
+            },
+        );
+
+        // The prior implementation returned early here, never processing healthy.
+        reconciler.run_once().await.unwrap();
+        let remaining = store.pending.lock().unwrap().clone();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].event_id, stale.event_id);
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+        assert!(events.snapshot().contains(&"cache-set"));
+
+        let counters = reconciler.stats();
+        assert_eq!(counters.stale_dropped_total, 0);
+        assert_eq!(counters.reconciled_total, 1);
+        assert_eq!(counters.retry_deferred_total, 1);
+
+        // A hot-looping stale acknowledgement would overload an unhealthy DB.
+        reconciler.run_once().await.unwrap();
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+
+        // Retry after the transient failure clears, without losing the intent.
+        *store.fail_ack_for.lock().unwrap() = None;
+        reconciler
+            .retry_states()
+            .get_mut(&stale.event_id)
+            .unwrap()
+            .next_attempt_at = Instant::now() - Duration::from_secs(1);
+        reconciler.run_once().await.unwrap();
+        assert!(store.pending.lock().unwrap().is_empty());
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 2);
+        assert_eq!(reconciler.stats().stale_dropped_total, 1);
+        assert_eq!(reconciler.stats().reconciled_total, 1);
     }
 
     #[tokio::test]
@@ -1249,6 +1328,8 @@ mod tests {
         let events = Arc::new(TestEvents::default());
         let store = Arc::new(FakeAuthoritativeStore {
             memo: Mutex::new(Some(memo)),
+            pending: Mutex::new(Vec::new()),
+            fail_ack_for: Mutex::new(None),
             acknowledged: AtomicU64::new(0),
             events: events.clone(),
         });
