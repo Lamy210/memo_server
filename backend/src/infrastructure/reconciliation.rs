@@ -367,7 +367,7 @@ impl ProjectionReconciler {
             .authoritative_store
             .find_by_id(event.user_id, event.memo_id)
             .await?;
-        if projection_state(memo) != projection_state(current.as_ref()) {
+        if projection_changed(memo, current.as_ref()) {
             let target = current
                 .as_ref()
                 .map(|memo| ProjectionTarget::Version(memo.version))
@@ -494,8 +494,27 @@ fn retry_delay(event_id: Uuid, attempt_count: u32) -> Duration {
     )
 }
 
-fn projection_state(memo: Option<&crate::domain::memo::entity::Memo>) -> Option<i32> {
-    memo.map(|memo| memo.version)
+/// Detect any change to the authoritative memo while secondary writes were in flight.
+/// Version changes are the usual path, but an import/repair or a same-version
+/// replacement must not leave a stale cache or search projection indefinitely.
+fn projection_changed(
+    before: Option<&crate::domain::memo::entity::Memo>,
+    after: Option<&crate::domain::memo::entity::Memo>,
+) -> bool {
+    match (before, after) {
+        (None, None) => false,
+        (Some(before), Some(after)) => {
+            before.id != after.id
+                || before.user_id != after.user_id
+                || before.version != after.version
+                || before.title != after.title
+                || before.content != after.content
+                || before.tags != after.tags
+                || before.created_at != after.created_at
+                || before.updated_at != after.updated_at
+        }
+        _ => true,
+    }
 }
 
 fn target_reached(
@@ -582,6 +601,7 @@ mod tests {
             memo_id: Uuid,
             target: ProjectionTarget,
         ) -> AppResult<ProjectionIntent> {
+            self.events.push("enqueue");
             Ok(ProjectionIntent::new(user_id, memo_id, target))
         }
 
@@ -1093,6 +1113,80 @@ mod tests {
         );
     }
 
+    /// Simulate an out-of-band repair replacing memo contents while an older
+    /// snapshot is being written to secondary stores without incrementing version.
+    /// The correction must be durable before acknowledging the old intent.
+    struct SourceChangingLegacyProjection {
+        store: Arc<FakeAuthoritativeStore>,
+        events: Arc<TestEvents>,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoSearchProjection for SourceChangingLegacyProjection {
+        async fn index_memo(&self, memo: &crate::domain::memo::entity::Memo) -> AppResult<()> {
+            self.events.push("legacy-index");
+            let mut repaired = memo.clone();
+            repaired.content = "repaired authoritative content".into();
+            *self.store.memo.lock().unwrap() = Some(repaired);
+            Ok(())
+        }
+
+        async fn search_memo_ids(
+            &self,
+            _query: &str,
+            _tag: Option<String>,
+            _user_id: Uuid,
+            _page: usize,
+            _limit: usize,
+        ) -> AppResult<crate::infrastructure::persistence::ports::MemoSearchHitPage> {
+            Ok(
+                crate::infrastructure::persistence::ports::MemoSearchHitPage {
+                    memo_ids: Vec::new(),
+                    total: 0,
+                },
+            )
+        }
+
+        async fn delete_memo(&self, _id: Uuid) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn same_version_source_drift_enqueues_correction_before_ack() {
+        let owner = Uuid::new_v4();
+        let memo_id = Uuid::new_v4();
+        let memo = test_memo(owner, memo_id);
+        let event = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(memo.version));
+        let (reconciler, store, _, events) = test_reconciler(Some(memo), false, false);
+        let reconciler = ProjectionReconciler {
+            search_projection: Arc::new(SourceChangingLegacyProjection {
+                store: store.clone(),
+                events: events.clone(),
+            }),
+            ..reconciler
+        };
+
+        assert_eq!(
+            reconciler.reconcile_event(&event).await.unwrap(),
+            ReconcileOutcome::Completed
+        );
+        assert_eq!(store.acknowledged.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            events.snapshot(),
+            vec![
+                "guard-acquire",
+                "legacy-index",
+                "high-index",
+                "cache-delete",
+                "cache-set",
+                "enqueue",
+                "guard-release",
+                "ack"
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn successful_high_mirror_releases_guard_before_ack() {
         let user_id = Uuid::new_v4();
@@ -1289,20 +1383,36 @@ mod tests {
     }
 
     #[test]
-    fn projection_state_changes_when_version_or_presence_changes() {
+    fn projection_change_detection_covers_presence_version_and_same_version_payload() {
         let user_id = Uuid::new_v4();
-        let mut memo = crate::domain::memo::entity::Memo::new(
-            "title".into(),
-            "content".into(),
-            vec![],
-            user_id,
-        );
+        let memo = test_memo(user_id, Uuid::new_v4());
+        let mut changed = memo.clone();
 
-        assert_eq!(projection_state(None), None);
-        assert_eq!(projection_state(Some(&memo)), Some(1));
+        assert!(!projection_changed(None, None));
+        assert!(projection_changed(Some(&memo), None));
+        assert!(projection_changed(None, Some(&memo)));
+        assert!(!projection_changed(Some(&memo), Some(&changed)));
 
-        memo.version = 2;
-        assert_eq!(projection_state(Some(&memo)), Some(2));
+        changed.version += 1;
+        assert!(projection_changed(Some(&memo), Some(&changed)));
+        changed = memo.clone();
+        changed.content = "changed without version bump".into();
+        assert!(projection_changed(Some(&memo), Some(&changed)));
+        changed = memo.clone();
+        changed.title = "changed title".into();
+        assert!(projection_changed(Some(&memo), Some(&changed)));
+        changed = memo.clone();
+        changed.tags.push("new".into());
+        assert!(projection_changed(Some(&memo), Some(&changed)));
+        changed = memo.clone();
+        changed.updated_at += chrono::Duration::seconds(1);
+        assert!(projection_changed(Some(&memo), Some(&changed)));
+        changed = memo.clone();
+        changed.id = Uuid::new_v4();
+        assert!(projection_changed(Some(&memo), Some(&changed)));
+        changed = memo.clone();
+        changed.user_id = Uuid::new_v4();
+        assert!(projection_changed(Some(&memo), Some(&changed)));
     }
 
     #[test]
