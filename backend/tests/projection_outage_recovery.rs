@@ -9,7 +9,9 @@ use std::{
 
 use async_trait::async_trait;
 use memo_app_backend::{
-    application::maintenance::{MemoMutationGuard, MemoMutationPermit, UnrestrictedMemoMutationGuard},
+    application::maintenance::{
+        MemoMutationGuard, MemoMutationPermit, UnrestrictedMemoMutationGuard,
+    },
     domain::memo::{entity::Memo, repository::MemoRepository},
     error::{AppError, AppResult},
     infrastructure::{
@@ -244,8 +246,7 @@ async fn committed_update_and_delete_evict_cache_even_when_reconciliation_is_blo
         None,
         guard,
     ));
-    let repository =
-        MemoRepositoryImpl::new(store.clone(), cache.clone(), search, reconciler);
+    let repository = MemoRepositoryImpl::new(store.clone(), cache.clone(), search, reconciler);
 
     memo.update(Some("version 2".into()), None, None);
     repository.save(&memo).await.unwrap();
@@ -254,7 +255,12 @@ async fn committed_update_and_delete_evict_cache_even_when_reconciliation_is_blo
     // cached version must nevertheless be invalidated before save returns.
     assert!(cache.get_memo(owner, memo.id).await.unwrap().is_none());
     assert_eq!(
-        repository.find_by_id(owner, memo.id).await.unwrap().unwrap().version,
+        repository
+            .find_by_id(owner, memo.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .version,
         2
     );
     assert_eq!(
@@ -266,7 +272,11 @@ async fn committed_update_and_delete_evict_cache_even_when_reconciliation_is_blo
 
     // Neither GET nor EXISTS may resurrect a deleted memo from Valkey.
     assert!(cache.get_memo(owner, memo.id).await.unwrap().is_none());
-    assert!(repository.find_by_id(owner, memo.id).await.unwrap().is_none());
+    assert!(repository
+        .find_by_id(owner, memo.id)
+        .await
+        .unwrap()
+        .is_none());
     assert!(!repository.exists(owner, memo.id).await.unwrap());
     // The failed secondary projection remains durable for later replay.
     assert_eq!(store.pending().len(), 3);
