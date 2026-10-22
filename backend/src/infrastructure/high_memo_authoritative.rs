@@ -192,6 +192,16 @@ impl MemoAuthoritativeStore for HighMemoAuthoritativeAdapter {
             .await
     }
 
+    async fn list_projection_intents_page(
+        &self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<Vec<ProjectionIntent>> {
+        self.encrypted_store
+            .list_encrypted_projection_intents_page(after, limit)
+            .await
+    }
+
     async fn acknowledge_projection_intent(&self, event: &ProjectionIntent) -> AppResult<()> {
         self.encrypted_store
             .acknowledge_encrypted_projection_intent(event)
