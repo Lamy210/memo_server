@@ -1139,10 +1139,12 @@ mod tests {
             _page: usize,
             _limit: usize,
         ) -> AppResult<crate::infrastructure::persistence::ports::MemoSearchHitPage> {
-            Ok(crate::infrastructure::persistence::ports::MemoSearchHitPage {
-                memo_ids: Vec::new(),
-                total: 0,
-            })
+            Ok(
+                crate::infrastructure::persistence::ports::MemoSearchHitPage {
+                    memo_ids: Vec::new(),
+                    total: 0,
+                },
+            )
         }
 
         async fn delete_memo(&self, _id: Uuid) -> AppResult<()> {
