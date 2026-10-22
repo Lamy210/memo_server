@@ -87,6 +87,17 @@ impl MemoRepository for MemoRepositoryImpl {
             .authoritative_store
             .save_with_projection_intent(memo)
             .await?;
+        // Do not depend on the search/maintenance barrier being available to
+        // invalidate an old cache entry. The primary mutation has committed;
+        // a failed synchronous projection must not leave an old cached version
+        // visible to subsequent reads while the durable outbox catches up.
+        if let Err(error) = self.cache.delete_memo(memo.user_id, memo.id).await {
+            log::warn!(
+                "Post-commit memo cache invalidation failed; durable projection intent retained: memo_id={} user_id={} error={error}",
+                memo.id,
+                memo.user_id
+            );
+        }
         self.reconciler.reconcile_now(&intent).await;
         Ok(())
     }
@@ -96,6 +107,14 @@ impl MemoRepository for MemoRepositoryImpl {
             .authoritative_store
             .delete_with_projection_intent(user_id, id)
             .await?;
+        // Deletions are particularly sensitive: without early eviction an
+        // offline projector can leave a deleted memo readable from Valkey.
+        // Retain outbox-based retries if cache invalidation itself fails.
+        if let Err(error) = self.cache.delete_memo(user_id, id).await {
+            log::warn!(
+                "Post-commit deleted memo cache invalidation failed; durable projection intent retained: memo_id={id} user_id={user_id} error={error}"
+            );
+        }
         self.reconciler.reconcile_now(&intent).await;
         Ok(())
     }

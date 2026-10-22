@@ -9,7 +9,9 @@ use std::{
 
 use async_trait::async_trait;
 use memo_app_backend::{
-    application::maintenance::UnrestrictedMemoMutationGuard,
+    application::maintenance::{
+        MemoMutationGuard, MemoMutationPermit, UnrestrictedMemoMutationGuard,
+    },
     domain::memo::{entity::Memo, repository::MemoRepository},
     error::{AppError, AppResult},
     infrastructure::{
@@ -208,6 +210,76 @@ impl MemoSearchProjection for RecoverableSearch {
         self.rows.lock().unwrap().remove(&id);
         Ok(())
     }
+}
+
+/// An unavailable distributed maintenance writer lease must not retain an
+/// older cache value after the authoritative mutation has committed.
+struct UnavailableMutationGuard;
+
+#[async_trait]
+impl MemoMutationGuard for UnavailableMutationGuard {
+    async fn acquire_mutation(&self) -> AppResult<Box<dyn MemoMutationPermit>> {
+        Err(AppError::ServiceUnavailable(
+            "injected maintenance writer outage".into(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn committed_update_and_delete_evict_cache_even_when_reconciliation_is_blocked() {
+    let owner = Uuid::new_v4();
+    let store = Arc::new(DurableStore::default());
+    let cache = Arc::new(RecoverableCache::default());
+    let search = Arc::new(RecoverableSearch::default());
+    cache.set_online(true);
+    search.set_online(true);
+
+    let mut memo = Memo::new("version 1".into(), "body".into(), vec![], owner);
+    store.save_with_projection_intent(&memo).await.unwrap();
+    cache.set_memo(&memo, None).await.unwrap();
+
+    let guard = Arc::new(UnavailableMutationGuard);
+    let reconciler = Arc::new(ProjectionReconciler::new(
+        store.clone(),
+        cache.clone(),
+        search.clone(),
+        None,
+        guard,
+    ));
+    let repository = MemoRepositoryImpl::new(store.clone(), cache.clone(), search, reconciler);
+
+    memo.update(Some("version 2".into()), None, None);
+    repository.save(&memo).await.unwrap();
+
+    // The synchronous projector could not acquire a writer lease. The old
+    // cached version must nevertheless be invalidated before save returns.
+    assert!(cache.get_memo(owner, memo.id).await.unwrap().is_none());
+    assert_eq!(
+        repository
+            .find_by_id(owner, memo.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .version,
+        2
+    );
+    assert_eq!(
+        cache.get_memo(owner, memo.id).await.unwrap().unwrap().title,
+        "version 2"
+    );
+
+    repository.delete(owner, memo.id).await.unwrap();
+
+    // Neither GET nor EXISTS may resurrect a deleted memo from Valkey.
+    assert!(cache.get_memo(owner, memo.id).await.unwrap().is_none());
+    assert!(repository
+        .find_by_id(owner, memo.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!repository.exists(owner, memo.id).await.unwrap());
+    // The failed secondary projection remains durable for later replay.
+    assert_eq!(store.pending().len(), 3);
 }
 
 #[tokio::test]
