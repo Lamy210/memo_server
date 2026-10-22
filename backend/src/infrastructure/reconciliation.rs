@@ -239,7 +239,8 @@ impl ProjectionReconciler {
                                             self.counters
                                                 .stale_dropped_total
                                                 .fetch_add(1, Ordering::Relaxed);
-                                            scan.pending_intents = scan.pending_intents.saturating_sub(1);
+                                            scan.pending_intents =
+                                                scan.pending_intents.saturating_sub(1);
                                             log::warn!(
                                                 "Dropped stale projection intent whose primary target was never reached: event_id={} memo_id={} user_id={} target={:?}",
                                                 event.event_id,
@@ -1070,7 +1071,10 @@ mod tests {
         reconciler.run_once().await.unwrap();
 
         assert!(store.pending.lock().unwrap().is_empty());
-        assert_eq!(store.acknowledged.load(Ordering::Relaxed), (INTENT_PAGE_SIZE * MAX_PAGES_PER_PASS + 3) as u64);
+        assert_eq!(
+            store.acknowledged.load(Ordering::Relaxed),
+            (INTENT_PAGE_SIZE * MAX_PAGES_PER_PASS + 3) as u64
+        );
         assert_eq!(reconciler.stats().pending_intents, 0);
         assert_eq!(reconciler.stats().retry_deferred_total, 1);
     }
