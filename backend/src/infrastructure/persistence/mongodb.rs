@@ -1548,7 +1548,10 @@ mod tests {
         let mut cursor = None;
         let mut actual = Vec::new();
         loop {
-            let page = store.list_projection_intents_page(cursor, 17).await.unwrap();
+            let page = store
+                .list_projection_intents_page(cursor, 17)
+                .await
+                .unwrap();
             assert!(page.len() <= 17);
             if page.is_empty() {
                 break;
