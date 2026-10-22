@@ -207,7 +207,8 @@ impl ProjectionReconciler {
                                         );
                                     }
                                     Err(error) => {
-                                        let retry_after = self.defer_after_failure(event.event_id, now);
+                                        let retry_after =
+                                            self.defer_after_failure(event.event_id, now);
                                         log::warn!(
                                             "Stale projection intent acknowledgement deferred: event_id={} memo_id={} user_id={} target={:?} retry_after_seconds={} error={error}",
                                             event.event_id,
@@ -943,7 +944,8 @@ mod tests {
         let mut committed = previous.clone();
         committed.version += 1;
         committed.content = "now visible in authoritative store".into();
-        let event = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(committed.version));
+        let event =
+            ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(committed.version));
         let (reconciler, store, _, events) = test_reconciler(Some(previous), false, false);
         *store.pending.lock().unwrap() = vec![event.clone()];
         // The initial read sees the earlier version; the recheck sees the
@@ -986,7 +988,8 @@ mod tests {
         let previous = test_memo(owner, memo_id);
         let mut committed = previous.clone();
         committed.version += 1;
-        let event = ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(committed.version));
+        let event =
+            ProjectionIntent::new(owner, memo_id, ProjectionTarget::Version(committed.version));
         let (reconciler, store, _, events) = test_reconciler(Some(previous), true, false);
         *store.pending.lock().unwrap() = vec![event.clone()];
         *store.after_first_read.lock().unwrap() = Some(committed);
