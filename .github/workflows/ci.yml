@@ -116,6 +116,8 @@ jobs:
             -- --ignored --nocapture
           cargo test --locked mongodb_list_page_is_owner_scoped_and_uses_exclusive_uuid_cursor \
             -- --ignored --nocapture
+          cargo test --locked mongodb_projection_intent_pages_are_bounded_ordered_and_complete \
+            -- --ignored --nocapture
           cargo test --locked mongodb_maintenance_barrier_drains_and_blocks_writers_and_protected_queries \
             -- --ignored --nocapture
           cargo test --locked mongodb_maintenance_recovery_requires_exact_snapshot_and_reopens_state \
