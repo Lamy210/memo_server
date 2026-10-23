@@ -107,9 +107,11 @@ jobs:
           fi
 
       - name: MongoDB transactional integration
+        shell: bash
         env:
           MONGODB_TEST_URI: mongodb://localhost:27017/?replicaSet=rs0&directConnection=true&serverSelectionTimeoutMS=10000
         run: |
+          set -euo pipefail
           cargo test --locked mongodb_replica_set_preserves_atomic_outbox_and_tenant_scope \
             -- --ignored --nocapture
           cargo test --locked mongodb_encrypted_authoritative_store_preserves_atomic_outbox_and_versioning \
@@ -118,8 +120,14 @@ jobs:
             -- --ignored --nocapture
           cargo test --locked mongodb_projection_intent_pages_are_bounded_ordered_and_complete \
             -- --ignored --nocapture
-          cargo test --locked mongodb_maintenance_barrier_drains_and_blocks_writers_and_protected_queries \
-            -- --ignored --nocapture
+          # Verify the actual maintenance test ran. A stale cargo test
+          # name matches zero tests but would otherwise exit successfully.
+          cargo test --locked --lib \
+            infrastructure::high_search_maintenance_mongodb::tests::mongodb_maintenance_barrier_drains_writers_queries_and_memo_access \
+            -- --exact --ignored --nocapture | tee "$RUNNER_TEMP/mongodb-maintenance-barrier.log"
+          grep -F \
+            "test infrastructure::high_search_maintenance_mongodb::tests::mongodb_maintenance_barrier_drains_writers_queries_and_memo_access ... ok" \
+            "$RUNNER_TEMP/mongodb-maintenance-barrier.log"
           cargo test --locked mongodb_maintenance_recovery_requires_exact_snapshot_and_reopens_state \
             -- --ignored --nocapture
 
